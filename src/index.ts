@@ -11,7 +11,7 @@ import { registerWallet } from './commands/wallet.js';
 const program = new Command();
 
 program
-  .name('radius')
+  .name('radius-cli')
   .description('CLI wallet for the Radius network — like cast, with a built-in account')
   .version('0.1.0')
   .option('--network <name>', "'mainnet' or 'testnet' (default: mainnet)")

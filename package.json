@@ -4,7 +4,7 @@
   "description": "CLI wallet for the Radius network — like cast, with a built-in account",
   "type": "module",
   "bin": {
-    "radius": "./dist/index.js"
+    "radius-cli": "./dist/index.js"
   },
   "files": [
     "dist",

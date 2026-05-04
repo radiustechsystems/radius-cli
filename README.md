@@ -16,12 +16,12 @@ npx radius-cli call 0xToken "balanceOf(address)(uint256)" 0xUser
 # One-off invocation
 npx radius-cli <command>
 
-# Or install globally — the binary on $PATH is `radius`
+# Or install globally — the binary on $PATH is `radius-cli`
 npm install -g radius-cli
-radius wallet address
+radius-cli wallet address
 ```
 
-Requires Node ≥ 20. The npm package is `radius-cli`; the installed CLI command is `radius`.
+Requires Node ≥ 20.
 
 ## Networks
 
@@ -34,22 +34,22 @@ Override the URL with `--rpc-url` or `RADIUS_RPC_URL` if you want to point at a 
 
 ## Wallet
 
-`radius wallet new` generates a key, prompts for a password, and writes a Web3 Secret Storage v3 keystore at `~/.radius/keystore.json` (compatible with geth/foundry). The address is cached in `~/.radius/config.json` so `radius wallet address` doesn't require the password.
+`radius-cli wallet new` generates a key, prompts for a password, and writes a Web3 Secret Storage v3 keystore at `~/.radius/keystore.json` (compatible with geth/foundry). The address is cached in `~/.radius/config.json` so `radius-cli wallet address` doesn't require the password.
 
 ```bash
-radius wallet new
-radius wallet import 0xPRIVATE_KEY
-radius wallet address
-radius wallet balance [0xAddr]
-radius wallet export                           # decrypts and prints the private key
-radius wallet sign "hello"                     # EIP-191 personal_sign — prints 0x signature
-radius wallet sign --raw 0xdeadbeef            # sign raw hex bytes
-echo -n "msg" | radius wallet sign -           # read message from stdin
-radius wallet verify "hello" 0xSig             # verify against own address
-radius wallet verify "hello" 0xSig --address 0xOther
-radius wallet send 0xTo 0.10 RUSD              # native value transfer
-radius wallet send 0xTo 0.10 SBC               # ERC-20 transfer of SBC
-radius wallet send 0xToken "transfer(address,uint256)" 0xTo 100   # arbitrary call
+radius-cli wallet new
+radius-cli wallet import 0xPRIVATE_KEY
+radius-cli wallet address
+radius-cli wallet balance [0xAddr]
+radius-cli wallet export                           # decrypts and prints the private key
+radius-cli wallet sign "hello"                     # EIP-191 personal_sign — prints 0x signature
+radius-cli wallet sign --raw 0xdeadbeef            # sign raw hex bytes
+echo -n "msg" | radius-cli wallet sign -           # read message from stdin
+radius-cli wallet verify "hello" 0xSig             # verify against own address
+radius-cli wallet verify "hello" 0xSig --address 0xOther
+radius-cli wallet send 0xTo 0.10 RUSD              # native value transfer
+radius-cli wallet send 0xTo 0.10 SBC               # ERC-20 transfer of SBC
+radius-cli wallet send 0xToken "transfer(address,uint256)" 0xTo 100   # arbitrary call
 ```
 
 `--private-key 0xHEX` overrides the keystore on any command.
@@ -57,12 +57,12 @@ radius wallet send 0xToken "transfer(address,uint256)" 0xTo 100   # arbitrary ca
 ## Read commands
 
 ```bash
-radius call 0xToken "balanceOf(address)(uint256)" 0xUser   # decoded result
-radius tx 0xTransactionHash
-radius receipt 0xTransactionHash
-radius storage 0xContract 0
-radius code 0xContract
-radius nonce 0xAddress
+radius-cli call 0xToken "balanceOf(address)(uint256)" 0xUser   # decoded result
+radius-cli tx 0xTransactionHash
+radius-cli receipt 0xTransactionHash
+radius-cli storage 0xContract 0
+radius-cli code 0xContract
+radius-cli nonce 0xAddress
 ```
 
 Function signatures use `cast` syntax: `name(args)` for state-changing calls, `name(args)(returns)` for read calls (the result is decoded against the return types).

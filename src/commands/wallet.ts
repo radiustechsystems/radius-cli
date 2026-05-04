@@ -243,9 +243,9 @@ export function registerWallet(program: Command): void {
     .description(
       [
         'Send tokens. Forms:',
-        '  wallet send <to> <amount> RUSD       — native value transfer',
-        '  wallet send <to> <amount> SBC        — ERC-20 transfer of SBC',
-        '  wallet send <token> "<sig>" [args…]  — call any function',
+        '  radius-cli wallet send <to> <amount> RUSD       — native value transfer',
+        '  radius-cli wallet send <to> <amount> SBC        — ERC-20 transfer of SBC',
+        '  radius-cli wallet send <token> "<sig>" [args…]  — call any function',
       ].join('\n  '),
     )
     .argument('<args...>', 'see description for forms')
@@ -279,7 +279,7 @@ export function registerWallet(program: Command): void {
       }
 
       throw new Error(
-        `Could not parse send arguments. Run \`radius wallet send --help\` to see the supported forms.`,
+        `Could not parse send arguments. Run \`radius-cli wallet send --help\` to see the supported forms.`,
       );
     });
 }

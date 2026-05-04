@@ -21,7 +21,7 @@ export async function saveKeystore(path: string, privateKey: Hex, password: stri
 
 export async function loadKeystorePrivateKey(path: string, password: string): Promise<Hex> {
   if (!existsSync(path)) {
-    throw new Error(`No keystore at ${path}. Run \`radius wallet new\` or \`radius wallet import\` first.`);
+    throw new Error(`No keystore at ${path}. Run \`radius-cli wallet new\` or \`radius-cli wallet import\` first.`);
   }
   const json = readFileSync(path, 'utf8');
   const wallet = await Wallet.fromEncryptedJson(json, password);

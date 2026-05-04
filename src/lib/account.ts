@@ -28,7 +28,7 @@ export async function requireAccount(
   }
   if (!keystoreExists(cfg.keystorePath)) {
     throw new Error(
-      `No keystore found at ${cfg.keystorePath}. Run \`radius wallet new\`, \`radius wallet import\`, or pass --private-key.`,
+      `No keystore found at ${cfg.keystorePath}. Run \`radius-cli wallet new\`, \`radius-cli wallet import\`, or pass --private-key.`,
     );
   }
   const password = await resolvePassword(cfg);
@@ -46,6 +46,6 @@ export async function getOwnAddress(
   const addr = readKeystoreAddress(cfg.keystorePath);
   if (addr) return addr;
   throw new Error(
-    `No keystore found at ${cfg.keystorePath}. Run \`radius wallet new\` or pass --private-key.`,
+    `No keystore found at ${cfg.keystorePath}. Run \`radius-cli wallet new\` or pass --private-key.`,
   );
 }
