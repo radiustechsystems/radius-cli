@@ -18,7 +18,7 @@ import { keystoreExists, saveKeystore } from '../lib/keystore.js';
 import { getOwnAddress, requireAccount } from '../lib/account.js';
 import { makePublicClient, makeWalletClient } from '../lib/client.js';
 import { coerceArg, parseCastSignature } from '../lib/signature.js';
-import { jsonStringify } from '../lib/format.js';
+import { formatUsd, formatUsdShort, jsonStringify } from '../lib/format.js';
 import type { GlobalOptions } from '../types.js';
 
 const SBC_DECIMALS = 6;
@@ -221,27 +221,44 @@ export function registerWallet(program: Command): void {
       const rusdWei = await client.getBalance({ address });
       const rusd = formatEther(rusdWei);
 
-      let sbc: string | null = null;
-      if (cfg.sbcAddress) {
-        const sbcRaw = await client.readContract({
-          address: cfg.sbcAddress,
+      let sbc = '0';
+      let sbcRawWei = 0n;
+      let sbcError: string | null = null;
+      try {
+        sbcRawWei = await client.readContract({
+          address: cfg.sbcAddress!,
           abi: ERC20_TRANSFER_ABI,
           functionName: 'balanceOf',
           args: [address],
         });
-        sbc = formatUnits(sbcRaw, SBC_DECIMALS);
+        sbc = formatUnits(sbcRawWei, SBC_DECIMALS);
+      } catch (e) {
+        sbcError = e instanceof Error ? e.message : String(e);
       }
 
+      const total = Number(rusd) + Number(sbc);
+
       if (opts.json) {
-        console.log(jsonStringify({ address, rusd, sbc, rusdWei: rusdWei.toString() }));
+        console.log(
+          jsonStringify({
+            address,
+            totalUsd: total,
+            sbc,
+            rusd,
+            sbcWei: sbcRawWei.toString(),
+            rusdWei: rusdWei.toString(),
+            sbcError,
+          }),
+        );
         return;
       }
       console.log(`Address: ${address}`);
-      console.log(`RUSD:    ${rusd}`);
-      if (sbc !== null) {
-        console.log(`SBC:     ${sbc}`);
+      if (sbcError) {
+        console.log(`Balance: $${rusd} ($${formatUsd(rusd)} RUSD; SBC unavailable)`);
       } else {
-        console.log('SBC:     (set RADIUS_SBC_ADDRESS or pass --sbc to query)');
+        console.log(
+          `Balance: $${formatUsdShort(total)} ($${formatUsd(sbc)} SBC + $${formatUsd(rusd)} RUSD)`,
+        );
       }
     });
 

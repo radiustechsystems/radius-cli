@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { isAddress, type Address } from 'viem';
-import { chainFor } from './chains.js';
+import { chainFor, DEFAULT_SBC_ADDRESS } from './chains.js';
 import type { GlobalOptions, NetworkName, ResolvedConfig } from '../types.js';
 
 const RADIUS_DIR = process.env.RADIUS_HOME ?? join(homedir(), '.radius');
@@ -45,10 +45,9 @@ export function resolveConfig(opts: GlobalOptions): ResolvedConfig {
 
   const rpcUrl = opts.rpcUrl ?? process.env.RADIUS_RPC_URL ?? file.rpcUrl ?? chain.rpcUrls.default.http[0];
 
-  const sbcAddress = pickAddress(
-    opts.sbc ?? process.env.RADIUS_SBC_ADDRESS ?? file.sbcAddress,
-    'SBC address',
-  );
+  const sbcAddress =
+    pickAddress(opts.sbc ?? process.env.RADIUS_SBC_ADDRESS ?? file.sbcAddress, 'SBC address') ??
+    DEFAULT_SBC_ADDRESS;
   const rusdAddress = pickAddress(
     opts.rusd ?? process.env.RADIUS_RUSD_ADDRESS ?? file.rusdAddress,
     'RUSD address',

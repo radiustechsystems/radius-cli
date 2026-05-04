@@ -1,6 +1,10 @@
-import { defineChain, type Chain } from 'viem';
+import { defineChain, type Address, type Chain } from 'viem';
 
 const RUSD = { name: 'Radius USD', symbol: 'RUSD', decimals: 18 } as const;
+
+// SBC is deployed deterministically (same address on mainnet and testnet).
+// Source: https://docs.radiustech.xyz/developer-resources/contract-addresses
+export const DEFAULT_SBC_ADDRESS: Address = '0x33ad9e4BD16B69B5BFdED37D8B5D9fF9aba014Fb';
 
 export const radiusMainnet: Chain = defineChain({
   id: 723487,
