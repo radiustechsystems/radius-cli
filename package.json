@@ -1,0 +1,55 @@
+{
+  "name": "radius-cli",
+  "version": "0.1.0",
+  "description": "CLI wallet for the Radius network — like cast, with a built-in account",
+  "type": "module",
+  "bin": {
+    "radius": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p . && chmod +x dist/index.js",
+    "dev": "tsc -p . --watch",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "radius",
+    "radiustech",
+    "ethereum",
+    "evm",
+    "cli",
+    "wallet",
+    "cast",
+    "rusd",
+    "sbc"
+  ],
+  "author": "Anders Brownworth <anders@radiustechnologysystems.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/radiustech/radius-cli.git"
+  },
+  "homepage": "https://github.com/radiustech/radius-cli#readme",
+  "bugs": {
+    "url": "https://github.com/radiustech/radius-cli/issues"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^7.0.0",
+    "commander": "^12.1.0",
+    "ethers": "^6.13.0",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
