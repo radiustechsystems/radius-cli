@@ -1,7 +1,8 @@
 import { password as promptPassword } from '@inquirer/prompts';
-import { privateKeyToAccount } from 'viem/accounts';
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import type { Hex, PrivateKeyAccount } from 'viem';
-import { keystoreExists, loadAccount, readKeystoreAddress } from './keystore.js';
+import { keystoreExists, loadAccount, readKeystoreAddress, saveKeystore } from './keystore.js';
+import { readPasswordless, writeCachedAddress, writePasswordless } from './config.js';
 import type { ResolvedConfig } from '../types.js';
 
 function normalizePrivateKey(input: string): Hex {
@@ -15,10 +16,38 @@ function normalizePrivateKey(input: string): Hex {
 
 async function resolvePassword(cfg: ResolvedConfig): Promise<string> {
   if (cfg.password !== undefined) return cfg.password;
+  if (readPasswordless()) return '';
   return await promptPassword({ message: 'Keystore password:', mask: '*' });
 }
 
-/** Returns a viem account, prompting for password if needed. Throws if no signer is available. */
+/**
+ * Generate a fresh keystore on first use. Uses RADIUS_PASSWORD if set, empty otherwise.
+ * An empty password means the keystore JSON is effectively unencrypted — the file mode
+ * (0o600) is the only protection. The notice on stderr makes that clear.
+ */
+async function autoCreateKeystore(cfg: ResolvedConfig): Promise<PrivateKeyAccount> {
+  const pk = generatePrivateKey();
+  const password = cfg.password ?? '';
+  const address = await saveKeystore(cfg.keystorePath, pk, password);
+  writeCachedAddress(address);
+  writePasswordless(password === '');
+
+  const lines = [
+    `Created new keystore at ${cfg.keystorePath}`,
+    `Address: ${address}`,
+  ];
+  if (password === '') {
+    lines.push(
+      'No password set — keystore is effectively unencrypted (file mode 0o600).',
+      'To rotate to a password-protected keystore: `radius-cli wallet new --force`',
+    );
+  }
+  process.stderr.write(lines.join('\n') + '\n');
+
+  return privateKeyToAccount(pk);
+}
+
+/** Returns a viem account. Auto-creates a keystore on first use; prompts for password if one exists. */
 export async function requireAccount(
   cfg: ResolvedConfig,
   privateKeyOpt: string | undefined,
@@ -27,15 +56,13 @@ export async function requireAccount(
     return privateKeyToAccount(normalizePrivateKey(privateKeyOpt));
   }
   if (!keystoreExists(cfg.keystorePath)) {
-    throw new Error(
-      `No keystore found at ${cfg.keystorePath}. Run \`radius-cli wallet new\`, \`radius-cli wallet import\`, or pass --private-key.`,
-    );
+    return await autoCreateKeystore(cfg);
   }
   const password = await resolvePassword(cfg);
   return await loadAccount(cfg.keystorePath, password);
 }
 
-/** Like requireAccount but only returns the address — no password prompt if a cached/keystore address is on disk. */
+/** Returns just the local address — no password prompt. Auto-creates a keystore on first use. */
 export async function getOwnAddress(
   cfg: ResolvedConfig,
   privateKeyOpt: string | undefined,
@@ -45,7 +72,5 @@ export async function getOwnAddress(
   }
   const addr = readKeystoreAddress(cfg.keystorePath);
   if (addr) return addr;
-  throw new Error(
-    `No keystore found at ${cfg.keystorePath}. Run \`radius-cli wallet new\` or pass --private-key.`,
-  );
+  return (await autoCreateKeystore(cfg)).address;
 }

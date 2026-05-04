@@ -13,7 +13,7 @@ import {
   type Hex,
 } from 'viem';
 import { generatePrivateKey } from 'viem/accounts';
-import { resolveConfig, writeCachedAddress } from '../lib/config.js';
+import { resolveConfig, writeCachedAddress, writePasswordless } from '../lib/config.js';
 import { keystoreExists, saveKeystore } from '../lib/keystore.js';
 import { getOwnAddress, requireAccount } from '../lib/account.js';
 import { makePublicClient, makeWalletClient } from '../lib/client.js';
@@ -89,6 +89,7 @@ export function registerWallet(program: Command): void {
       const pk = generatePrivateKey();
       const address = await saveKeystore(cfg.keystorePath, pk, password);
       writeCachedAddress(address);
+      writePasswordless(password === '');
       console.log(`Created keystore at ${cfg.keystorePath}`);
       console.log(`Address: ${address}`);
     });
@@ -108,6 +109,7 @@ export function registerWallet(program: Command): void {
       const password = await readNewPassword(cfg.password);
       const address = await saveKeystore(cfg.keystorePath, pk, password);
       writeCachedAddress(address);
+      writePasswordless(password === '');
       console.log(`Imported keystore at ${cfg.keystorePath}`);
       console.log(`Address: ${address}`);
     });
@@ -128,6 +130,11 @@ export function registerWallet(program: Command): void {
     .action(async (_subOpts, cmd) => {
       const opts = cmd.optsWithGlobals() as GlobalOptions;
       const cfg = resolveConfig(opts);
+      if (!opts.privateKey && !keystoreExists(cfg.keystorePath)) {
+        throw new Error(
+          `No keystore at ${cfg.keystorePath}. Run \`radius-cli wallet new\` or pass --private-key.`,
+        );
+      }
       const ok = await confirm({
         message: 'Print the raw private key to stdout?',
         default: false,

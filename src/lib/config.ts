@@ -15,6 +15,7 @@ interface FileConfig {
   sbcAddress?: string;
   rusdAddress?: string;
   cachedAddress?: string;
+  passwordless?: boolean;
 }
 
 function readFileConfig(): FileConfig {
@@ -72,9 +73,24 @@ export function readCachedAddress(): Address | undefined {
   return pickAddress(file.cachedAddress, 'cached address');
 }
 
+function writeFileConfig(file: FileConfig): void {
+  if (!existsSync(RADIUS_DIR)) mkdirSync(RADIUS_DIR, { recursive: true, mode: 0o700 });
+  writeFileSync(CONFIG_PATH, JSON.stringify(file, null, 2), { mode: 0o600 });
+}
+
 export function writeCachedAddress(address: Address): void {
   const file = readFileConfig();
   file.cachedAddress = address;
-  if (!existsSync(RADIUS_DIR)) mkdirSync(RADIUS_DIR, { recursive: true, mode: 0o700 });
-  writeFileSync(CONFIG_PATH, JSON.stringify(file, null, 2), { mode: 0o600 });
+  writeFileConfig(file);
+}
+
+export function readPasswordless(): boolean {
+  return readFileConfig().passwordless === true;
+}
+
+export function writePasswordless(passwordless: boolean): void {
+  const file = readFileConfig();
+  if (passwordless) file.passwordless = true;
+  else delete file.passwordless;
+  writeFileConfig(file);
 }
