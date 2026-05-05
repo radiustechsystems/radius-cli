@@ -78,12 +78,12 @@ In priority order (highest first):
 
 The SBC contract address must be configured for `wallet balance` and `wallet send … SBC` to work — there is no public default.
 
-## Notes on the network
+## Notes on the Radius network
 
 - **RUSD** is the native gas token (18 decimals). `wallet send … RUSD` is a native value transfer.
 - **SBC** is an ERC-20 stablecoin (6 decimals). `wallet send … SBC` calls `transfer(address,uint256)` on the SBC contract.
-- Radius uses **fixed gas pricing**, not EIP-1559. All transactions are signed as legacy (type 0) with `gasPrice` from `eth_gasPrice`.
-- If the account holds SBC but lacks RUSD, the network's Turnstile auto-converts SBC → RUSD inline at zero fee. No client-side handling required.
+- Radius uses **fixed gas pricing**. All transactions will execute with the network gas price (n.b. they will fail if the requested gas price is too low).
+- If the account holds SBC but lacks RUSD, the network's Turnstile auto-converts SBC to RUSD inline for zero additional gas.
 
 ## Development
 
