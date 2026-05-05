@@ -12,9 +12,9 @@ import {
   type Address,
   type Hex,
 } from 'viem';
-import { generatePrivateKey } from 'viem/accounts';
-import { resolveConfig, writeCachedAddress, writePasswordless } from '../lib/config.js';
-import { keystoreExists, saveKeystore } from '../lib/keystore.js';
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+import { resolveConfig, readPasswordless, writeCachedAddress, writePasswordless } from '../lib/config.js';
+import { keystoreExists, loadKeystorePrivateKey, saveKeystore } from '../lib/keystore.js';
 import { getOwnAddress, requireAccount } from '../lib/account.js';
 import { makePublicClient, makeWalletClient } from '../lib/client.js';
 import { coerceArg, parseCastSignature } from '../lib/signature.js';
@@ -140,13 +140,17 @@ export function registerWallet(program: Command): void {
         default: false,
       });
       if (!ok) return;
-      const account = await requireAccount(cfg, opts.privateKey);
-      // privateKeyToAccount stores the source key on the account.
-      // In viem the field is non-enumerable; reconstruct via loadKeystorePrivateKey for clarity.
-      const { loadKeystorePrivateKey } = await import('../lib/keystore.js');
-      const password = cfg.password ?? (await promptPassword({ message: 'Keystore password:', mask: '*' }));
-      const pk = await loadKeystorePrivateKey(cfg.keystorePath, password);
-      console.log(`Address: ${account.address}`);
+
+      let pk: Hex;
+      if (opts.privateKey) {
+        pk = normalizePrivateKey(opts.privateKey);
+      } else {
+        const password = cfg.password
+          ?? (readPasswordless() ? '' : await promptPassword({ message: 'Keystore password:', mask: '*' }));
+        pk = await loadKeystorePrivateKey(cfg.keystorePath, password);
+      }
+      const address = privateKeyToAccount(pk).address;
+      console.log(`Address: ${address}`);
       console.log(`PrivateKey: ${pk}`);
     });
 
