@@ -274,14 +274,16 @@ export function registerWallet(program: Command): void {
     )
     .argument('<args...>', 'see description for forms')
     .option('--no-wait', 'do not wait for the receipt before returning')
-    .action(async (args: string[], subOpts: { wait?: boolean }, cmd) => {
+    .option('--gas-limit <units>', 'gas limit for the transaction (skips the eth_estimateGas roundtrip)')
+    .action(async (args: string[], subOpts: { wait?: boolean; gasLimit?: string }, cmd) => {
       const opts = cmd.optsWithGlobals() as GlobalOptions;
       const cfg = resolveConfig(opts);
       const wait = subOpts.wait !== false;
+      const gas = parseGasLimit(subOpts.gasLimit);
 
       // Form A: cast-style — second arg looks like a function signature.
       if (args.length >= 2 && args[1].includes('(')) {
-        await sendCastForm(cfg, args, opts, wait);
+        await sendCastForm(cfg, args, opts, wait, gas);
         return;
       }
 
@@ -290,14 +292,14 @@ export function registerWallet(program: Command): void {
         const [to, amount, rawSymbol] = args;
         const symbol = rawSymbol.toUpperCase();
         if (symbol === 'RUSD') {
-          await sendNative(cfg, to, amount, opts, wait);
+          await sendNative(cfg, to, amount, opts, wait, gas);
           return;
         }
         if (symbol === 'SBC') {
           if (!cfg.sbcAddress) {
             throw new Error('SBC contract address is not configured. Set RADIUS_SBC_ADDRESS or pass --sbc.');
           }
-          await sendErc20(cfg, cfg.sbcAddress, to, amount, SBC_DECIMALS, opts, wait);
+          await sendErc20(cfg, cfg.sbcAddress, to, amount, SBC_DECIMALS, opts, wait, gas);
           return;
         }
       }
@@ -308,12 +310,25 @@ export function registerWallet(program: Command): void {
     });
 }
 
+function parseGasLimit(input: string | undefined): bigint | undefined {
+  if (input === undefined) return undefined;
+  let value: bigint;
+  try {
+    value = BigInt(input);
+  } catch {
+    throw new Error(`--gas-limit must be an integer, got: ${input}`);
+  }
+  if (value <= 0n) throw new Error(`--gas-limit must be positive, got: ${input}`);
+  return value;
+}
+
 async function sendNative(
   cfg: ReturnType<typeof resolveConfig>,
   to: string,
   amount: string,
   opts: GlobalOptions,
   wait: boolean,
+  gas: bigint | undefined,
 ): Promise<void> {
   if (!isAddress(to)) throw new Error(`Not a valid address: ${to}`);
   const account = await requireAccount(cfg, opts.privateKey);
@@ -327,6 +342,7 @@ async function sendNative(
     to: to as Address,
     value,
     gasPrice,
+    gas,
     type: 'legacy',
     chain: cfg.chain,
   });
@@ -341,6 +357,7 @@ async function sendErc20(
   decimals: number,
   opts: GlobalOptions,
   wait: boolean,
+  gas: bigint | undefined,
 ): Promise<void> {
   if (!isAddress(to)) throw new Error(`Not a valid address: ${to}`);
   const account = await requireAccount(cfg, opts.privateKey);
@@ -358,6 +375,7 @@ async function sendErc20(
     to: token,
     data,
     gasPrice,
+    gas,
     type: 'legacy',
     chain: cfg.chain,
   });
@@ -369,6 +387,7 @@ async function sendCastForm(
   args: string[],
   opts: GlobalOptions,
   wait: boolean,
+  gas: bigint | undefined,
 ): Promise<void> {
   const [target, signature, ...callArgs] = args;
   if (!isAddress(target)) throw new Error(`Not a valid address: ${target}`);
@@ -394,6 +413,7 @@ async function sendCastForm(
     to: target as Address,
     data,
     gasPrice,
+    gas,
     type: 'legacy',
     chain: cfg.chain,
   });
