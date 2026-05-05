@@ -272,7 +272,7 @@ export function registerWallet(program: Command): void {
         '  radius-cli wallet send <token> "<sig>" [args…]  — call any function',
       ].join('\n  '),
     )
-    .argument('<args...>', 'see description for forms')
+    .argument('[args...]', 'see description for forms')
     .option('--no-wait', 'do not wait for the receipt before returning')
     .option('--gas-limit <units>', 'gas limit for the transaction (skips the eth_estimateGas roundtrip)')
     .action(async (args: string[], subOpts: { wait?: boolean; gasLimit?: string }, cmd) => {
@@ -304,8 +304,18 @@ export function registerWallet(program: Command): void {
         }
       }
 
+      const header = args.length === 0
+        ? 'wallet send: missing arguments.'
+        : `wallet send: could not parse arguments: ${args.join(' ')}`;
       throw new Error(
-        `Could not parse send arguments. Run \`radius-cli wallet send --help\` to see the supported forms.`,
+        [
+          header,
+          '',
+          'Supported forms:',
+          '  radius-cli wallet send <to> <amount> RUSD       — native value transfer',
+          '  radius-cli wallet send <to> <amount> SBC        — ERC-20 transfer of SBC',
+          '  radius-cli wallet send <token> "<sig>" [args…]  — call any function',
+        ].join('\n'),
       );
     });
 }
