@@ -1,6 +1,6 @@
-# radius
+# radius-cli
 
-A CLI wallet for the [Radius network](https://radiustech.xyz) — modeled on Foundry's `cast`, with a built-in account stored in `~/.radius/keystore.json`.
+A CLI wallet for the [Radius Network](https://radiustech.xyz) — modeled on Foundry's `cast`, with a built-in account stored in `~/.radius/keystore.json`.
 
 ```bash
 npx radius-cli wallet new
