@@ -54,6 +54,26 @@ radius-cli wallet send 0xToken "transfer(address,uint256)" 0xTo 100   # arbitrar
 
 `--private-key 0xHEX` overrides the keystore on any command.
 
+## x402 HTTP payments
+
+Make an HTTP request and, if the server responds with `402 Payment Required` and an [x402](https://x402.org) challenge, pay it from the local wallet and retry.
+
+```bash
+radius-cli wallet x402 get https://example.com/protected
+radius-cli wallet x402 post https://api.example.com/x -d '{"a":1}' -H 'Authorization: Bearer …'
+radius-cli wallet x402 get https://example.com/r --x402-threshold 0.05    # auto-pay up to 0.05 of the asset
+radius-cli wallet x402 get https://example.com/r -y                       # auto-pay any amount
+radius-cli wallet x402 get https://example.com/r --json                   # envelope with status/headers/body/payment
+```
+
+Verbs: `get`, `post`, `put`, `patch`, `delete`, `head`, `options`.
+
+`-d, --data` accepts a literal string, `-d @path` to read from a file, or `-d -` to read from stdin. JSON-shaped bodies default to `Content-Type: application/json` unless one is set with `-H`.
+
+`--x402-threshold <decimal>` is in the asset's display units (e.g. `0.05` means 0.05 SBC, which is $0.05 since SBC is USD-pegged). When the offered fee is at or below the threshold, the request pays without prompting — designed for AI agents and other non-interactive use. With no threshold and no TTY, the command refuses (exit 2) rather than hang. The `exact` x402 scheme on EVM is supported (uses EIP-3009 `transferWithAuthorization`); the asset must implement it on the configured network.
+
+Body goes to stdout; payment confirmation and (optionally, with `--include`) headers go to stderr — pipeable.
+
 ## Read commands
 
 ```bash
