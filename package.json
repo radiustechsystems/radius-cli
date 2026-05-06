@@ -1,10 +1,10 @@
 {
   "name": "radius-cli",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "CLI wallet for the Radius network — like cast, with a built-in account",
   "type": "module",
   "bin": {
-    "radius-cli": "./dist/index.js"
+    "radius-cli": "dist/index.js"
   },
   "files": [
     "dist",

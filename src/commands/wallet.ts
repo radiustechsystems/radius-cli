@@ -19,6 +19,7 @@ import { getOwnAddress, requireAccount } from '../lib/account.js';
 import { makePublicClient, makeWalletClient } from '../lib/client.js';
 import { coerceArg, parseCastSignature } from '../lib/signature.js';
 import { formatUsd, formatUsdShort, jsonStringify } from '../lib/format.js';
+import { registerWalletX402 } from './walletX402.js';
 import type { GlobalOptions } from '../types.js';
 
 const SBC_DECIMALS = 6;
@@ -322,6 +323,8 @@ export function registerWallet(program: Command): void {
         ].join('\n'),
       );
     });
+
+  registerWalletX402(wallet);
 }
 
 function parseGasLimit(input: string | undefined): bigint | undefined {
