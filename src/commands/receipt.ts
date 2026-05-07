@@ -22,6 +22,20 @@ export function registerReceipt(program: Command): void {
       assertHash(hash);
       const client = makePublicClient(cfg);
       const receipt = await client.getTransactionReceipt({ hash });
-      console.log(jsonStringify(receipt));
+      if (opts.json) {
+        console.log(jsonStringify(receipt));
+        return;
+      }
+      console.log(`Hash:             ${receipt.transactionHash}`);
+      console.log(`Status:           ${receipt.status}`);
+      console.log(`Block:            ${receipt.blockNumber.toString()}`);
+      console.log(`From:             ${receipt.from}`);
+      console.log(`To:               ${receipt.to ?? '(contract creation)'}`);
+      if (receipt.contractAddress) {
+        console.log(`Contract:         ${receipt.contractAddress}`);
+      }
+      console.log(`Gas used:         ${receipt.gasUsed.toString()}`);
+      console.log(`Cumulative gas:   ${receipt.cumulativeGasUsed.toString()}`);
+      console.log(`Logs:             ${receipt.logs.length}`);
     });
 }

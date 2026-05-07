@@ -91,6 +91,10 @@ export function registerWallet(program: Command): void {
       const address = await saveKeystore(cfg.keystorePath, pk, password);
       writeCachedAddress(address);
       writePasswordless(password === '');
+      if (opts.json) {
+        console.log(jsonStringify({ path: cfg.keystorePath, address }));
+        return;
+      }
       console.log(`Created keystore at ${cfg.keystorePath}`);
       console.log(`Address: ${address}`);
     });
@@ -111,6 +115,10 @@ export function registerWallet(program: Command): void {
       const address = await saveKeystore(cfg.keystorePath, pk, password);
       writeCachedAddress(address);
       writePasswordless(password === '');
+      if (opts.json) {
+        console.log(jsonStringify({ path: cfg.keystorePath, address }));
+        return;
+      }
       console.log(`Imported keystore at ${cfg.keystorePath}`);
       console.log(`Address: ${address}`);
     });
@@ -122,6 +130,10 @@ export function registerWallet(program: Command): void {
       const opts = cmd.optsWithGlobals() as GlobalOptions;
       const cfg = resolveConfig(opts);
       const address = await getOwnAddress(cfg, opts.privateKey);
+      if (opts.json) {
+        console.log(jsonStringify({ address }));
+        return;
+      }
       console.log(address);
     });
 
@@ -151,6 +163,10 @@ export function registerWallet(program: Command): void {
         pk = await loadKeystorePrivateKey(cfg.keystorePath, password);
       }
       const address = privateKeyToAccount(pk).address;
+      if (opts.json) {
+        console.log(jsonStringify({ address, privateKey: pk }));
+        return;
+      }
       console.log(`Address: ${address}`);
       console.log(`PrivateKey: ${pk}`);
     });
@@ -166,6 +182,10 @@ export function registerWallet(program: Command): void {
       const account = await requireAccount(cfg, opts.privateKey);
       const message = readMessageArg(messageArg, !!subOpts.raw);
       const signature = await account.signMessage({ message });
+      if (opts.json) {
+        console.log(jsonStringify({ address: account.address, signature }));
+        return;
+      }
       console.log(signature);
     });
 

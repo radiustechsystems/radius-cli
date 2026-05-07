@@ -19,7 +19,7 @@ program
   .option('--private-key <hex>', 'sign with this key instead of the local keystore')
   .option('--sbc <address>', 'override the SBC token contract address')
   .option('--rusd <address>', 'override the RUSD ERC-20 contract address')
-  .option('--json', 'machine-readable JSON output where applicable');
+  .option('--json', 'machine-readable JSON output');
 
 registerWallet(program);
 registerCall(program);
