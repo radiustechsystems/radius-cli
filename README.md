@@ -87,6 +87,61 @@ radius-cli nonce 0xAddress
 
 Function signatures use `cast` syntax: `name(args)` for state-changing calls, `name(args)(returns)` for read calls (the result is decoded against the return types).
 
+## JSON output
+
+Pass `--json` to any command to emit machine-readable JSON on stdout (one object per command, pretty-printed). Useful for piping into `jq` or driving the CLI from scripts and agents. Bigints are serialized as decimal strings.
+
+```bash
+$ radius-cli --json wallet address
+{
+  "address": "0x4F2D8a3b1c0E5d9b8e7a6c5d4e3f2a1b0c9d8e7f"
+}
+
+$ radius-cli --json wallet balance 0x4F2D8a3b1c0E5d9b8e7a6c5d4e3f2a1b0c9d8e7f
+{
+  "address": "0x4F2D8a3b1c0E5d9b8e7a6c5d4e3f2a1b0c9d8e7f",
+  "totalUsd": 12.345678,
+  "sbc": "10.000000",
+  "rusd": "2.345678",
+  "sbcWei": "10000000",
+  "rusdWei": "2345678000000000000",
+  "sbcError": null
+}
+
+$ radius-cli --json wallet send 0xRecipient 0.10 RUSD | jq -r .hash
+0xabc…
+
+$ radius-cli --json call 0xToken "balanceOf(address)(uint256)" 0xUser
+"42000000"
+
+$ radius-cli --json nonce 0xAddress
+{
+  "address": "0xAddress",
+  "nonce": 17
+}
+```
+
+Per-command JSON shapes:
+
+| Command | JSON shape |
+|---|---|
+| `wallet new` / `wallet import` | `{path, address}` |
+| `wallet address` | `{address}` |
+| `wallet export` | `{address, privateKey}` |
+| `wallet sign` | `{address, signature}` |
+| `wallet verify` | `{address, valid}` (exit 1 when invalid) |
+| `wallet balance` | `{address, totalUsd, sbc, rusd, sbcWei, rusdWei, sbcError}` |
+| `wallet send` | `{hash, receipt?}` (no `receipt` with `--no-wait`) |
+| `wallet x402` | `{status, headers, body, bodyEncoding, payment}` |
+| `call` | decoded return value (single value or array) |
+| `tx` | the full transaction object |
+| `receipt` | the full receipt object |
+| `code` | `{address, code}` |
+| `nonce` | `{address, nonce}` |
+| `storage` | `{address, slot, value}` |
+
+Errors continue to go to stderr as `error: <message>` with a non-zero exit code; only successful output is JSON-shaped.
+
 ## Configuration
 
 In priority order (highest first):
