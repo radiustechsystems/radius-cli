@@ -19,6 +19,7 @@ program
   .option('--private-key <hex>', 'sign with this key instead of the local keystore')
   .option('--sbc <address>', 'override the SBC token contract address')
   .option('--rusd <address>', 'override the RUSD ERC-20 contract address')
+  .option('--wallet <provider>', 'wallet provider: keystore, cdp, para, or privy (default: keystore)')
   .option('--json', 'machine-readable JSON output');
 
 registerWallet(program);

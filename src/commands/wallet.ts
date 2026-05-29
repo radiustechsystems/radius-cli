@@ -20,6 +20,7 @@ import { makePublicClient, makeWalletClient } from '../lib/client.js';
 import { coerceArg, parseCastSignature } from '../lib/signature.js';
 import { formatUsd, formatUsdShort, jsonStringify } from '../lib/format.js';
 import { registerWalletX402 } from './walletX402.js';
+import { getProvider } from '../lib/providers/index.js';
 import type { GlobalOptions } from '../types.js';
 
 const SBC_DECIMALS = 6;
@@ -124,6 +125,44 @@ export function registerWallet(program: Command): void {
     });
 
   wallet
+    .command('login')
+    .description('Log in to the active wallet provider')
+    .action(async (_subOpts, cmd) => {
+      const opts = cmd.optsWithGlobals() as GlobalOptions;
+      const cfg = resolveConfig(opts);
+      const provider = getProvider(cfg.walletProvider);
+      if (provider.login) {
+        await provider.login(cfg);
+      } else {
+        console.log(`${cfg.walletProvider} provider does not require login.`);
+      }
+    });
+
+  wallet
+    .command('logout')
+    .description('Log out of the active wallet provider')
+    .action(async (_subOpts, cmd) => {
+      const opts = cmd.optsWithGlobals() as GlobalOptions;
+      const cfg = resolveConfig(opts);
+      const provider = getProvider(cfg.walletProvider);
+      if (provider.logout) {
+        await provider.logout(cfg);
+      } else {
+        console.log(`${cfg.walletProvider} provider does not support logout.`);
+      }
+    });
+
+  wallet
+    .command('status')
+    .description('Show the current wallet provider and account status')
+    .action(async (_subOpts, cmd) => {
+      const opts = cmd.optsWithGlobals() as GlobalOptions;
+      const cfg = resolveConfig(opts);
+      const provider = getProvider(cfg.walletProvider);
+      await provider.status(cfg, opts);
+    });
+
+  wallet
     .command('address')
     .description('Print the address associated with the local account')
     .action(async (_subOpts, cmd) => {
@@ -143,6 +182,11 @@ export function registerWallet(program: Command): void {
     .action(async (_subOpts, cmd) => {
       const opts = cmd.optsWithGlobals() as GlobalOptions;
       const cfg = resolveConfig(opts);
+      if (cfg.walletProvider !== 'keystore') {
+        throw new Error(
+          `wallet export is only supported for the keystore provider (current: ${cfg.walletProvider}).`,
+        );
+      }
       if (!opts.privateKey && !keystoreExists(cfg.keystorePath)) {
         throw new Error(
           `No keystore at ${cfg.keystorePath}. Run \`radius-cli wallet new\` or pass --private-key.`,
