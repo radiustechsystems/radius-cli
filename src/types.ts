@@ -2,6 +2,8 @@ import type { Address, Chain, PublicClient, WalletClient } from 'viem';
 
 export type NetworkName = 'mainnet' | 'testnet';
 
+export type WalletProviderName = 'keystore' | 'cdp' | 'para' | 'privy';
+
 export interface ResolvedConfig {
   network: NetworkName;
   chain: Chain;
@@ -10,6 +12,7 @@ export interface ResolvedConfig {
   rusdAddress?: Address;
   keystorePath: string;
   password?: string;
+  walletProvider: WalletProviderName;
 }
 
 export interface GlobalOptions {
@@ -20,6 +23,13 @@ export interface GlobalOptions {
   rusd?: string;
   json?: boolean;
   wait?: boolean;
+  wallet?: string;
+}
+
+export interface WalletProviderInterface {
+  login?(cfg: ResolvedConfig): Promise<void>;
+  logout?(cfg: ResolvedConfig): Promise<void>;
+  status(cfg: ResolvedConfig, opts: GlobalOptions): Promise<void>;
 }
 
 export interface Clients {
