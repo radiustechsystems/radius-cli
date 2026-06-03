@@ -148,6 +148,79 @@ describe('encodePaymentHeader / decodePaymentResponse', () => {
     expect(decoded.payload.authorization.validBefore).toBe(1234567890);
   });
 
+  it('emits the v2 envelope: accepted echo, resource, string validity bounds', () => {
+    const v2Challenge = {
+      x402Version: 2,
+      accepts: [
+        {
+          scheme: 'exact',
+          network: 'eip155:723487',
+          amount: '1000',
+          asset: '0x33ad9e4BD16B69B5BFdED37D8B5D9fF9aba014Fb',
+          payTo: '0x000000000000000000000000000000000000dEaD',
+          maxTimeoutSeconds: 300,
+          extra: { name: 'Stable Coin', version: '1' },
+        },
+      ],
+      resource: { url: 'https://example.com/r', method: 'GET' },
+      error: 'Payment required',
+    };
+    const c = parseChallenge(v2Challenge);
+    const header = encodePaymentHeader({
+      x402Version: c.x402Version,
+      scheme: c.accepts[0].scheme,
+      network: c.accepts[0].network,
+      accepted: c.accepts[0].raw,
+      resource: c.resource,
+      payload: {
+        signature: '0xdeadbeef',
+        authorization: {
+          from: '0x0000000000000000000000000000000000000001',
+          to: '0x000000000000000000000000000000000000dEaD',
+          value: 1000n,
+          validAfter: 0,
+          validBefore: 1234567890,
+          nonce: '0xaa',
+        },
+      },
+    });
+    const decoded = JSON.parse(Buffer.from(header, 'base64').toString('utf8'));
+    expect(decoded.x402Version).toBe(2);
+    // v2: accepted echoes the server's entry verbatim (amount, not maxAmountRequired)
+    expect(decoded.accepted).toEqual(v2Challenge.accepts[0]);
+    expect(decoded.resource).toEqual(v2Challenge.resource);
+    // v2: no flat scheme/network at the top level
+    expect(decoded.scheme).toBeUndefined();
+    expect(decoded.network).toBeUndefined();
+    // v2: validity bounds are strings
+    expect(decoded.payload.authorization.validAfter).toBe('0');
+    expect(decoded.payload.authorization.validBefore).toBe('1234567890');
+    expect(decoded.payload.authorization.value).toBe('1000');
+  });
+
+  it('keeps the v1 envelope unchanged for x402Version 1', () => {
+    const header = encodePaymentHeader({
+      x402Version: 1,
+      scheme: 'exact',
+      network: 'eip155:723487',
+      payload: {
+        signature: '0xdeadbeef',
+        authorization: {
+          from: '0x0000000000000000000000000000000000000001',
+          to: '0x000000000000000000000000000000000000dEaD',
+          value: 1000n,
+          validAfter: 0,
+          validBefore: 1234567890,
+          nonce: '0xaa',
+        },
+      },
+    });
+    const decoded = JSON.parse(Buffer.from(header, 'base64').toString('utf8'));
+    expect(decoded.scheme).toBe('exact');
+    expect(decoded.accepted).toBeUndefined();
+    expect(decoded.payload.authorization.validBefore).toBe(1234567890);
+  });
+
   it('decodes a payment-response header', () => {
     const body = {
       success: true,

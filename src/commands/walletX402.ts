@@ -1,6 +1,6 @@
 import type { Command } from 'commander';
 import { confirm } from '@inquirer/prompts';
-import { formatUnits, parseUnits, type Address } from 'viem';
+import { formatUnits, isAddress, parseUnits, type Address } from 'viem';
 import { resolveConfig } from '../lib/config.js';
 import { requireAccount } from '../lib/account.js';
 import { makePublicClient } from '../lib/client.js';
@@ -20,6 +20,7 @@ import {
 import {
   decodePaymentResponse,
   encodePaymentHeader,
+  encodePermitPaymentHeader,
   networkIdForChain,
   parseChallenge,
   pickAccept,
@@ -32,6 +33,7 @@ import {
   readBalance,
   signTransferAuthorization,
 } from '../lib/x402/eip3009.js';
+import { readPermitNonce, signPermit } from '../lib/x402/eip2612.js';
 import type { GlobalOptions } from '../types.js';
 
 interface SubOptions {
@@ -170,35 +172,78 @@ async function runX402(
     }
   }
 
-  const authorization = makeAuthorization({
-    from: account.address,
-    to: accept.payTo,
-    value: accept.maxAmountRequired,
-    maxTimeoutSeconds: accept.maxTimeoutSeconds,
-  });
+  // Radius servers settle SBC via EIP-2612 permit + transferFrom (SBC has no
+  // EIP-3009) and advertise it in the challenge's extra. Standard x402 servers
+  // get the EIP-3009 transferWithAuthorization path.
+  const settlementSpender =
+    accept.extra?.settlementMethod === 'permit-transferFrom' &&
+    typeof accept.extra.settlementSpender === 'string' &&
+    isAddress(accept.extra.settlementSpender)
+      ? (accept.extra.settlementSpender as Address)
+      : undefined;
 
-  let signature;
-  try {
-    signature = await signTransferAuthorization(account, {
-      asset: accept.asset,
-      chainId: cfg.chain.id,
-      name: asset.name,
-      version: asset.version,
-      authorization,
+  let paymentHeader: string;
+  if (settlementSpender) {
+    try {
+      const nonce = await readPermitNonce(client, accept.asset, account.address);
+      const deadline = BigInt(
+        Math.floor(Date.now() / 1000) + (accept.maxTimeoutSeconds ?? 300),
+      );
+      const permit = await signPermit(account, {
+        asset: accept.asset,
+        chainId: cfg.chain.id,
+        name: asset.name,
+        version: asset.version,
+        spender: settlementSpender,
+        value: accept.maxAmountRequired,
+        nonce,
+        deadline,
+      });
+      paymentHeader = encodePermitPaymentHeader({
+        x402Version: challenge.x402Version,
+        scheme: accept.scheme,
+        network: accept.network,
+        payload: permit,
+      });
+    } catch (e) {
+      process.stderr.write(
+        `x402: failed to sign EIP-2612 permit: ${(e as Error).message}\n`,
+      );
+      process.exit(1);
+    }
+  } else {
+    const authorization = makeAuthorization({
+      from: account.address,
+      to: accept.payTo,
+      value: accept.maxAmountRequired,
+      maxTimeoutSeconds: accept.maxTimeoutSeconds,
     });
-  } catch (e) {
-    process.stderr.write(
-      `x402: failed to sign EIP-3009 authorization (asset may not support transferWithAuthorization): ${(e as Error).message}\n`,
-    );
-    process.exit(1);
-  }
 
-  const paymentHeader = encodePaymentHeader({
-    x402Version: challenge.x402Version,
-    scheme: accept.scheme,
-    network: accept.network,
-    payload: { signature, authorization },
-  });
+    let signature;
+    try {
+      signature = await signTransferAuthorization(account, {
+        asset: accept.asset,
+        chainId: cfg.chain.id,
+        name: asset.name,
+        version: asset.version,
+        authorization,
+      });
+    } catch (e) {
+      process.stderr.write(
+        `x402: failed to sign EIP-3009 authorization (asset may not support transferWithAuthorization): ${(e as Error).message}\n`,
+      );
+      process.exit(1);
+    }
+
+    paymentHeader = encodePaymentHeader({
+      x402Version: challenge.x402Version,
+      scheme: accept.scheme,
+      network: accept.network,
+      accepted: accept.raw,
+      resource: challenge.resource,
+      payload: { signature, authorization },
+    });
+  }
 
   const retryHeaders = new Headers(reqHeaders);
   retryHeaders.set('x-payment', paymentHeader);
