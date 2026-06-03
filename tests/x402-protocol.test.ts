@@ -36,6 +36,27 @@ describe('parseChallenge', () => {
     expect(c.error).toBe('X-PAYMENT required');
   });
 
+  it('falls back to `amount` when `maxAmountRequired` is absent (x402 v2)', () => {
+    const v2 = JSON.parse(JSON.stringify(VALID_CHALLENGE));
+    delete v2.accepts[0].maxAmountRequired;
+    v2.accepts[0].amount = '13000';
+    const c = parseChallenge(v2);
+    expect(c.accepts[0].maxAmountRequired).toBe(13000n);
+  });
+
+  it('prefers `maxAmountRequired` over `amount` when both are present', () => {
+    const both = JSON.parse(JSON.stringify(VALID_CHALLENGE));
+    both.accepts[0].amount = '99';
+    const c = parseChallenge(both);
+    expect(c.accepts[0].maxAmountRequired).toBe(13000n);
+  });
+
+  it('rejects when neither maxAmountRequired nor amount is present', () => {
+    const neither = JSON.parse(JSON.stringify(VALID_CHALLENGE));
+    delete neither.accepts[0].maxAmountRequired;
+    expect(() => parseChallenge(neither)).toThrow(/maxAmountRequired/);
+  });
+
   it('rejects non-objects', () => {
     expect(() => parseChallenge(null)).toThrow();
     expect(() => parseChallenge([])).toThrow();
