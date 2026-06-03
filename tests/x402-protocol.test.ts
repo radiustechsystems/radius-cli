@@ -51,6 +51,13 @@ describe('parseChallenge', () => {
     expect(c.accepts[0].maxAmountRequired).toBe(13000n);
   });
 
+  it('reports `amount` in the error when it is the source field', () => {
+    const bad = JSON.parse(JSON.stringify(VALID_CHALLENGE));
+    delete bad.accepts[0].maxAmountRequired;
+    bad.accepts[0].amount = '-1';
+    expect(() => parseChallenge(bad)).toThrow(/accepts\[0\]\.amount/);
+  });
+
   it('rejects when neither maxAmountRequired nor amount is present', () => {
     const neither = JSON.parse(JSON.stringify(VALID_CHALLENGE));
     delete neither.accepts[0].maxAmountRequired;
