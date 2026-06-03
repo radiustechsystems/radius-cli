@@ -19,6 +19,7 @@ import { getOwnAddress, requireAccount } from '../lib/account.js';
 import { makePublicClient, makeWalletClient } from '../lib/client.js';
 import { coerceArg, parseCastSignature } from '../lib/signature.js';
 import { formatUsd, formatUsdShort, jsonStringify } from '../lib/format.js';
+import { splitAggregateBalance } from '../lib/balance.js';
 import { registerWalletX402 } from './walletX402.js';
 import { getProvider } from '../lib/providers/index.js';
 import type { GlobalOptions } from '../types.js';
@@ -286,8 +287,10 @@ export function registerWallet(program: Command): void {
       }
 
       const client = makePublicClient(cfg);
-      const rusdWei = await client.getBalance({ address });
-      const rusd = formatEther(rusdWei);
+      // eth_getBalance is the aggregate: token_balance × rate + raw_native.
+      // SBC is already included, so derive the raw-native (RUSD) remainder
+      // instead of summing — see splitAggregateBalance.
+      const aggregateWei = await client.getBalance({ address });
 
       let sbc = '0';
       let sbcRawWei = 0n;
@@ -304,17 +307,24 @@ export function registerWallet(program: Command): void {
         sbcError = e instanceof Error ? e.message : String(e);
       }
 
-      const total = Number(rusd) + Number(sbc);
+      const { nativeWei } = splitAggregateBalance({
+        aggregateWei,
+        sbcRaw: sbcRawWei,
+        sbcDecimals: SBC_DECIMALS,
+      });
+      const rusd = formatEther(nativeWei);
+      const total = formatEther(aggregateWei);
 
       if (opts.json) {
         console.log(
           jsonStringify({
             address,
-            totalUsd: total,
+            totalUsd: Number(total),
             sbc,
             rusd,
             sbcWei: sbcRawWei.toString(),
-            rusdWei: rusdWei.toString(),
+            rusdWei: nativeWei.toString(),
+            totalWei: aggregateWei.toString(),
             sbcError,
           }),
         );
@@ -322,7 +332,7 @@ export function registerWallet(program: Command): void {
       }
       console.log(`Address: ${address}`);
       if (sbcError) {
-        console.log(`Balance: $${rusd} ($${formatUsd(rusd)} RUSD; SBC unavailable)`);
+        console.log(`Balance: $${formatUsdShort(total)} (SBC/RUSD breakdown unavailable)`);
       } else {
         console.log(
           `Balance: $${formatUsdShort(total)} ($${formatUsd(sbc)} SBC + $${formatUsd(rusd)} RUSD)`,
