@@ -144,6 +144,18 @@ async function runX402(
     process.exit(1);
   }
 
+  // A signed payment header is a bearer-style credential: over plain http it
+  // can be captured in transit and submitted by anyone. Refuse before signing
+  // (loopback hosts are exempt for local development).
+  const target = new URL(url);
+  const loopback = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(target.hostname);
+  if (target.protocol !== 'https:' && !loopback) {
+    process.stderr.write(
+      `x402: refusing to send a payment over ${target.protocol.replace(':', '')} — the signed payment header would be exposed in transit. Retry with https://${target.host}${target.pathname}\n`,
+    );
+    process.exit(1);
+  }
+
   const account = await requireAccount(cfg, opts.privateKey);
   const client = makePublicClient(cfg);
 
@@ -169,14 +181,20 @@ async function runX402(
     process.exit(1);
   }
 
+  // Always name the network in pay decisions — the CLI defaults to mainnet,
+  // and a payment that looks like a testnet rehearsal can be real money.
+  const networkTag = cfg.network === 'mainnet'
+    ? `mainnet (chain ${cfg.chain.id}) — real funds`
+    : `${cfg.network} (chain ${cfg.chain.id})`;
+
   const decided = await decideAutoPay(subOpts, accept, asset.decimals);
   if (decided === 'refuse-no-tty') {
-    writeChallengeSummary(accept, asset.decimals, asset.symbol, balanceStr);
+    writeChallengeSummary(accept, asset.decimals, asset.symbol, balanceStr, networkTag);
     process.exit(2);
   }
   if (decided === 'prompt') {
     const proceed = await confirm({
-      message: `Pay ${amountStr} ${symbol} to ${accept.payTo}? (balance: ${balanceStr} ${symbol})`,
+      message: `Pay ${amountStr} ${symbol} on ${networkTag} to ${accept.payTo}? (balance: ${balanceStr} ${symbol})`,
       default: false,
     });
     if (!proceed) {
@@ -391,12 +409,13 @@ function writeChallengeSummary(
   decimals: number,
   symbol: string | null,
   balanceStr: string,
+  networkTag: string,
 ): void {
   const amount = formatUnits(accept.maxAmountRequired, decimals);
   const tag = symbol ?? accept.asset;
   process.stderr.write(
     [
-      `x402: payment required (${amount} ${tag} to ${accept.payTo}).`,
+      `x402: payment required (${amount} ${tag} on ${networkTag} to ${accept.payTo}).`,
       `      balance: ${balanceStr} ${tag}`,
       `      pass --x402-threshold ${amount} (or higher) to auto-pay, or --yes to confirm.`,
       '',
