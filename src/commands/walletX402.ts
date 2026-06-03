@@ -33,7 +33,13 @@ import {
   readBalance,
   signTransferAuthorization,
 } from '../lib/x402/eip3009.js';
-import { readPermitNonce, signPermit } from '../lib/x402/eip2612.js';
+import { readPermitNonce, signEip2612Permit, signPermit } from '../lib/x402/eip2612.js';
+import {
+  buildPermit2PaymentPayload,
+  PERMIT2_ADDRESS,
+  randomPermit2Nonce,
+  signPermit2WitnessTransfer,
+} from '../lib/x402/permit2.js';
 import type { GlobalOptions } from '../types.js';
 
 interface SubOptions {
@@ -108,13 +114,20 @@ async function runX402(
   }
 
   const cfg = resolveConfig(opts);
+  // Official Radius x402 v2 servers carry the challenge in a base64
+  // PAYMENT-REQUIRED response header; older servers put JSON in the body.
   let challenge;
+  const paymentRequired = initial.headers.get('payment-required');
   try {
-    const text = decodeBodyAsUtf8(initial.body) ?? '';
-    challenge = parseChallenge(JSON.parse(text));
+    if (paymentRequired) {
+      challenge = parseChallenge(JSON.parse(Buffer.from(paymentRequired, 'base64').toString('utf8')));
+    } else {
+      const text = decodeBodyAsUtf8(initial.body) ?? '';
+      challenge = parseChallenge(JSON.parse(text));
+    }
   } catch (e) {
     process.stderr.write(
-      `x402: server returned 402 but the body is not a valid challenge: ${(e as Error).message}\n`,
+      `x402: server returned 402 but no valid challenge in ${paymentRequired ? 'PAYMENT-REQUIRED header' : 'body'}: ${(e as Error).message}\n`,
     );
     process.stderr.write(safeBodyPreview(initial.body));
     process.exit(2);
@@ -182,8 +195,60 @@ async function runX402(
       ? (accept.extra.settlementSpender as Address)
       : undefined;
 
+  // Official Radius v2 settlement: Permit2 dual-signature flow.
+  const usePermit2 = accept.extra?.assetTransferMethod === 'permit2';
+
   let paymentHeader: string;
-  if (settlementSpender) {
+  if (usePermit2) {
+    try {
+      const eip2612Nonce = await readPermitNonce(client, accept.asset, account.address);
+      const deadline = BigInt(
+        Math.floor(Date.now() / 1000) + (accept.maxTimeoutSeconds ?? 300),
+      );
+      const eip2612Signature = await signEip2612Permit(account, {
+        asset: accept.asset,
+        chainId: cfg.chain.id,
+        name: asset.name,
+        version: asset.version,
+        spender: PERMIT2_ADDRESS,
+        value: accept.maxAmountRequired,
+        nonce: eip2612Nonce,
+        deadline,
+      });
+      const permit2Nonce = randomPermit2Nonce();
+      const permit2Signature = await signPermit2WitnessTransfer(account, {
+        token: accept.asset,
+        chainId: cfg.chain.id,
+        amount: accept.maxAmountRequired,
+        payTo: accept.payTo,
+        nonce: permit2Nonce,
+        deadline,
+      });
+      const challengeResource =
+        challenge.resource && typeof challenge.resource === 'object'
+          ? (challenge.resource as { url?: string; description?: string; mimeType?: string })
+          : {};
+      paymentHeader = buildPermit2PaymentPayload({
+        chainId: cfg.chain.id,
+        resource: { ...challengeResource, url: challengeResource.url ?? url },
+        accepted: accept.raw,
+        token: accept.asset,
+        amount: accept.maxAmountRequired,
+        owner: account.address,
+        payTo: accept.payTo,
+        permit2Signature,
+        permit2Nonce,
+        eip2612Signature,
+        eip2612Nonce,
+        deadline,
+      });
+    } catch (e) {
+      process.stderr.write(
+        `x402: failed to sign permit2 payment: ${(e as Error).message}\n`,
+      );
+      process.exit(1);
+    }
+  } else if (settlementSpender) {
     try {
       const nonce = await readPermitNonce(client, accept.asset, account.address);
       const deadline = BigInt(
@@ -246,7 +311,10 @@ async function runX402(
   }
 
   const retryHeaders = new Headers(reqHeaders);
+  // Send both header spellings: official Radius v2 servers read
+  // PAYMENT-SIGNATURE, older x402 servers read X-Payment.
   retryHeaders.set('x-payment', paymentHeader);
+  retryHeaders.set('payment-signature', paymentHeader);
 
   const retry = await runRequest(verb as HttpVerb, url, {
     headers: retryHeaders,
@@ -265,7 +333,7 @@ async function runX402(
   }
 
   let paymentResponse: PaymentResponseBody | null = null;
-  const xpr = retry.headers.get('x-payment-response');
+  const xpr = retry.headers.get('payment-response') ?? retry.headers.get('x-payment-response');
   if (xpr) {
     try { paymentResponse = decodePaymentResponse(xpr); } catch { /* ignore malformed */ }
   }

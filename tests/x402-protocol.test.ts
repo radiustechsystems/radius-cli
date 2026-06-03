@@ -189,9 +189,9 @@ describe('encodePaymentHeader / decodePaymentResponse', () => {
     // v2: accepted echoes the server's entry verbatim (amount, not maxAmountRequired)
     expect(decoded.accepted).toEqual(v2Challenge.accepts[0]);
     expect(decoded.resource).toEqual(v2Challenge.resource);
-    // v2: no flat scheme/network at the top level
-    expect(decoded.scheme).toBeUndefined();
-    expect(decoded.network).toBeUndefined();
+    // v2: flat scheme/network kept alongside the accepted echo (radius x402 skill)
+    expect(decoded.scheme).toBe('exact');
+    expect(decoded.network).toBe('eip155:723487');
     // v2: validity bounds are strings
     expect(decoded.payload.authorization.validAfter).toBe('0');
     expect(decoded.payload.authorization.validBefore).toBe('1234567890');

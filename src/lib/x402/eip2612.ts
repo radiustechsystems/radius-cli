@@ -58,20 +58,23 @@ export async function readPermitNonce(
   });
 }
 
-export async function signPermit(
+export interface Eip2612SignArgs {
+  asset: Address;
+  chainId: number;
+  name: string;
+  version: string;
+  spender: Address;
+  value: bigint;
+  nonce: bigint;
+  deadline: bigint;
+}
+
+/** Raw EIP-2612 Permit signature — used directly by the permit2 gas-sponsoring extension. */
+export async function signEip2612Permit(
   account: LocalAccount,
-  args: {
-    asset: Address;
-    chainId: number;
-    name: string;
-    version: string;
-    spender: Address;
-    value: bigint;
-    nonce: bigint;
-    deadline: bigint;
-  },
-): Promise<PermitPayload> {
-  const signature = await account.signTypedData({
+  args: Eip2612SignArgs,
+): Promise<Hex> {
+  return await account.signTypedData({
     domain: {
       name: args.name,
       version: args.version,
@@ -88,6 +91,13 @@ export async function signPermit(
       deadline: args.deadline,
     },
   });
+}
+
+export async function signPermit(
+  account: LocalAccount,
+  args: Eip2612SignArgs,
+): Promise<PermitPayload> {
+  const signature = await signEip2612Permit(account, args);
   const { v, r, s } = parseSignature(signature);
   return {
     kind: 'permit-eip2612',

@@ -164,6 +164,8 @@ export function encodePaymentHeader(payload: PaymentPayload): string {
   const json = payload.x402Version >= 2
     ? JSON.stringify({
         x402Version: payload.x402Version,
+        scheme: payload.scheme,
+        network: payload.network,
         ...(payload.resource !== undefined ? { resource: payload.resource } : {}),
         accepted: payload.accepted ?? { scheme: payload.scheme, network: payload.network },
         payload: {
