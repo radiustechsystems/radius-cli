@@ -89,7 +89,14 @@ export function parseChallenge(raw: unknown): Challenge {
       network: asString(e.network, `accepts[${i}].network`),
       asset: asAddress(e.asset, `accepts[${i}].asset`),
       payTo: asAddress(e.payTo, `accepts[${i}].payTo`),
-      maxAmountRequired: asBigInt(e.maxAmountRequired ?? e.amount, `accepts[${i}].maxAmountRequired`),
+      maxAmountRequired: asBigInt(
+        e.maxAmountRequired ?? e.amount,
+        e.maxAmountRequired !== undefined
+          ? `accepts[${i}].maxAmountRequired`
+          : e.amount !== undefined
+            ? `accepts[${i}].amount`
+            : `accepts[${i}].maxAmountRequired`,
+      ),
       resource: typeof e.resource === 'string' ? e.resource : undefined,
       description: typeof e.description === 'string' ? e.description : undefined,
       mimeType: typeof e.mimeType === 'string' ? e.mimeType : undefined,
