@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync, unlinkSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -25,8 +25,8 @@ function makeCfg(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
   };
 }
 
-describe('stub providers (cdp, para, privy)', () => {
-  const stubs: WalletProviderName[] = ['cdp', 'para', 'privy'];
+describe('stub providers (cdp, privy)', () => {
+  const stubs: WalletProviderName[] = ['cdp', 'privy'];
 
   for (const name of stubs) {
     it(`${name}: getAccount rejects with "not yet implemented"`, async () => {
@@ -45,6 +45,168 @@ describe('stub providers (cdp, para, privy)', () => {
       expect(getProvider(name).exportPrivateKey).toBeUndefined();
     });
   }
+});
+
+describe('para provider', () => {
+  const provider = getProvider('para');
+  const paraSessionPath = join(radiusHome, 'para-session.json');
+  const MOCK_ADDRESS = '0x1234567890abcdef1234567890abcdef12345678';
+  const MOCK_SESSION = {
+    email: 'test@example.com',
+    userShare: 'mock-user-share-base64',
+    walletId: 'mock-wallet-id',
+    address: MOCK_ADDRESS,
+  };
+
+  it('getAccount rejects when not logged in', async () => {
+    await expect(provider.getAccount(makeCfg({ walletProvider: 'para' }))).rejects.toThrow(
+      /Not logged in to Para/,
+    );
+  });
+
+  it('getAddress rejects when not logged in', async () => {
+    await expect(provider.getAddress(makeCfg({ walletProvider: 'para' }))).rejects.toThrow(
+      /Not logged in to Para/,
+    );
+  });
+
+  it('does not expose exportPrivateKey (MPC key material)', () => {
+    expect(provider.exportPrivateKey).toBeUndefined();
+  });
+
+  it('getAccount rejects without API key when session exists', async () => {
+    writeFileSync(paraSessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    const origKey = process.env.PARA_API_KEY;
+    delete process.env.PARA_API_KEY;
+    try {
+      await expect(provider.getAccount(makeCfg({ walletProvider: 'para' }))).rejects.toThrow(
+        /Para API key not configured/,
+      );
+    } finally {
+      if (origKey) process.env.PARA_API_KEY = origKey;
+      if (existsSync(paraSessionPath)) unlinkSync(paraSessionPath);
+    }
+  });
+
+  it('status shows not logged in', async () => {
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => logs.push(args.join(' '));
+    try {
+      await provider.status(makeCfg({ walletProvider: 'para' }), {});
+    } finally {
+      console.log = origLog;
+    }
+    expect(logs.some((l) => l.includes('para'))).toBe(true);
+    expect(logs.some((l) => l.includes('not logged in'))).toBe(true);
+  });
+
+  it('logout is a no-op when not logged in', async () => {
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => logs.push(args.join(' '));
+    try {
+      await provider.logout!(makeCfg({ walletProvider: 'para' }));
+    } finally {
+      console.log = origLog;
+    }
+    expect(logs.some((l) => l.includes('Not logged in'))).toBe(true);
+  });
+
+  it('getAddress returns cached address from session file', async () => {
+    writeFileSync(paraSessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    try {
+      const address = await provider.getAddress(makeCfg({ walletProvider: 'para' }));
+      expect(address.toLowerCase()).toBe(MOCK_ADDRESS.toLowerCase());
+    } finally {
+      unlinkSync(paraSessionPath);
+    }
+  });
+
+  it('session file is stored with restrictive permissions (0o600)', () => {
+    writeFileSync(paraSessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    try {
+      const stat = statSync(paraSessionPath);
+      // 0o600 = owner read+write only (octal 33216 on some systems, mask with 0o777)
+      expect(stat.mode & 0o777).toBe(0o600);
+    } finally {
+      unlinkSync(paraSessionPath);
+    }
+  });
+
+  it('status shows logged-in state from session file', async () => {
+    writeFileSync(paraSessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => logs.push(args.join(' '));
+    try {
+      await provider.status(makeCfg({ walletProvider: 'para' }), {});
+    } finally {
+      console.log = origLog;
+      unlinkSync(paraSessionPath);
+    }
+    expect(logs.some((l) => l.includes('test@example.com'))).toBe(true);
+    expect(logs.some((l) => l.includes(MOCK_ADDRESS))).toBe(true);
+  });
+
+  it('status --json returns structured output', async () => {
+    writeFileSync(paraSessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => logs.push(args.join(' '));
+    try {
+      await provider.status(makeCfg({ walletProvider: 'para' }), { json: true });
+    } finally {
+      console.log = origLog;
+      unlinkSync(paraSessionPath);
+    }
+    const parsed = JSON.parse(logs[0]);
+    expect(parsed.provider).toBe('para');
+    expect(parsed.loggedIn).toBe(true);
+    expect(parsed.email).toBe('test@example.com');
+    expect(parsed.address.toLowerCase()).toBe(MOCK_ADDRESS.toLowerCase());
+  });
+
+  it('logout deletes session file', async () => {
+    writeFileSync(paraSessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    expect(existsSync(paraSessionPath)).toBe(true);
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => logs.push(args.join(' '));
+    try {
+      await provider.logout!(makeCfg({ walletProvider: 'para' }));
+    } finally {
+      console.log = origLog;
+    }
+    expect(existsSync(paraSessionPath)).toBe(false);
+    expect(logs.some((l) => l.includes('Logged out'))).toBe(true);
+  });
+
+  it('getAccount rejects with API key error when session exists but no key (env or config)', async () => {
+    writeFileSync(paraSessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    const origKey = process.env.PARA_API_KEY;
+    delete process.env.PARA_API_KEY;
+    try {
+      await expect(provider.getAccount(makeCfg({ walletProvider: 'para' }))).rejects.toThrow(
+        /Para API key not configured/,
+      );
+    } finally {
+      if (origKey) process.env.PARA_API_KEY = origKey;
+      if (existsSync(paraSessionPath)) unlinkSync(paraSessionPath);
+    }
+  });
+
+  it('provider resolution via requireAccount dispatches to para', async () => {
+    const cfg = makeCfg({ walletProvider: 'para' });
+    await expect(requireAccount(cfg, undefined)).rejects.toThrow(/Not logged in to Para/);
+  });
+
+  it('--private-key overrides para provider', async () => {
+    const PK = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';
+    const cfg = makeCfg({ walletProvider: 'para' });
+    const account = await requireAccount(cfg, PK);
+    expect(account.address).toBe(privateKeyToAccount(PK).address);
+  });
 });
 
 describe('keystore provider', () => {

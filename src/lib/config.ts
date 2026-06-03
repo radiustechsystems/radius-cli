@@ -19,6 +19,8 @@ interface FileConfig {
   cachedAddress?: string;
   passwordless?: boolean;
   wallet?: WalletProviderName;
+  paraApiKey?: string;
+  paraEnv?: string;
 }
 
 function readFileConfig(): FileConfig {
@@ -113,5 +115,25 @@ export function writeWalletProvider(provider: WalletProviderName): void {
   const file = readFileConfig();
   if (provider === 'keystore') delete file.wallet;
   else file.wallet = provider;
+  writeFileConfig(file);
+}
+
+export function readParaApiKey(): string | undefined {
+  return readFileConfig().paraApiKey;
+}
+
+export function writeParaApiKey(apiKey: string): void {
+  const file = readFileConfig();
+  file.paraApiKey = apiKey;
+  writeFileConfig(file);
+}
+
+export function readParaEnv(): string | undefined {
+  return readFileConfig().paraEnv;
+}
+
+export function writeParaEnv(env: string): void {
+  const file = readFileConfig();
+  file.paraEnv = env;
   writeFileConfig(file);
 }
