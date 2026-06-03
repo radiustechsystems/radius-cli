@@ -26,11 +26,7 @@ export interface GlobalOptions {
   wallet?: string;
 }
 
-export interface WalletProviderInterface {
-  login?(cfg: ResolvedConfig): Promise<void>;
-  logout?(cfg: ResolvedConfig): Promise<void>;
-  status(cfg: ResolvedConfig, opts: GlobalOptions): Promise<void>;
-}
+export type { WalletProvider } from './lib/providers/types.js';
 
 export interface Clients {
   publicClient: PublicClient;

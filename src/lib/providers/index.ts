@@ -1,15 +1,22 @@
 import { keystoreProvider } from './keystore.js';
-import type { WalletProviderName, WalletProviderInterface } from '../../types.js';
+import type { WalletProviderName } from '../../types.js';
+import type { WalletProvider } from './types.js';
 
-const providers: Record<WalletProviderName, WalletProviderInterface> = {
+const providers: Record<WalletProviderName, WalletProvider> = {
   keystore: keystoreProvider,
   cdp: stubProvider('cdp'),
   para: stubProvider('para'),
   privy: stubProvider('privy'),
 };
 
-function stubProvider(name: string): WalletProviderInterface {
+function stubProvider(name: string): WalletProvider {
   return {
+    async getAccount(): Promise<never> {
+      throw new Error(`${name} provider is not yet implemented.`);
+    },
+    async getAddress(): Promise<never> {
+      throw new Error(`${name} provider is not yet implemented.`);
+    },
     async login(): Promise<void> {
       throw new Error(`${name} provider is not yet implemented.`);
     },
@@ -22,6 +29,6 @@ function stubProvider(name: string): WalletProviderInterface {
   };
 }
 
-export function getProvider(name: WalletProviderName): WalletProviderInterface {
+export function getProvider(name: WalletProviderName): WalletProvider {
   return providers[name];
 }

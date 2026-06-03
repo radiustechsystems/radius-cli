@@ -13,8 +13,8 @@ import {
   type Hex,
 } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { resolveConfig, readPasswordless, writeCachedAddress, writePasswordless } from '../lib/config.js';
-import { keystoreExists, loadKeystorePrivateKey, saveKeystore } from '../lib/keystore.js';
+import { resolveConfig, writeCachedAddress, writePasswordless } from '../lib/config.js';
+import { keystoreExists, saveKeystore } from '../lib/keystore.js';
 import { getOwnAddress, requireAccount } from '../lib/account.js';
 import { makePublicClient, makeWalletClient } from '../lib/client.js';
 import { coerceArg, parseCastSignature } from '../lib/signature.js';
@@ -182,9 +182,10 @@ export function registerWallet(program: Command): void {
     .action(async (_subOpts, cmd) => {
       const opts = cmd.optsWithGlobals() as GlobalOptions;
       const cfg = resolveConfig(opts);
-      if (cfg.walletProvider !== 'keystore') {
+      const provider = getProvider(cfg.walletProvider);
+      if (!provider.exportPrivateKey) {
         throw new Error(
-          `wallet export is only supported for the keystore provider (current: ${cfg.walletProvider}).`,
+          `wallet export is not supported for the ${cfg.walletProvider} provider (remote key material is not exportable).`,
         );
       }
       if (!opts.privateKey && !keystoreExists(cfg.keystorePath)) {
@@ -202,9 +203,7 @@ export function registerWallet(program: Command): void {
       if (opts.privateKey) {
         pk = normalizePrivateKey(opts.privateKey);
       } else {
-        const password = cfg.password
-          ?? (readPasswordless() ? '' : await promptPassword({ message: 'Keystore password:', mask: '*' }));
-        pk = await loadKeystorePrivateKey(cfg.keystorePath, password);
+        pk = await provider.exportPrivateKey(cfg);
       }
       const address = privateKeyToAccount(pk).address;
       if (opts.json) {
