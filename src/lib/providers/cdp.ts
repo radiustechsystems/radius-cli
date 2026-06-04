@@ -113,11 +113,12 @@ async function makeCdpClient(creds: CdpCredentials) {
 
 async function getOrCreateCdpAccount(creds: CdpCredentials, session: CdpSession) {
   const cdp = await makeCdpClient(creds);
-  if (session.accountName) {
-    return await cdp.evm.getOrCreateAccount({ name: session.accountName });
+  if (!session.accountName) {
+    throw new Error(
+      'CDP session is missing account name. Run `radius-cli --wallet cdp wallet logout` then `wallet login` again.',
+    );
   }
-  // Retrieve by address — getAccount requires address
-  return await cdp.evm.getAccount({ address: session.address as Address });
+  return await cdp.evm.getOrCreateAccount({ name: session.accountName });
 }
 
 export const cdpProvider: WalletProvider = {
@@ -132,20 +133,18 @@ export const cdpProvider: WalletProvider = {
     const creds = await resolveCredentials({ interactive: true });
     const cdp = await makeCdpClient(creds);
 
-    const accountName = await input({
+    const userInput = await input({
       message: 'Account name (leave empty to create new):',
     });
 
-    let account;
-    if (accountName.trim()) {
-      account = await cdp.evm.getOrCreateAccount({ name: accountName.trim() });
-    } else {
-      account = await cdp.evm.createAccount();
-    }
+    // Always use a name — auto-generate one if the user leaves it blank.
+    // CDP accounts are primarily keyed by name; address-only lookup is fragile.
+    const accountName = userInput.trim() || `radius-cli-${Date.now()}`;
+    const account = await cdp.evm.getOrCreateAccount({ name: accountName });
 
     const session: CdpSession = {
       address: account.address,
-      accountName: accountName.trim() || undefined,
+      accountName,
     };
     writeSession(session);
 
@@ -181,7 +180,7 @@ export const cdpProvider: WalletProvider = {
       if (session.accountName) console.log(`Account:  ${session.accountName}`);
     } else {
       console.log('Status:   not logged in');
-      console.log('Run `radius-cli wallet login` to set up CDP.');
+      console.log('Run `radius-cli --wallet cdp wallet login` to set up CDP.');
     }
   },
 
@@ -222,7 +221,7 @@ export const cdpProvider: WalletProvider = {
         return serializeTransaction(tx as TransactionSerializable, { r, s, v }) as Hex;
       },
       async signTypedData(typedData) {
-        return await cdpAccount.signTypedData(typedData as any) as Hex;
+        return await cdpAccount.signTypedData(typedData) as Hex;
       },
     });
   },
