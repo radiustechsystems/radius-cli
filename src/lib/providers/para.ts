@@ -1,10 +1,8 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { input } from '@inquirer/prompts';
-import type { Address, LocalAccount } from 'viem';
-import { Para as ParaServer, Environment } from '@getpara/server-sdk';
-import { createParaViemAccount } from '@getpara/viem-v2-integration';
-import { radiusDir, readParaApiKey, writeParaApiKey } from '../config.js';
+import type { Address, Hex, LocalAccount } from 'viem';
+import { radiusDir, readProviderConfig, writeProviderConfig } from '../config.js';
 import { jsonStringify } from '../format.js';
 import type { ResolvedConfig, GlobalOptions } from '../../types.js';
 import type { WalletProvider } from './types.js';
@@ -43,51 +41,44 @@ function deleteSession(): void {
   if (existsSync(p)) unlinkSync(p);
 }
 
-function resolveApiKey(): string {
-  const key = process.env.PARA_API_KEY ?? readParaApiKey();
-  if (!key) {
+async function loadParaSDK() {
+  try {
+    const { Para, Environment } = await import('@getpara/server-sdk');
+    const { createParaViemAccount } = await import('@getpara/viem-v2-integration');
+    return { Para, Environment, createParaViemAccount };
+  } catch {
     throw new Error(
-      'Para API key not configured. Run `radius-cli --wallet para wallet login` to set it up,\n' +
-      'or set the PARA_API_KEY environment variable.\n' +
-      'Get your API key from https://developer.getpara.com',
+      'Para SDK packages are not installed. Run:\n' +
+      '  npm install @getpara/server-sdk @getpara/viem-v2-integration\n' +
+      'to enable the Para wallet provider.',
     );
   }
-  return key;
 }
 
-async function resolveApiKeyInteractive(): Promise<string> {
-  // env var takes priority
-  const envKey = process.env.PARA_API_KEY;
-  if (envKey) return envKey;
+async function resolveApiKey(opts: { interactive?: boolean } = {}): Promise<string> {
+  // env var → config → prompt (if interactive) → error
+  const key = process.env.PARA_API_KEY ?? readProviderConfig('para').apiKey;
+  if (key) return key;
 
-  // check config
-  const savedKey = readParaApiKey();
-  if (savedKey) return savedKey;
+  if (opts.interactive && process.stdin.isTTY) {
+    const prompted = await input({
+      message: 'Para API key (from https://developer.getpara.com):',
+    });
+    if (!prompted.trim()) throw new Error('API key is required.');
+    writeProviderConfig('para', { apiKey: prompted.trim() });
+    console.log('API key saved to ~/.radius/config.json');
+    return prompted.trim();
+  }
 
-  // prompt and save
-  const key = await input({
-    message: 'Para API key (from https://developer.getpara.com):',
-  });
-  if (!key.trim()) throw new Error('API key is required.');
-  writeParaApiKey(key.trim());
-  console.log('API key saved to ~/.radius/config.json');
-  return key.trim();
+  throw new Error(
+    'Para API key not configured. Run `radius-cli --wallet para wallet login` to set it up,\n' +
+    'or set the PARA_API_KEY environment variable.\n' +
+    'Get your API key from https://developer.getpara.com',
+  );
 }
 
-function resolveEnvironment(): Environment {
-  const env = process.env.PARA_ENV?.toUpperCase();
-  if (env === 'PROD') return Environment.PROD;
-  if (env === 'DEV') return Environment.DEV;
-  if (env === 'SANDBOX') return Environment.SANDBOX;
-  return Environment.BETA;
-}
-
-function makePara(): ParaServer {
-  return new ParaServer(resolveEnvironment(), resolveApiKey());
-}
-
-async function ensureParaReady(para: ParaServer, session: ParaSession): Promise<void> {
-  await para.setUserShare(session.userShare);
+function resolveEnvironmentValue(): string {
+  return (process.env.PARA_ENV ?? readProviderConfig('para').env ?? 'BETA').toUpperCase();
 }
 
 export const paraProvider: WalletProvider = {
@@ -99,11 +90,14 @@ export const paraProvider: WalletProvider = {
       return;
     }
 
-    const apiKey = await resolveApiKeyInteractive();
+    const sdk = await loadParaSDK();
+    const apiKey = await resolveApiKey({ interactive: true });
     const email = await input({ message: 'Para email:' });
     if (!email.trim()) throw new Error('Email is required.');
 
-    const para = new ParaServer(resolveEnvironment(), apiKey);
+    const envStr = resolveEnvironmentValue();
+    const env = sdk.Environment[envStr as keyof typeof sdk.Environment] ?? sdk.Environment.BETA;
+    const para = new sdk.Para(env, apiKey);
 
     const hasWallet = await para.hasPregenWallet({ pregenId: { email } });
 
@@ -133,6 +127,7 @@ export const paraProvider: WalletProvider = {
       address = w?.address ?? '';
     }
 
+    // getUserShare() returns string | null in v3; null means no share available.
     const userShare = para.getUserShare();
     if (!userShare) {
       throw new Error('Failed to obtain user share from Para. Please try again.');
@@ -141,7 +136,7 @@ export const paraProvider: WalletProvider = {
     const session: ParaSession = { email, userShare, walletId, address };
     writeSession(session);
 
-    console.log(`Logged in as ${email}`);
+    console.log(`Logged in as ${email} (pregenerated wallet — not yet claimed)`);
     console.log(`Address: ${address}`);
     console.log(`Session saved to ${sessionPath()}`);
   },
@@ -185,20 +180,17 @@ export const paraProvider: WalletProvider = {
       );
     }
 
-    const para = makePara();
-    await ensureParaReady(para, session);
+    const sdk = await loadParaSDK();
+    const apiKey = await resolveApiKey();
+    const envStr = resolveEnvironmentValue();
+    const env = sdk.Environment[envStr as keyof typeof sdk.Environment] ?? sdk.Environment.BETA;
+    const para = new sdk.Para(env, apiKey);
+    await para.setUserShare(session.userShare);
 
-    // Try with address first, fall back to default (first EVM wallet)
-    const wallets = para.getWallets();
-    const walletIds = Object.keys(wallets);
-    if (walletIds.length === 0) {
-      throw new Error(
-        'No wallets found in Para session. Try `radius-cli --wallet para wallet logout` then `wallet login` again.',
-      );
-    }
-
-    // Use positional overload; omit address to let Para pick the first EVM wallet
-    return createParaViemAccount(para as any);
+    // Pass session address to ensure we sign as the wallet that login printed.
+    // Cast needed: server SDK's Para extends ParaCore but has a slightly
+    // different claimPregenWallets return type. Functionally identical for signing.
+    return sdk.createParaViemAccount({ para: para as any, address: session.address as Hex });
   },
 
   async getAddress(_cfg: ResolvedConfig): Promise<Address> {

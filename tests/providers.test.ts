@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { existsSync, mkdtempSync, writeFileSync, unlinkSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -206,6 +206,48 @@ describe('para provider', () => {
     const cfg = makeCfg({ walletProvider: 'para' });
     const account = await requireAccount(cfg, PK);
     expect(account.address).toBe(privateKeyToAccount(PK).address);
+  });
+
+  it('getAccount passes session address to createParaViemAccount', async () => {
+    writeFileSync(paraSessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    const origKey = process.env.PARA_API_KEY;
+    process.env.PARA_API_KEY = 'test-key';
+
+    // Mock the Para SDK dynamic imports
+    const mockSetUserShare = vi.fn().mockResolvedValue(undefined);
+    const mockCreateParaViemAccount = vi.fn().mockReturnValue({
+      address: MOCK_ADDRESS,
+      type: 'local',
+      signMessage: vi.fn(),
+      signTransaction: vi.fn(),
+      signTypedData: vi.fn(),
+      sign: vi.fn(),
+    });
+
+    vi.doMock('@getpara/server-sdk', () => ({
+      Para: vi.fn().mockImplementation(() => ({ setUserShare: mockSetUserShare })),
+      Environment: { BETA: 'BETA', PROD: 'PROD', DEV: 'DEV', SANDBOX: 'SANDBOX' },
+    }));
+    vi.doMock('@getpara/viem-v2-integration', () => ({
+      createParaViemAccount: mockCreateParaViemAccount,
+    }));
+
+    try {
+      // Re-import to pick up mocks
+      const { paraProvider } = await import('../src/lib/providers/para.js');
+      await paraProvider.getAccount(makeCfg({ walletProvider: 'para' }));
+
+      expect(mockSetUserShare).toHaveBeenCalledWith(MOCK_SESSION.userShare);
+      expect(mockCreateParaViemAccount).toHaveBeenCalledWith(
+        expect.objectContaining({ address: MOCK_ADDRESS }),
+      );
+    } finally {
+      vi.doUnmock('@getpara/server-sdk');
+      vi.doUnmock('@getpara/viem-v2-integration');
+      if (origKey) process.env.PARA_API_KEY = origKey;
+      else delete process.env.PARA_API_KEY;
+      if (existsSync(paraSessionPath)) unlinkSync(paraSessionPath);
+    }
   });
 });
 

@@ -11,6 +11,11 @@ const RADIUS_DIR = process.env.RADIUS_HOME ?? join(homedir(), '.radius');
 const CONFIG_PATH = join(RADIUS_DIR, 'config.json');
 const DEFAULT_KEYSTORE_PATH = join(RADIUS_DIR, 'keystore.json');
 
+interface ProviderConfig {
+  apiKey?: string;
+  env?: string;
+}
+
 interface FileConfig {
   network?: NetworkName;
   rpcUrl?: string;
@@ -19,8 +24,7 @@ interface FileConfig {
   cachedAddress?: string;
   passwordless?: boolean;
   wallet?: WalletProviderName;
-  paraApiKey?: string;
-  paraEnv?: string;
+  providers?: Record<string, ProviderConfig>;
 }
 
 function readFileConfig(): FileConfig {
@@ -118,22 +122,13 @@ export function writeWalletProvider(provider: WalletProviderName): void {
   writeFileConfig(file);
 }
 
-export function readParaApiKey(): string | undefined {
-  return readFileConfig().paraApiKey;
+export function readProviderConfig(provider: string): ProviderConfig {
+  return readFileConfig().providers?.[provider] ?? {};
 }
 
-export function writeParaApiKey(apiKey: string): void {
+export function writeProviderConfig(provider: string, update: Partial<ProviderConfig>): void {
   const file = readFileConfig();
-  file.paraApiKey = apiKey;
-  writeFileConfig(file);
-}
-
-export function readParaEnv(): string | undefined {
-  return readFileConfig().paraEnv;
-}
-
-export function writeParaEnv(env: string): void {
-  const file = readFileConfig();
-  file.paraEnv = env;
+  if (!file.providers) file.providers = {};
+  file.providers[provider] = { ...file.providers[provider], ...update };
   writeFileConfig(file);
 }
