@@ -12,8 +12,7 @@ const CONFIG_PATH = join(RADIUS_DIR, 'config.json');
 const DEFAULT_KEYSTORE_PATH = join(RADIUS_DIR, 'keystore.json');
 
 interface ProviderConfig {
-  apiKey?: string;
-  env?: string;
+  [key: string]: string | undefined;
 }
 
 interface FileConfig {

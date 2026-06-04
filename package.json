@@ -48,14 +48,23 @@
     "viem": "^2.21.0"
   },
   "peerDependencies": {
+    "@coinbase/cdp-sdk": "^1.51.0",
     "@getpara/server-sdk": "3.0.0",
     "@getpara/viem-v2-integration": "3.0.0"
   },
   "peerDependenciesMeta": {
-    "@getpara/server-sdk": { "optional": true },
-    "@getpara/viem-v2-integration": { "optional": true }
+    "@coinbase/cdp-sdk": {
+      "optional": true
+    },
+    "@getpara/server-sdk": {
+      "optional": true
+    },
+    "@getpara/viem-v2-integration": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "@coinbase/cdp-sdk": "^1.51.0",
     "@getpara/server-sdk": "3.0.0",
     "@getpara/viem-v2-integration": "3.0.0",
     "@types/node": "^22.0.0",

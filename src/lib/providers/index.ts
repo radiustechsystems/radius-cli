@@ -1,11 +1,12 @@
 import { keystoreProvider } from './keystore.js';
 import { paraProvider } from './para.js';
+import { cdpProvider } from './cdp.js';
 import type { WalletProviderName } from '../../types.js';
 import type { WalletProvider } from './types.js';
 
 const providers: Record<WalletProviderName, WalletProvider> = {
   keystore: keystoreProvider,
-  cdp: stubProvider('cdp'),
+  cdp: cdpProvider,
   para: paraProvider,
   privy: stubProvider('privy'),
 };

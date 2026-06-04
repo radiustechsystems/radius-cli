@@ -25,8 +25,8 @@ function makeCfg(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
   };
 }
 
-describe('stub providers (cdp, privy)', () => {
-  const stubs: WalletProviderName[] = ['cdp', 'privy'];
+describe('stub providers (privy)', () => {
+  const stubs: WalletProviderName[] = ['privy'];
 
   for (const name of stubs) {
     it(`${name}: getAccount rejects with "not yet implemented"`, async () => {
@@ -45,6 +45,141 @@ describe('stub providers (cdp, privy)', () => {
       expect(getProvider(name).exportPrivateKey).toBeUndefined();
     });
   }
+});
+
+describe('cdp provider', () => {
+  const provider = getProvider('cdp');
+  const cdpSessionPath = join(radiusHome, 'cdp-session.json');
+  const MOCK_CDP_ADDRESS = '0xabcdef1234567890abcdef1234567890abcdef12';
+  const MOCK_CDP_SESSION = {
+    address: MOCK_CDP_ADDRESS,
+    accountName: 'test-account',
+  };
+
+  it('getAccount rejects when not logged in', async () => {
+    await expect(provider.getAccount(makeCfg({ walletProvider: 'cdp' }))).rejects.toThrow(
+      /Not logged in to CDP/,
+    );
+  });
+
+  it('getAddress rejects when not logged in', async () => {
+    await expect(provider.getAddress(makeCfg({ walletProvider: 'cdp' }))).rejects.toThrow(
+      /Not logged in to CDP/,
+    );
+  });
+
+  it('does not expose exportPrivateKey (server-side keys)', () => {
+    expect(provider.exportPrivateKey).toBeUndefined();
+  });
+
+  it('getAccount rejects without credentials when session exists', async () => {
+    writeFileSync(cdpSessionPath, JSON.stringify(MOCK_CDP_SESSION), { mode: 0o600 });
+    const origId = process.env.CDP_API_KEY_ID;
+    const origSecret = process.env.CDP_API_KEY_SECRET;
+    const origWallet = process.env.CDP_WALLET_SECRET;
+    delete process.env.CDP_API_KEY_ID;
+    delete process.env.CDP_API_KEY_SECRET;
+    delete process.env.CDP_WALLET_SECRET;
+    try {
+      await expect(provider.getAccount(makeCfg({ walletProvider: 'cdp' }))).rejects.toThrow(
+        /CDP credentials not configured/,
+      );
+    } finally {
+      if (origId) process.env.CDP_API_KEY_ID = origId;
+      if (origSecret) process.env.CDP_API_KEY_SECRET = origSecret;
+      if (origWallet) process.env.CDP_WALLET_SECRET = origWallet;
+      if (existsSync(cdpSessionPath)) unlinkSync(cdpSessionPath);
+    }
+  });
+
+  it('status shows not logged in', async () => {
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => logs.push(args.join(' '));
+    try {
+      await provider.status(makeCfg({ walletProvider: 'cdp' }), {});
+    } finally {
+      console.log = origLog;
+    }
+    expect(logs.some((l) => l.includes('cdp'))).toBe(true);
+    expect(logs.some((l) => l.includes('not logged in'))).toBe(true);
+  });
+
+  it('logout is a no-op when not logged in', async () => {
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => logs.push(args.join(' '));
+    try {
+      await provider.logout!(makeCfg({ walletProvider: 'cdp' }));
+    } finally {
+      console.log = origLog;
+    }
+    expect(logs.some((l) => l.includes('Not logged in'))).toBe(true);
+  });
+
+  it('getAddress returns cached address from session file', async () => {
+    writeFileSync(cdpSessionPath, JSON.stringify(MOCK_CDP_SESSION), { mode: 0o600 });
+    try {
+      const address = await provider.getAddress(makeCfg({ walletProvider: 'cdp' }));
+      expect(address.toLowerCase()).toBe(MOCK_CDP_ADDRESS.toLowerCase());
+    } finally {
+      unlinkSync(cdpSessionPath);
+    }
+  });
+
+  it('status shows logged-in state from session file', async () => {
+    writeFileSync(cdpSessionPath, JSON.stringify(MOCK_CDP_SESSION), { mode: 0o600 });
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => logs.push(args.join(' '));
+    try {
+      await provider.status(makeCfg({ walletProvider: 'cdp' }), {});
+    } finally {
+      console.log = origLog;
+      unlinkSync(cdpSessionPath);
+    }
+    expect(logs.some((l) => l.includes(MOCK_CDP_ADDRESS))).toBe(true);
+    expect(logs.some((l) => l.includes('test-account'))).toBe(true);
+  });
+
+  it('status --json returns structured output', async () => {
+    writeFileSync(cdpSessionPath, JSON.stringify(MOCK_CDP_SESSION), { mode: 0o600 });
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => logs.push(args.join(' '));
+    try {
+      await provider.status(makeCfg({ walletProvider: 'cdp' }), { json: true });
+    } finally {
+      console.log = origLog;
+      unlinkSync(cdpSessionPath);
+    }
+    const parsed = JSON.parse(logs[0]);
+    expect(parsed.provider).toBe('cdp');
+    expect(parsed.loggedIn).toBe(true);
+    expect(parsed.address.toLowerCase()).toBe(MOCK_CDP_ADDRESS.toLowerCase());
+  });
+
+  it('logout deletes session file', async () => {
+    writeFileSync(cdpSessionPath, JSON.stringify(MOCK_CDP_SESSION), { mode: 0o600 });
+    expect(existsSync(cdpSessionPath)).toBe(true);
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => logs.push(args.join(' '));
+    try {
+      await provider.logout!(makeCfg({ walletProvider: 'cdp' }));
+    } finally {
+      console.log = origLog;
+    }
+    expect(existsSync(cdpSessionPath)).toBe(false);
+    expect(logs.some((l) => l.includes('Logged out'))).toBe(true);
+  });
+
+  it('--private-key overrides cdp provider', async () => {
+    const PK = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';
+    const cfg = makeCfg({ walletProvider: 'cdp' });
+    const account = await requireAccount(cfg, PK);
+    expect(account.address).toBe(privateKeyToAccount(PK).address);
+  });
 });
 
 describe('para provider', () => {
@@ -294,7 +429,7 @@ describe('account shims (requireAccount / getOwnAddress)', () => {
   const PK_ADDRESS = privateKeyToAccount(PK).address;
 
   it('dispatch to the selected provider', async () => {
-    const cfg = makeCfg({ walletProvider: 'cdp' });
+    const cfg = makeCfg({ walletProvider: 'privy' });
     await expect(requireAccount(cfg, undefined)).rejects.toThrow(/not yet implemented/);
     await expect(getOwnAddress(cfg, undefined)).rejects.toThrow(/not yet implemented/);
   });
