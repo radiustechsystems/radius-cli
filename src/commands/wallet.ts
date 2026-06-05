@@ -128,12 +128,13 @@ export function registerWallet(program: Command): void {
   wallet
     .command('login')
     .description('Log in to the active wallet provider')
-    .action(async (_subOpts, cmd) => {
+    .option('--reset', 'clear saved credentials and session before logging in')
+    .action(async (subOpts: { reset?: boolean }, cmd) => {
       const opts = cmd.optsWithGlobals() as GlobalOptions;
       const cfg = resolveConfig(opts);
       const provider = getProvider(cfg.walletProvider);
       if (provider.login) {
-        await provider.login(cfg);
+        await provider.login(cfg, { reset: subOpts.reset });
       } else {
         console.log(`${cfg.walletProvider} provider does not require login.`);
       }

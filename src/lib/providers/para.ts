@@ -1,8 +1,8 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
-import { input } from '@inquirer/prompts';
+import { input, confirm } from '@inquirer/prompts';
 import type { Address, Hex, LocalAccount } from 'viem';
-import { radiusDir, readProviderConfig, writeProviderConfig } from '../config.js';
+import { radiusDir, readProviderConfig, writeProviderConfig, deleteProviderConfig } from '../config.js';
 import { jsonStringify } from '../format.js';
 import type { ResolvedConfig, GlobalOptions } from '../../types.js';
 import type { WalletProvider } from './types.js';
@@ -36,9 +36,13 @@ function writeSession(session: ParaSession): void {
   writeFileSync(sessionPath(), JSON.stringify(session, null, 2), { mode: 0o600 });
 }
 
-function deleteSession(): void {
+function backupSessionPath(): string {
+  return join(radiusDir(), 'para-session.bak.json');
+}
+
+function archiveSession(): void {
   const p = sessionPath();
-  if (existsSync(p)) unlinkSync(p);
+  if (existsSync(p)) renameSync(p, backupSessionPath());
 }
 
 async function loadParaSDK() {
@@ -82,11 +86,17 @@ function resolveEnvironmentValue(): string {
 }
 
 export const paraProvider: WalletProvider = {
-  async login(_cfg: ResolvedConfig): Promise<void> {
+  async login(_cfg: ResolvedConfig, opts?: { reset?: boolean }): Promise<void> {
+    if (opts?.reset) {
+      archiveSession();
+      deleteProviderConfig('para');
+      console.log('Para credentials and session cleared.');
+    }
+
     const existing = readSession();
     if (existing) {
       console.log(`Already logged in as ${existing.email} (${existing.address})`);
-      console.log('Run `radius-cli wallet logout` first to switch accounts.');
+      console.log('Run `radius-cli --wallet para wallet logout` first, or use `wallet login --reset` to start over.');
       return;
     }
 
@@ -127,10 +137,24 @@ export const paraProvider: WalletProvider = {
       address = w?.address ?? '';
     }
 
-    // getUserShare() returns string | null in v3; null means no share available.
+    // getUserShare() returns the in-memory MPC signer encoded as base64.
+    // It is only populated right after createPregenWallet() — getPregenWallets()
+    // returns wallet metadata only; Para's servers never hold the user share.
     const userShare = para.getUserShare();
     if (!userShare) {
-      throw new Error('Failed to obtain user share from Para. Please try again.');
+      const backupPath = backupSessionPath();
+      const hint = existsSync(backupPath)
+        ? `A previous session backup exists at ${backupPath}.\n` +
+          'Restore it manually: cp ~/.radius/para-session.bak.json ~/.radius/para-session.json'
+        : 'No session backup found. The signing key for this address cannot be recovered.';
+      throw new Error(
+        `Para wallet ${address} exists but the signing key is not available.\n\n` +
+        'Para\'s MPC signing key (user share) is generated once at wallet creation and\n' +
+        'is never stored by Para\'s servers. If you ran `wallet logout`, the key was\n' +
+        'archived or deleted from this machine.\n\n' +
+        hint + '\n\n' +
+        'To use a new wallet, register with a different email address.',
+      );
     }
 
     const session: ParaSession = { email, userShare, walletId, address };
@@ -147,8 +171,27 @@ export const paraProvider: WalletProvider = {
       console.log('Not logged in to Para.');
       return;
     }
-    deleteSession();
+
+    // Para's MPC signing key (user share) exists only on this machine.
+    // Para's servers cannot recover it. Warn before making it inaccessible.
+    console.log(`Address: ${session.address}`);
+    console.log(`\nWarning: Para's signing key for this wallet exists only in your session file.`);
+    console.log('It cannot be recovered from Para\'s servers after logout.');
+    console.log(`The session will be archived to ${backupSessionPath()} (not deleted).`);
+    console.log('You can restore it by renaming it back to para-session.json.\n');
+
+    const ok = process.stdin.isTTY
+      ? await confirm({ message: 'Continue with logout?', default: false })
+      : true;
+
+    if (!ok) {
+      console.log('Logout cancelled.');
+      return;
+    }
+
+    archiveSession();
     console.log(`Logged out of Para (${session.email}).`);
+    console.log(`Session archived to ${backupSessionPath()}.`);
   },
 
   async status(_cfg: ResolvedConfig, opts: GlobalOptions): Promise<void> {
@@ -168,7 +211,7 @@ export const paraProvider: WalletProvider = {
       console.log(`Address:  ${session.address}`);
     } else {
       console.log('Status:   not logged in');
-      console.log('Run `radius-cli wallet login` to authenticate with Para.');
+      console.log('Run `radius-cli --wallet para wallet login` to authenticate with Para.');
     }
   },
 

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { input, password as promptPassword } from '@inquirer/prompts';
 import { type Address, type Hex, type LocalAccount, type TransactionSerializable, keccak256, serializeTransaction } from 'viem';
 import { toAccount } from 'viem/accounts';
-import { radiusDir, readProviderConfig, writeProviderConfig } from '../config.js';
+import { radiusDir, readProviderConfig, writeProviderConfig, deleteProviderConfig } from '../config.js';
 import { jsonStringify } from '../format.js';
 import type { ResolvedConfig, GlobalOptions } from '../../types.js';
 import type { WalletProvider } from './types.js';
@@ -122,11 +122,17 @@ async function getOrCreateCdpAccount(creds: CdpCredentials, session: CdpSession)
 }
 
 export const cdpProvider: WalletProvider = {
-  async login(_cfg: ResolvedConfig): Promise<void> {
+  async login(_cfg: ResolvedConfig, opts?: { reset?: boolean }): Promise<void> {
+    if (opts?.reset) {
+      deleteSession();
+      deleteProviderConfig('cdp');
+      console.log('CDP credentials and session cleared.');
+    }
+
     const existing = readSession();
     if (existing) {
       console.log(`Already logged in with CDP (${existing.address})`);
-      console.log('Run `radius-cli wallet logout` first to switch accounts.');
+      console.log('Run `radius-cli --wallet cdp wallet logout` first, or use `wallet login --reset` to start over.');
       return;
     }
 

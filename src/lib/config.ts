@@ -131,3 +131,12 @@ export function writeProviderConfig(provider: string, update: Partial<ProviderCo
   file.providers[provider] = { ...file.providers[provider], ...update };
   writeFileConfig(file);
 }
+
+export function deleteProviderConfig(provider: string): void {
+  const file = readFileConfig();
+  if (file.providers) {
+    delete file.providers[provider];
+    if (Object.keys(file.providers).length === 0) delete file.providers;
+  }
+  writeFileConfig(file);
+}
