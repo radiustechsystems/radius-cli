@@ -1,19 +1,16 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
 import { input, password as promptPassword, select } from '@inquirer/prompts';
 import {
   type Address,
   type Hex,
   type LocalAccount,
-  type TransactionSerializable,
-  keccak256,
-  serializeTransaction,
   toHex,
 } from 'viem';
 import { toAccount } from 'viem/accounts';
-import { radiusDir, readProviderConfig, writeProviderConfig, deleteProviderConfig } from '../config.js';
+import { readProviderConfig, writeProviderConfig, deleteProviderConfig } from '../config.js';
 import { jsonStringify } from '../format.js';
 import { disableProviderTelemetry } from '../providerTelemetry.js';
+import { signLegacyTransaction } from './remoteSigning.js';
+import { deleteProviderSession, providerSessionPath, readProviderSession, writeProviderSession } from './session.js';
 import type { ResolvedConfig, GlobalOptions } from '../../types.js';
 import type { WalletProvider } from './types.js';
 
@@ -35,29 +32,16 @@ interface PrivyWallet {
   address: string;
 }
 
-function sessionPath(): string {
-  return join(radiusDir(), SESSION_FILE);
-}
-
 function readSession(): PrivySession | null {
-  const p = sessionPath();
-  if (!existsSync(p)) return null;
-  try {
-    return JSON.parse(readFileSync(p, 'utf8')) as PrivySession;
-  } catch {
-    return null;
-  }
+  return readProviderSession<PrivySession>(SESSION_FILE);
 }
 
 function writeSession(session: PrivySession): void {
-  const dir = radiusDir();
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(sessionPath(), JSON.stringify(session, null, 2), { mode: 0o600 });
+  writeProviderSession(SESSION_FILE, session);
 }
 
 function deleteSession(): void {
-  const p = sessionPath();
-  if (existsSync(p)) unlinkSync(p);
+  deleteProviderSession(SESSION_FILE);
 }
 
 async function resolveCredentials(opts: { interactive?: boolean } = {}): Promise<PrivyCredentials> {
@@ -261,18 +245,10 @@ function buildPrivyAccount(session: PrivySession, creds: PrivyCredentials): Loca
     },
 
     async signTransaction(tx) {
-      // Same approach as CDP: serialize unsigned tx, hash, sign hash, reassemble.
-      // Radius uses legacy transactions.
-      const serialized = serializeTransaction(tx as TransactionSerializable);
-      const hash = keccak256(serialized);
-      const data = await privyRpc(creds, session.walletId, 'secp256k1_sign', {
-        hash,
+      return signLegacyTransaction(tx, async (hash) => {
+        const data = await privyRpc(creds, session.walletId, 'secp256k1_sign', { hash });
+        return (data as { signature: string }).signature as Hex;
       });
-      const sig = (data as { signature: string }).signature as Hex;
-      const r = ('0x' + sig.slice(2, 66)) as Hex;
-      const s = ('0x' + sig.slice(66, 130)) as Hex;
-      const v = BigInt('0x' + sig.slice(130, 132));
-      return serializeTransaction(tx as TransactionSerializable, { r, s, v }) as Hex;
     },
 
     async signTypedData(typedData) {
@@ -310,7 +286,7 @@ export const privyProvider: WalletProvider = {
     writeSession(session);
     console.log(`Address: ${session.address}`);
     console.log(`Wallet ID: ${session.walletId}`);
-    console.log(`Session saved to ${sessionPath()}`);
+    console.log(`Session saved to ${providerSessionPath(SESSION_FILE)}`);
   },
 
   async logout(_cfg: ResolvedConfig): Promise<void> {

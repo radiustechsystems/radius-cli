@@ -1,14 +1,20 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
-import { join } from 'node:path';
 import { input, confirm } from '@inquirer/prompts';
 import type { Address, Hex, LocalAccount } from 'viem';
-import { radiusDir, readProviderConfig, writeProviderConfig, deleteProviderConfig } from '../config.js';
+import { readProviderConfig, writeProviderConfig, deleteProviderConfig } from '../config.js';
 import { jsonStringify } from '../format.js';
 import { disableProviderTelemetry } from '../providerTelemetry.js';
+import {
+  moveProviderSession,
+  providerSessionPath,
+  readProviderSession,
+  readProviderSessionFile,
+  writeProviderSession,
+} from './session.js';
 import type { ResolvedConfig, GlobalOptions } from '../../types.js';
 import type { WalletProvider } from './types.js';
 
 const SESSION_FILE = 'para-session.json';
+const BACKUP_SESSION_FILE = 'para-session.bak.json';
 const PARA_SERVER_OPTS = { disableWorkers: true, disableWebSockets: true } as const;
 
 interface ParaSession {
@@ -19,38 +25,27 @@ interface ParaSession {
 }
 
 function sessionPath(): string {
-  return join(radiusDir(), SESSION_FILE);
+  return providerSessionPath(SESSION_FILE);
 }
 
 function readSessionFile(p: string): ParaSession | null {
-  if (!existsSync(p)) return null;
-  try {
-    return JSON.parse(readFileSync(p, 'utf8')) as ParaSession;
-  } catch {
-    return null;
-  }
+  return readProviderSessionFile<ParaSession>(p);
 }
 
 function readSession(): ParaSession | null {
-  return readSessionFile(sessionPath());
+  return readProviderSession<ParaSession>(SESSION_FILE);
 }
 
 function writeSession(session: ParaSession): void {
-  const dir = radiusDir();
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(sessionPath(), JSON.stringify(session, null, 2), { mode: 0o600 });
+  writeProviderSession(SESSION_FILE, session);
 }
 
 function backupSessionPath(): string {
-  return join(radiusDir(), 'para-session.bak.json');
+  return providerSessionPath(BACKUP_SESSION_FILE);
 }
 
 function archiveSession(): string | null {
-  const p = sessionPath();
-  if (!existsSync(p)) return null;
-  const backupPath = backupSessionPath();
-  renameSync(p, backupPath);
-  return backupPath;
+  return moveProviderSession(SESSION_FILE, BACKUP_SESSION_FILE);
 }
 
 async function restoreArchivedSession(): Promise<boolean> {
@@ -67,7 +62,7 @@ async function restoreArchivedSession(): Promise<boolean> {
 
   if (!shouldRestore) return false;
 
-  renameSync(backupPath, sessionPath());
+  if (!moveProviderSession(BACKUP_SESSION_FILE, SESSION_FILE)) return false;
   console.log(`Restored Para session from ${backupPath}.`);
   console.log(`Address: ${archived.address}`);
   return true;

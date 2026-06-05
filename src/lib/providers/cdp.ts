@@ -1,11 +1,11 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
 import { input, password as promptPassword, select } from '@inquirer/prompts';
-import { type Address, type Hex, type LocalAccount, type TransactionSerializable, keccak256, serializeTransaction } from 'viem';
+import { type Address, type Hex, type LocalAccount } from 'viem';
 import { toAccount } from 'viem/accounts';
-import { radiusDir, readProviderConfig, writeProviderConfig, deleteProviderConfig } from '../config.js';
+import { readProviderConfig, writeProviderConfig, deleteProviderConfig } from '../config.js';
 import { jsonStringify } from '../format.js';
 import { disableProviderTelemetry } from '../providerTelemetry.js';
+import { signLegacyTransaction } from './remoteSigning.js';
+import { deleteProviderSession, providerSessionPath, readProviderSession, writeProviderSession } from './session.js';
 import type { ResolvedConfig, GlobalOptions } from '../../types.js';
 import type { WalletProvider } from './types.js';
 
@@ -16,29 +16,16 @@ interface CdpSession {
   accountName?: string;
 }
 
-function sessionPath(): string {
-  return join(radiusDir(), SESSION_FILE);
-}
-
 function readSession(): CdpSession | null {
-  const p = sessionPath();
-  if (!existsSync(p)) return null;
-  try {
-    return JSON.parse(readFileSync(p, 'utf8')) as CdpSession;
-  } catch {
-    return null;
-  }
+  return readProviderSession<CdpSession>(SESSION_FILE);
 }
 
 function writeSession(session: CdpSession): void {
-  const dir = radiusDir();
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(sessionPath(), JSON.stringify(session, null, 2), { mode: 0o600 });
+  writeProviderSession(SESSION_FILE, session);
 }
 
 function deleteSession(): void {
-  const p = sessionPath();
-  if (existsSync(p)) unlinkSync(p);
+  deleteProviderSession(SESSION_FILE);
 }
 
 async function loadCdpSDK() {
@@ -201,7 +188,7 @@ export const cdpProvider: WalletProvider = {
     console.log(`CDP account ready`);
     console.log(`Address: ${session.address}`);
     if (session.accountName) console.log(`Account: ${session.accountName}`);
-    console.log(`Session saved to ${sessionPath()}`);
+    console.log(`Session saved to ${providerSessionPath(SESSION_FILE)}`);
   },
 
   async logout(_cfg: ResolvedConfig): Promise<void> {
@@ -260,16 +247,10 @@ export const cdpProvider: WalletProvider = {
       },
       async signTransaction(tx) {
         // CDP's signTransaction doesn't support legacy transactions (Radius uses legacy).
-        // Workaround: serialize the unsigned tx, hash it, sign the hash via CDP,
-        // then append the signature to produce the signed transaction.
-        const serialized = serializeTransaction(tx as TransactionSerializable);
-        const hash = keccak256(serialized);
-        const sig = await cdpAccount.sign({ hash });
-        // Parse v, r, s from the 65-byte signature
-        const r = ('0x' + sig.slice(2, 66)) as Hex;
-        const s = ('0x' + sig.slice(66, 130)) as Hex;
-        const v = BigInt('0x' + sig.slice(130, 132));
-        return serializeTransaction(tx as TransactionSerializable, { r, s, v }) as Hex;
+        return signLegacyTransaction(tx, async (hash) => {
+          const signature = await cdpAccount.sign({ hash });
+          return signature as Hex;
+        });
       },
       async signTypedData(typedData) {
         return await cdpAccount.signTypedData(typedData) as Hex;
