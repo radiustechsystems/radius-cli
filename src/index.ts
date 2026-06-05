@@ -35,7 +35,15 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: unknown) => {
-  const msg = err instanceof Error ? err.message : String(err);
+  let msg: string;
+  if (err instanceof Error) {
+    msg = err.message;
+  } else if (typeof err === 'object' && err !== null) {
+    const obj = err as Record<string, unknown>;
+    msg = typeof obj['message'] === 'string' ? obj['message'] : JSON.stringify(err, null, 2);
+  } else {
+    msg = String(err);
+  }
   process.stderr.write(`error: ${msg}\n`);
   process.exit(1);
 });

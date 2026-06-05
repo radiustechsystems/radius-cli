@@ -45,6 +45,16 @@ function archiveSession(): void {
   if (existsSync(p)) renameSync(p, backupSessionPath());
 }
 
+function normalizeParaError(e: unknown): Error {
+  if (e instanceof Error) return e;
+  if (typeof e === 'object' && e !== null) {
+    const obj = e as Record<string, unknown>;
+    const msg = typeof obj['message'] === 'string' ? obj['message'] : JSON.stringify(e, null, 2);
+    return new Error(`Para SDK error: ${msg}`);
+  }
+  return new Error(`Para SDK error: ${String(e)}`);
+}
+
 async function loadParaSDK() {
   try {
     const { Para, Environment } = await import('@getpara/server-sdk');
@@ -107,15 +117,31 @@ export const paraProvider: WalletProvider = {
 
     const envStr = resolveEnvironmentValue();
     const env = sdk.Environment[envStr as keyof typeof sdk.Environment] ?? sdk.Environment.BETA;
-    const para = new sdk.Para(env, apiKey);
 
-    const hasWallet = await para.hasPregenWallet({ pregenId: { email } });
+    let para: InstanceType<typeof sdk.Para>;
+    try {
+      para = new sdk.Para(env, apiKey);
+    } catch (e) {
+      throw normalizeParaError(e);
+    }
+
+    let hasWallet: boolean;
+    try {
+      hasWallet = await para.hasPregenWallet({ pregenId: { email } });
+    } catch (e) {
+      throw normalizeParaError(e);
+    }
 
     let walletId: string;
     let address: string;
 
     if (hasWallet) {
-      const wallets = await para.getPregenWallets({ pregenId: { email } });
+      let wallets: Awaited<ReturnType<typeof para.getPregenWallets>>;
+      try {
+        wallets = await para.getPregenWallets({ pregenId: { email } });
+      } catch (e) {
+        throw normalizeParaError(e);
+      }
       const evmWallet = wallets.find((w) => w.type === 'EVM');
       if (!evmWallet) {
         throw new Error('No EVM wallet found for this email. Create one at https://developer.getpara.com');
@@ -123,10 +149,15 @@ export const paraProvider: WalletProvider = {
       walletId = evmWallet.id;
       address = evmWallet.address ?? '';
     } else {
-      const wallet = await para.createPregenWallet({
-        type: 'EVM',
-        pregenId: { email },
-      });
+      let wallet: Awaited<ReturnType<typeof para.createPregenWallet>>;
+      try {
+        wallet = await para.createPregenWallet({
+          type: 'EVM',
+          pregenId: { email },
+        });
+      } catch (e) {
+        throw normalizeParaError(e);
+      }
       walletId = wallet.id;
       address = wallet.address ?? '';
     }
