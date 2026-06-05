@@ -4,10 +4,12 @@ import { input, confirm } from '@inquirer/prompts';
 import type { Address, Hex, LocalAccount } from 'viem';
 import { radiusDir, readProviderConfig, writeProviderConfig, deleteProviderConfig } from '../config.js';
 import { jsonStringify } from '../format.js';
+import { disableProviderTelemetry } from '../providerTelemetry.js';
 import type { ResolvedConfig, GlobalOptions } from '../../types.js';
 import type { WalletProvider } from './types.js';
 
 const SESSION_FILE = 'para-session.json';
+const PARA_SERVER_OPTS = { disableWorkers: true, disableWebSockets: true } as const;
 
 interface ParaSession {
   email: string;
@@ -20,14 +22,17 @@ function sessionPath(): string {
   return join(radiusDir(), SESSION_FILE);
 }
 
-function readSession(): ParaSession | null {
-  const p = sessionPath();
+function readSessionFile(p: string): ParaSession | null {
   if (!existsSync(p)) return null;
   try {
     return JSON.parse(readFileSync(p, 'utf8')) as ParaSession;
   } catch {
     return null;
   }
+}
+
+function readSession(): ParaSession | null {
+  return readSessionFile(sessionPath());
 }
 
 function writeSession(session: ParaSession): void {
@@ -40,9 +45,32 @@ function backupSessionPath(): string {
   return join(radiusDir(), 'para-session.bak.json');
 }
 
-function archiveSession(): void {
+function archiveSession(): string | null {
   const p = sessionPath();
-  if (existsSync(p)) renameSync(p, backupSessionPath());
+  if (!existsSync(p)) return null;
+  const backupPath = backupSessionPath();
+  renameSync(p, backupPath);
+  return backupPath;
+}
+
+async function restoreArchivedSession(): Promise<boolean> {
+  const backupPath = backupSessionPath();
+  const archived = readSessionFile(backupPath);
+  if (!archived) return false;
+
+  const shouldRestore = process.stdin.isTTY
+    ? await confirm({
+      message: `Restore archived Para session for ${archived.email} (${archived.address})?`,
+      default: true,
+    })
+    : true;
+
+  if (!shouldRestore) return false;
+
+  renameSync(backupPath, sessionPath());
+  console.log(`Restored Para session from ${backupPath}.`);
+  console.log(`Address: ${archived.address}`);
+  return true;
 }
 
 function normalizeParaError(e: unknown): Error {
@@ -56,6 +84,7 @@ function normalizeParaError(e: unknown): Error {
 }
 
 async function loadParaSDK() {
+  disableProviderTelemetry('para');
   try {
     const { Para, Environment } = await import('@getpara/server-sdk');
     const { createParaViemAccount } = await import('@getpara/viem-v2-integration');
@@ -98,15 +127,20 @@ function resolveEnvironmentValue(): string {
 export const paraProvider: WalletProvider = {
   async login(_cfg: ResolvedConfig, opts?: { reset?: boolean }): Promise<void> {
     if (opts?.reset) {
-      archiveSession();
+      const backupPath = archiveSession();
       deleteProviderConfig('para');
       console.log('Para credentials and session cleared.');
+      if (backupPath) console.log(`Previous Para session archived to ${backupPath}.`);
     }
 
     const existing = readSession();
     if (existing) {
       console.log(`Already logged in as ${existing.email} (${existing.address})`);
       console.log('Run `radius-cli --wallet para wallet logout` first, or use `wallet login --reset` to start over.');
+      return;
+    }
+
+    if (!opts?.reset && await restoreArchivedSession()) {
       return;
     }
 
@@ -120,7 +154,7 @@ export const paraProvider: WalletProvider = {
 
     let para: InstanceType<typeof sdk.Para>;
     try {
-      para = new sdk.Para(env, apiKey);
+      para = new sdk.Para(env, apiKey, PARA_SERVER_OPTS);
     } catch (e) {
       throw normalizeParaError(e);
     }
@@ -174,9 +208,9 @@ export const paraProvider: WalletProvider = {
     const userShare = para.getUserShare();
     if (!userShare) {
       const backupPath = backupSessionPath();
-      const hint = existsSync(backupPath)
+      const hint = readSessionFile(backupPath)
         ? `A previous session backup exists at ${backupPath}.\n` +
-          'Restore it manually: cp ~/.radius/para-session.bak.json ~/.radius/para-session.json'
+          'Run `radius-cli --wallet para wallet login` and choose restore.'
         : 'No session backup found. The signing key for this address cannot be recovered.';
       throw new Error(
         `Para wallet ${address} exists but the signing key is not available.\n\n` +
@@ -203,13 +237,10 @@ export const paraProvider: WalletProvider = {
       return;
     }
 
-    // Para's MPC signing key (user share) exists only on this machine.
-    // Para's servers cannot recover it. Warn before making it inaccessible.
     console.log(`Address: ${session.address}`);
-    console.log(`\nWarning: Para's signing key for this wallet exists only in your session file.`);
-    console.log('It cannot be recovered from Para\'s servers after logout.');
-    console.log(`The session will be archived to ${backupSessionPath()} (not deleted).`);
-    console.log('You can restore it by renaming it back to para-session.json.\n');
+    console.log(`\nThis signs out by archiving the local Para session.`);
+    console.log('The signing key is preserved and can be restored with `radius-cli --wallet para wallet login`.');
+    console.log(`The session will be archived to ${backupSessionPath()}.\n`);
 
     const ok = process.stdin.isTTY
       ? await confirm({ message: 'Continue with logout?', default: false })
@@ -220,9 +251,10 @@ export const paraProvider: WalletProvider = {
       return;
     }
 
-    archiveSession();
+    const backupPath = archiveSession();
     console.log(`Logged out of Para (${session.email}).`);
-    console.log(`Session archived to ${backupSessionPath()}.`);
+    if (backupPath) console.log(`Session archived to ${backupPath}.`);
+    console.log('Run `radius-cli --wallet para wallet login` to restore it later.');
   },
 
   async status(_cfg: ResolvedConfig, opts: GlobalOptions): Promise<void> {
@@ -258,8 +290,9 @@ export const paraProvider: WalletProvider = {
     const apiKey = await resolveApiKey();
     const envStr = resolveEnvironmentValue();
     const env = sdk.Environment[envStr as keyof typeof sdk.Environment] ?? sdk.Environment.BETA;
-    const para = new sdk.Para(env, apiKey);
+    const para = new sdk.Para(env, apiKey, PARA_SERVER_OPTS);
     await para.setUserShare(session.userShare);
+    await para.setCurrentWalletIds({ EVM: [session.walletId] });
 
     // Pass session address to ensure we sign as the wallet that login printed.
     // Cast needed: server SDK's Para extends ParaCore but has a slightly

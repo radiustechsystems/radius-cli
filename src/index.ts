@@ -7,6 +7,7 @@ import { registerReceipt } from './commands/receipt.js';
 import { registerStorage } from './commands/storage.js';
 import { registerTx } from './commands/tx.js';
 import { registerWallet } from './commands/wallet.js';
+import { readWalletProvider } from './lib/config.js';
 
 const program = new Command();
 
@@ -32,6 +33,11 @@ registerNonce(program);
 
 async function main(): Promise<void> {
   await program.parseAsync(process.argv);
+  const selectedWallet = program.opts().wallet ?? process.env.RADIUS_WALLET ?? readWalletProvider();
+  if (selectedWallet === 'para') {
+    // Para's SDK can leave transport/telemetry handles alive after CLI work is done.
+    process.exit(0);
+  }
 }
 
 main().catch((err: unknown) => {

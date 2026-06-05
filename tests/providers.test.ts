@@ -13,6 +13,7 @@ process.env.RADIUS_HOME = radiusHome;
 
 const { getProvider } = await import('../src/lib/providers/index.js');
 const { requireAccount, getOwnAddress } = await import('../src/lib/account.js');
+const { disableProviderTelemetry } = await import('../src/lib/providerTelemetry.js');
 
 function makeCfg(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
   return {
@@ -480,6 +481,7 @@ describe('cdp provider', () => {
 describe('para provider', () => {
   const provider = getProvider('para');
   const paraSessionPath = join(radiusHome, 'para-session.json');
+  const paraBackupPath = join(radiusHome, 'para-session.bak.json');
   const MOCK_ADDRESS = '0x1234567890abcdef1234567890abcdef12345678';
   const MOCK_SESSION = {
     email: 'test@example.com',
@@ -543,6 +545,46 @@ describe('para provider', () => {
     expect(logs.some((l) => l.includes('Not logged in'))).toBe(true);
   });
 
+  it('reset reports the archived session backup path', async () => {
+    writeFileSync(paraSessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    const origKey = process.env.PARA_API_KEY;
+    delete process.env.PARA_API_KEY;
+
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => logs.push(args.join(' '));
+    try {
+      await expect(provider.login!(makeCfg({ walletProvider: 'para' }), { reset: true })).rejects.toThrow(
+        /Para API key not configured/,
+      );
+    } finally {
+      console.log = origLog;
+      if (origKey) process.env.PARA_API_KEY = origKey;
+      if (existsSync(paraSessionPath)) unlinkSync(paraSessionPath);
+      if (existsSync(paraBackupPath)) unlinkSync(paraBackupPath);
+    }
+
+    expect(logs.some((l) => l.includes(`Previous Para session archived to ${paraBackupPath}.`))).toBe(true);
+  });
+
+  it('login restores an archived session backup', async () => {
+    writeFileSync(paraBackupPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => logs.push(args.join(' '));
+    try {
+      await provider.login!(makeCfg({ walletProvider: 'para' }), {});
+      expect(existsSync(paraSessionPath)).toBe(true);
+      expect(existsSync(paraBackupPath)).toBe(false);
+    } finally {
+      console.log = origLog;
+      if (existsSync(paraSessionPath)) unlinkSync(paraSessionPath);
+      if (existsSync(paraBackupPath)) unlinkSync(paraBackupPath);
+    }
+
+    expect(logs.some((l) => l.includes(`Restored Para session from ${paraBackupPath}.`))).toBe(true);
+  });
+
   it('getAddress returns cached address from session file', async () => {
     writeFileSync(paraSessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
     try {
@@ -597,7 +639,7 @@ describe('para provider', () => {
     expect(parsed.address.toLowerCase()).toBe(MOCK_ADDRESS.toLowerCase());
   });
 
-  it('logout deletes session file', async () => {
+  it('logout archives session file', async () => {
     writeFileSync(paraSessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
     expect(existsSync(paraSessionPath)).toBe(true);
     const logs: string[] = [];
@@ -607,8 +649,10 @@ describe('para provider', () => {
       await provider.logout!(makeCfg({ walletProvider: 'para' }));
     } finally {
       console.log = origLog;
+      if (existsSync(paraBackupPath)) unlinkSync(paraBackupPath);
     }
     expect(existsSync(paraSessionPath)).toBe(false);
+    expect(logs.some((l) => l.includes(`Session archived to ${paraBackupPath}.`))).toBe(true);
     expect(logs.some((l) => l.includes('Logged out'))).toBe(true);
   });
 
@@ -645,6 +689,7 @@ describe('para provider', () => {
 
     // Mock the Para SDK dynamic imports
     const mockSetUserShare = vi.fn().mockResolvedValue(undefined);
+    const mockSetCurrentWalletIds = vi.fn().mockResolvedValue(undefined);
     const mockCreateParaViemAccount = vi.fn().mockReturnValue({
       address: MOCK_ADDRESS,
       type: 'local',
@@ -654,8 +699,13 @@ describe('para provider', () => {
       sign: vi.fn(),
     });
 
+    const mockPara = vi.fn().mockImplementation(() => ({
+      setUserShare: mockSetUserShare,
+      setCurrentWalletIds: mockSetCurrentWalletIds,
+    }));
+
     vi.doMock('@getpara/server-sdk', () => ({
-      Para: vi.fn().mockImplementation(() => ({ setUserShare: mockSetUserShare })),
+      Para: mockPara,
       Environment: { BETA: 'BETA', PROD: 'PROD', DEV: 'DEV', SANDBOX: 'SANDBOX' },
     }));
     vi.doMock('@getpara/viem-v2-integration', () => ({
@@ -667,7 +717,12 @@ describe('para provider', () => {
       const { paraProvider } = await import('../src/lib/providers/para.js');
       await paraProvider.getAccount(makeCfg({ walletProvider: 'para' }));
 
+      expect(mockPara).toHaveBeenCalledWith('BETA', 'test-key', {
+        disableWorkers: true,
+        disableWebSockets: true,
+      });
       expect(mockSetUserShare).toHaveBeenCalledWith(MOCK_SESSION.userShare);
+      expect(mockSetCurrentWalletIds).toHaveBeenCalledWith({ EVM: [MOCK_SESSION.walletId] });
       expect(mockCreateParaViemAccount).toHaveBeenCalledWith(
         expect.objectContaining({ address: MOCK_ADDRESS }),
       );
@@ -677,6 +732,42 @@ describe('para provider', () => {
       if (origKey) process.env.PARA_API_KEY = origKey;
       else delete process.env.PARA_API_KEY;
       if (existsSync(paraSessionPath)) unlinkSync(paraSessionPath);
+    }
+  });
+});
+
+describe('provider telemetry controls', () => {
+  it('sets CDP analytics opt-outs by default', () => {
+    const origErrorReporting = process.env.DISABLE_CDP_ERROR_REPORTING;
+    const origUsageTracking = process.env.DISABLE_CDP_USAGE_TRACKING;
+    delete process.env.DISABLE_CDP_ERROR_REPORTING;
+    delete process.env.DISABLE_CDP_USAGE_TRACKING;
+    try {
+      disableProviderTelemetry('cdp');
+      expect(process.env.DISABLE_CDP_ERROR_REPORTING).toBe('true');
+      expect(process.env.DISABLE_CDP_USAGE_TRACKING).toBe('true');
+    } finally {
+      if (origErrorReporting === undefined) delete process.env.DISABLE_CDP_ERROR_REPORTING;
+      else process.env.DISABLE_CDP_ERROR_REPORTING = origErrorReporting;
+      if (origUsageTracking === undefined) delete process.env.DISABLE_CDP_USAGE_TRACKING;
+      else process.env.DISABLE_CDP_USAGE_TRACKING = origUsageTracking;
+    }
+  });
+
+  it('sets Para OpenTelemetry opt-outs by default', () => {
+    const origSdkDisabled = process.env.OTEL_SDK_DISABLED;
+    const origTracesExporter = process.env.OTEL_TRACES_EXPORTER;
+    delete process.env.OTEL_SDK_DISABLED;
+    delete process.env.OTEL_TRACES_EXPORTER;
+    try {
+      disableProviderTelemetry('para');
+      expect(process.env.OTEL_SDK_DISABLED).toBe('true');
+      expect(process.env.OTEL_TRACES_EXPORTER).toBe('none');
+    } finally {
+      if (origSdkDisabled === undefined) delete process.env.OTEL_SDK_DISABLED;
+      else process.env.OTEL_SDK_DISABLED = origSdkDisabled;
+      if (origTracesExporter === undefined) delete process.env.OTEL_TRACES_EXPORTER;
+      else process.env.OTEL_TRACES_EXPORTER = origTracesExporter;
     }
   });
 });

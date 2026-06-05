@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { input, password as promptPassword } from '@inquirer/prompts';
+import { input, password as promptPassword, select } from '@inquirer/prompts';
 import {
   type Address,
   type Hex,
@@ -11,8 +11,9 @@ import {
   toHex,
 } from 'viem';
 import { toAccount } from 'viem/accounts';
-import { radiusDir, readProviderConfig, writeProviderConfig } from '../config.js';
+import { radiusDir, readProviderConfig, writeProviderConfig, deleteProviderConfig } from '../config.js';
 import { jsonStringify } from '../format.js';
+import { disableProviderTelemetry } from '../providerTelemetry.js';
 import type { ResolvedConfig, GlobalOptions } from '../../types.js';
 import type { WalletProvider } from './types.js';
 
@@ -27,6 +28,11 @@ interface PrivySession {
 interface PrivyCredentials {
   appId: string;
   appSecret: string;
+}
+
+interface PrivyWallet {
+  id: string;
+  address: string;
 }
 
 function sessionPath(): string {
@@ -55,6 +61,7 @@ function deleteSession(): void {
 }
 
 async function resolveCredentials(opts: { interactive?: boolean } = {}): Promise<PrivyCredentials> {
+  disableProviderTelemetry('privy');
   const config = readProviderConfig('privy');
   const appId = process.env.PRIVY_APP_ID ?? config.appId;
   const appSecret = process.env.PRIVY_APP_SECRET ?? config.appSecret;
@@ -97,6 +104,100 @@ function authHeaders(creds: PrivyCredentials): Record<string, string> {
     'privy-app-id': creds.appId,
     'content-type': 'application/json',
   };
+}
+
+function parsePrivyWallets(json: unknown): PrivyWallet[] {
+  const obj = json as { data?: unknown; wallets?: unknown; items?: unknown };
+  const maybeWallets = Array.isArray(json)
+    ? json
+    : Array.isArray(obj.data)
+      ? obj.data
+      : Array.isArray(obj.wallets)
+        ? obj.wallets
+        : Array.isArray(obj.items)
+          ? obj.items
+          : [];
+
+  return maybeWallets.flatMap((wallet) => {
+    const candidate = wallet as { id?: unknown; address?: unknown };
+    return typeof candidate.id === 'string' && typeof candidate.address === 'string'
+      ? [{ id: candidate.id, address: candidate.address }]
+      : [];
+  });
+}
+
+async function listPrivyWallets(creds: PrivyCredentials): Promise<PrivyWallet[]> {
+  const res = await fetch(`${PRIVY_API_BASE}/wallets`, {
+    method: 'GET',
+    headers: authHeaders(creds),
+  });
+  if (!res.ok) return [];
+  return parsePrivyWallets(await res.json());
+}
+
+async function fetchPrivyWallet(creds: PrivyCredentials, walletId: string): Promise<PrivyWallet> {
+  const res = await fetch(`${PRIVY_API_BASE}/wallets/${walletId}`, {
+    method: 'GET',
+    headers: authHeaders(creds),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Failed to fetch wallet ${walletId}: ${res.status} ${text}`);
+  }
+  return await res.json() as PrivyWallet;
+}
+
+async function createPrivyWallet(creds: PrivyCredentials): Promise<PrivyWallet> {
+  const res = await fetch(`${PRIVY_API_BASE}/wallets`, {
+    method: 'POST',
+    headers: authHeaders(creds),
+    body: JSON.stringify({ chain_type: 'ethereum' }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Failed to create wallet: ${res.status} ${text}`);
+  }
+  return await res.json() as PrivyWallet;
+}
+
+async function choosePrivySession(creds: PrivyCredentials): Promise<PrivySession> {
+  const wallets = await listPrivyWallets(creds).catch(() => []);
+
+  if (wallets.length > 0 && process.stdin.isTTY) {
+    const choice = await select<{ type: 'existing'; wallet: PrivyWallet } | { type: 'new' } | { type: 'manual' }>({
+      message: 'Privy wallet:',
+      choices: [
+        ...wallets.map((wallet) => ({
+          name: `${wallet.address} (${wallet.id})`,
+          value: { type: 'existing' as const, wallet },
+        })),
+        { name: 'Create a new wallet', value: { type: 'new' as const } },
+        { name: 'Enter wallet ID manually', value: { type: 'manual' as const } },
+      ],
+    });
+
+    if (choice.type === 'existing') {
+      return { walletId: choice.wallet.id, address: choice.wallet.address };
+    }
+    if (choice.type === 'new') {
+      const wallet = await createPrivyWallet(creds);
+      console.log(`Created new Privy wallet`);
+      return { walletId: wallet.id, address: wallet.address };
+    }
+  }
+
+  const walletId = await input({
+    message: 'Privy wallet ID (leave empty to create new):',
+  });
+
+  if (walletId.trim()) {
+    const wallet = await fetchPrivyWallet(creds, walletId.trim());
+    return { walletId: wallet.id, address: wallet.address };
+  }
+
+  const wallet = await createPrivyWallet(creds);
+  console.log(`Created new Privy wallet`);
+  return { walletId: wallet.id, address: wallet.address };
 }
 
 async function privyRpc(
@@ -189,49 +290,22 @@ function buildPrivyAccount(session: PrivySession, creds: PrivyCredentials): Loca
 }
 
 export const privyProvider: WalletProvider = {
-  async login(_cfg: ResolvedConfig, _opts?: { reset?: boolean }): Promise<void> {
+  async login(_cfg: ResolvedConfig, opts?: { reset?: boolean }): Promise<void> {
+    if (opts?.reset) {
+      deleteSession();
+      deleteProviderConfig('privy');
+      console.log('Privy credentials and session cleared.');
+    }
+
     const existing = readSession();
     if (existing) {
       console.log(`Already logged in with Privy (${existing.address})`);
-      console.log('Run `radius-cli wallet logout` first to switch wallets.');
+      console.log('Run `radius-cli --wallet privy wallet logout` first to switch wallets.');
       return;
     }
 
     const creds = await resolveCredentials({ interactive: true });
-
-    const walletId = await input({
-      message: 'Privy wallet ID (leave empty to create new):',
-    });
-
-    let session: PrivySession;
-
-    if (walletId.trim()) {
-      // Fetch existing wallet
-      const res = await fetch(`${PRIVY_API_BASE}/wallets/${walletId.trim()}`, {
-        method: 'GET',
-        headers: authHeaders(creds),
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`Failed to fetch wallet ${walletId.trim()}: ${res.status} ${text}`);
-      }
-      const wallet = await res.json() as { id: string; address: string };
-      session = { walletId: wallet.id, address: wallet.address };
-    } else {
-      // Create new wallet
-      const res = await fetch(`${PRIVY_API_BASE}/wallets`, {
-        method: 'POST',
-        headers: authHeaders(creds),
-        body: JSON.stringify({ chain_type: 'ethereum' }),
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`Failed to create wallet: ${res.status} ${text}`);
-      }
-      const wallet = await res.json() as { id: string; address: string };
-      session = { walletId: wallet.id, address: wallet.address };
-      console.log(`Created new Privy wallet`);
-    }
+    const session = await choosePrivySession(creds);
 
     writeSession(session);
     console.log(`Address: ${session.address}`);

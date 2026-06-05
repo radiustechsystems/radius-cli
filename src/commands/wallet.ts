@@ -54,6 +54,19 @@ const ERC20_TRANSFER_ABI = [
   },
 ] as const;
 
+type WalletConfig = ReturnType<typeof resolveConfig>;
+
+interface WalletBalance {
+  address: Address;
+  aggregateWei: bigint;
+  nativeWei: bigint;
+  sbc: string;
+  sbcRawWei: bigint;
+  sbcError: string | null;
+  total: string;
+  rusd: string;
+}
+
 function readMessageArg(arg: string, raw: boolean): string | { raw: Hex } {
   const text = arg === '-' ? readFileSync(0, 'utf8') : arg;
   if (raw) {
@@ -73,6 +86,73 @@ function normalizePrivateKey(input: string): Hex {
     throw new Error('Private key must be a 32-byte hex string (64 hex chars).');
   }
   return withPrefix as Hex;
+}
+
+async function readWalletBalance(cfg: WalletConfig, address: Address): Promise<WalletBalance> {
+  const client = makePublicClient(cfg);
+  // eth_getBalance is the aggregate: token_balance x rate + raw_native.
+  // SBC is already included, so derive the raw-native (RUSD) remainder
+  // instead of summing. See splitAggregateBalance.
+  const aggregateWei = await client.getBalance({ address });
+
+  let sbc = '0';
+  let sbcRawWei = 0n;
+  let sbcError: string | null = null;
+  try {
+    sbcRawWei = await client.readContract({
+      address: cfg.sbcAddress!,
+      abi: ERC20_TRANSFER_ABI,
+      functionName: 'balanceOf',
+      args: [address],
+    });
+    sbc = formatUnits(sbcRawWei, SBC_DECIMALS);
+  } catch (e) {
+    sbcError = e instanceof Error ? e.message : String(e);
+  }
+
+  const { nativeWei } = splitAggregateBalance({
+    aggregateWei,
+    sbcRaw: sbcRawWei,
+    sbcDecimals: SBC_DECIMALS,
+  });
+  const rusd = formatEther(nativeWei);
+  const total = formatEther(aggregateWei);
+
+  return {
+    address,
+    aggregateWei,
+    nativeWei,
+    sbc,
+    sbcRawWei,
+    sbcError,
+    total,
+    rusd,
+  };
+}
+
+function formatBalanceLine(balance: WalletBalance): string {
+  if (balance.sbcError) {
+    return `Balance: $${formatUsdShort(balance.total)} (SBC/RUSD breakdown unavailable)`;
+  }
+  return `Balance: $${formatUsdShort(balance.total)} ($${formatUsd(balance.sbc)} SBC + $${formatUsd(balance.rusd)} RUSD)`;
+}
+
+async function printLoggedInProviderBalance(cfg: WalletConfig, opts: GlobalOptions): Promise<void> {
+  if (opts.json || cfg.walletProvider === 'keystore') return;
+
+  let address: Address;
+  try {
+    address = await getOwnAddress(cfg, opts.privateKey);
+  } catch {
+    return;
+  }
+
+  try {
+    console.log(formatBalanceLine(await readWalletBalance(cfg, address)));
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.log(`Balance: unavailable (${message})`);
+  }
 }
 
 async function readNewPassword(envPassword?: string): Promise<string> {
@@ -144,6 +224,7 @@ export function registerWallet(program: Command): void {
       const provider = getProvider(cfg.walletProvider);
       if (provider.login) {
         await provider.login(cfg, { reset: subOpts.reset });
+        await printLoggedInProviderBalance(cfg, opts);
       } else {
         console.log(`${cfg.walletProvider} provider does not require login.`);
       }
@@ -171,6 +252,7 @@ export function registerWallet(program: Command): void {
       const cfg = resolveConfig(opts);
       const provider = getProvider(cfg.walletProvider);
       await provider.status(cfg, opts);
+      await printLoggedInProviderBalance(cfg, opts);
     });
 
   wallet
@@ -296,58 +378,25 @@ export function registerWallet(program: Command): void {
         address = await getOwnAddress(cfg, opts.privateKey);
       }
 
-      const client = makePublicClient(cfg);
-      // eth_getBalance is the aggregate: token_balance × rate + raw_native.
-      // SBC is already included, so derive the raw-native (RUSD) remainder
-      // instead of summing — see splitAggregateBalance.
-      const aggregateWei = await client.getBalance({ address });
-
-      let sbc = '0';
-      let sbcRawWei = 0n;
-      let sbcError: string | null = null;
-      try {
-        sbcRawWei = await client.readContract({
-          address: cfg.sbcAddress!,
-          abi: ERC20_TRANSFER_ABI,
-          functionName: 'balanceOf',
-          args: [address],
-        });
-        sbc = formatUnits(sbcRawWei, SBC_DECIMALS);
-      } catch (e) {
-        sbcError = e instanceof Error ? e.message : String(e);
-      }
-
-      const { nativeWei } = splitAggregateBalance({
-        aggregateWei,
-        sbcRaw: sbcRawWei,
-        sbcDecimals: SBC_DECIMALS,
-      });
-      const rusd = formatEther(nativeWei);
-      const total = formatEther(aggregateWei);
+      const balance = await readWalletBalance(cfg, address);
 
       if (opts.json) {
         console.log(
           jsonStringify({
             address,
-            totalUsd: Number(total),
-            sbc,
-            rusd,
-            sbcWei: sbcRawWei.toString(),
-            rusdWei: nativeWei.toString(),
-            totalWei: aggregateWei.toString(),
-            sbcError,
+            totalUsd: Number(balance.total),
+            sbc: balance.sbc,
+            rusd: balance.rusd,
+            sbcWei: balance.sbcRawWei.toString(),
+            rusdWei: balance.nativeWei.toString(),
+            totalWei: balance.aggregateWei.toString(),
+            sbcError: balance.sbcError,
           }),
         );
         return;
       }
       console.log(`Address: ${address}`);
-      if (sbcError) {
-        console.log(`Balance: $${formatUsdShort(total)} (SBC/RUSD breakdown unavailable)`);
-      } else {
-        console.log(
-          `Balance: $${formatUsdShort(total)} ($${formatUsd(sbc)} SBC + $${formatUsd(rusd)} RUSD)`,
-        );
-      }
+      console.log(formatBalanceLine(balance));
     });
 
   wallet

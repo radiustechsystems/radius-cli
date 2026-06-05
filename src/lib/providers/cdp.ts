@@ -1,10 +1,11 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { input, password as promptPassword } from '@inquirer/prompts';
+import { input, password as promptPassword, select } from '@inquirer/prompts';
 import { type Address, type Hex, type LocalAccount, type TransactionSerializable, keccak256, serializeTransaction } from 'viem';
 import { toAccount } from 'viem/accounts';
 import { radiusDir, readProviderConfig, writeProviderConfig, deleteProviderConfig } from '../config.js';
 import { jsonStringify } from '../format.js';
+import { disableProviderTelemetry } from '../providerTelemetry.js';
 import type { ResolvedConfig, GlobalOptions } from '../../types.js';
 import type { WalletProvider } from './types.js';
 
@@ -41,6 +42,7 @@ function deleteSession(): void {
 }
 
 async function loadCdpSDK() {
+  disableProviderTelemetry('cdp');
   try {
     const { CdpClient } = await import('@coinbase/cdp-sdk');
     return { CdpClient };
@@ -113,12 +115,67 @@ async function makeCdpClient(creds: CdpCredentials) {
 
 async function getOrCreateCdpAccount(creds: CdpCredentials, session: CdpSession) {
   const cdp = await makeCdpClient(creds);
-  if (!session.accountName) {
-    throw new Error(
-      'CDP session is missing account name. Run `radius-cli --wallet cdp wallet logout` then `wallet login` again.',
-    );
+  try {
+    return await cdp.evm.getAccount({ address: session.address as Address });
+  } catch (e) {
+    if (!session.accountName) throw e;
+    return await cdp.evm.getOrCreateAccount({ name: session.accountName });
   }
-  return await cdp.evm.getOrCreateAccount({ name: session.accountName });
+}
+
+async function listCdpAccounts(cdp: Awaited<ReturnType<typeof makeCdpClient>>): Promise<CdpSession[]> {
+  const accounts: CdpSession[] = [];
+  let pageToken: string | undefined;
+  do {
+    const page = await cdp.evm.listAccounts({ pageSize: 25, pageToken });
+    accounts.push(...page.accounts.map((account) => ({
+      address: account.address,
+      accountName: account.name,
+    })));
+    pageToken = page.nextPageToken;
+  } while (pageToken);
+  return accounts;
+}
+
+async function chooseCdpSession(cdp: Awaited<ReturnType<typeof makeCdpClient>>): Promise<CdpSession> {
+  let accounts: CdpSession[] = [];
+  try {
+    accounts = await listCdpAccounts(cdp);
+  } catch {
+    // Listing is a convenience. Manual get-or-create still covers the login path.
+  }
+
+  if (accounts.length > 0 && process.stdin.isTTY) {
+    const choice = await select<{ type: 'existing'; session: CdpSession } | { type: 'new' } | { type: 'manual' }>({
+      message: 'CDP account:',
+      choices: [
+        ...accounts.map((session) => ({
+          name: `${session.accountName ?? '(unnamed)'} ${session.address}`,
+          value: { type: 'existing' as const, session },
+        })),
+        { name: 'Create a new account', value: { type: 'new' as const } },
+        { name: 'Enter account name manually', value: { type: 'manual' as const } },
+      ],
+    });
+
+    if (choice.type === 'existing') return choice.session;
+    if (choice.type === 'new') {
+      const name = (await input({ message: 'New account name (leave empty to auto-generate):' })).trim();
+      const accountName = name || `radius-cli-${Date.now()}`;
+      const account = await cdp.evm.getOrCreateAccount({ name: accountName });
+      return { address: account.address, accountName };
+    }
+  }
+
+  const userInput = await input({
+    message: accounts.length > 0
+      ? 'Account name:'
+      : 'Account name (leave empty to create new):',
+  });
+
+  const accountName = userInput.trim() || `radius-cli-${Date.now()}`;
+  const account = await cdp.evm.getOrCreateAccount({ name: accountName });
+  return { address: account.address, accountName };
 }
 
 export const cdpProvider: WalletProvider = {
@@ -138,24 +195,12 @@ export const cdpProvider: WalletProvider = {
 
     const creds = await resolveCredentials({ interactive: true });
     const cdp = await makeCdpClient(creds);
-
-    const userInput = await input({
-      message: 'Account name (leave empty to create new):',
-    });
-
-    // Always use a name — auto-generate one if the user leaves it blank.
-    // CDP accounts are primarily keyed by name; address-only lookup is fragile.
-    const accountName = userInput.trim() || `radius-cli-${Date.now()}`;
-    const account = await cdp.evm.getOrCreateAccount({ name: accountName });
-
-    const session: CdpSession = {
-      address: account.address,
-      accountName,
-    };
+    const session = await chooseCdpSession(cdp);
     writeSession(session);
 
     console.log(`CDP account ready`);
-    console.log(`Address: ${account.address}`);
+    console.log(`Address: ${session.address}`);
+    if (session.accountName) console.log(`Account: ${session.accountName}`);
     console.log(`Session saved to ${sessionPath()}`);
   },
 
