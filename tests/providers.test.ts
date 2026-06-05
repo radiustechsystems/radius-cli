@@ -25,26 +25,321 @@ function makeCfg(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
   };
 }
 
-describe('stub providers (privy)', () => {
-  const stubs: WalletProviderName[] = ['privy'];
+describe('privy provider', () => {
+  const provider = getProvider('privy');
+  const privySessionPath = join(radiusHome, 'privy-session.json');
+  const MOCK_ADDRESS = '0xabcdef1234567890abcdef1234567890abcdef12';
+  const MOCK_WALLET_ID = 'wlt_test123';
+  const MOCK_SESSION = {
+    walletId: MOCK_WALLET_ID,
+    address: MOCK_ADDRESS,
+  };
 
-  for (const name of stubs) {
-    it(`${name}: getAccount rejects with "not yet implemented"`, async () => {
-      await expect(getProvider(name).getAccount(makeCfg({ walletProvider: name }))).rejects.toThrow(
-        /not yet implemented/,
+  it('does not expose exportPrivateKey (remote key material)', () => {
+    expect(provider.exportPrivateKey).toBeUndefined();
+  });
+
+  it('getAccount rejects when not logged in', async () => {
+    await expect(provider.getAccount(makeCfg({ walletProvider: 'privy' }))).rejects.toThrow(
+      /Not logged in to Privy/,
+    );
+  });
+
+  it('getAddress rejects when not logged in', async () => {
+    await expect(provider.getAddress(makeCfg({ walletProvider: 'privy' }))).rejects.toThrow(
+      /Not logged in to Privy/,
+    );
+  });
+
+  it('getAddress returns cached address from session file', async () => {
+    writeFileSync(privySessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    try {
+      const address = await provider.getAddress(makeCfg({ walletProvider: 'privy' }));
+      expect(address.toLowerCase()).toBe(MOCK_ADDRESS.toLowerCase());
+    } finally {
+      unlinkSync(privySessionPath);
+    }
+  });
+
+  it('getAccount rejects without credentials when session exists', async () => {
+    writeFileSync(privySessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    const origId = process.env.PRIVY_APP_ID;
+    const origSecret = process.env.PRIVY_APP_SECRET;
+    delete process.env.PRIVY_APP_ID;
+    delete process.env.PRIVY_APP_SECRET;
+    try {
+      await expect(provider.getAccount(makeCfg({ walletProvider: 'privy' }))).rejects.toThrow(
+        /Privy credentials not configured/,
       );
-    });
+    } finally {
+      if (origId) process.env.PRIVY_APP_ID = origId;
+      if (origSecret) process.env.PRIVY_APP_SECRET = origSecret;
+      if (existsSync(privySessionPath)) unlinkSync(privySessionPath);
+    }
+  });
 
-    it(`${name}: getAddress rejects with "not yet implemented"`, async () => {
-      await expect(getProvider(name).getAddress(makeCfg({ walletProvider: name }))).rejects.toThrow(
-        /not yet implemented/,
+  it('getAccount returns a viem-compatible account when credentials exist', async () => {
+    writeFileSync(privySessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    const origId = process.env.PRIVY_APP_ID;
+    const origSecret = process.env.PRIVY_APP_SECRET;
+    process.env.PRIVY_APP_ID = 'test-app-id';
+    process.env.PRIVY_APP_SECRET = 'test-app-secret';
+    try {
+      const account = await provider.getAccount(makeCfg({ walletProvider: 'privy' }));
+      expect(account.address.toLowerCase()).toBe(MOCK_ADDRESS.toLowerCase());
+      expect(typeof account.signMessage).toBe('function');
+      expect(typeof account.signTransaction).toBe('function');
+      expect(typeof account.signTypedData).toBe('function');
+    } finally {
+      if (origId) process.env.PRIVY_APP_ID = origId;
+      else delete process.env.PRIVY_APP_ID;
+      if (origSecret) process.env.PRIVY_APP_SECRET = origSecret;
+      else delete process.env.PRIVY_APP_SECRET;
+      if (existsSync(privySessionPath)) unlinkSync(privySessionPath);
+    }
+  });
+
+  it('status shows not logged in', async () => {
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => logs.push(args.join(' '));
+    try {
+      await provider.status(makeCfg({ walletProvider: 'privy' }), {});
+    } finally {
+      console.log = origLog;
+    }
+    expect(logs.some((l) => l.includes('privy'))).toBe(true);
+    expect(logs.some((l) => l.includes('not logged in'))).toBe(true);
+  });
+
+  it('status shows logged-in state from session file', async () => {
+    writeFileSync(privySessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => logs.push(args.join(' '));
+    try {
+      await provider.status(makeCfg({ walletProvider: 'privy' }), {});
+    } finally {
+      console.log = origLog;
+      unlinkSync(privySessionPath);
+    }
+    expect(logs.some((l) => l.includes(MOCK_ADDRESS))).toBe(true);
+    expect(logs.some((l) => l.includes(MOCK_WALLET_ID))).toBe(true);
+  });
+
+  it('status --json returns structured output', async () => {
+    writeFileSync(privySessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => logs.push(args.join(' '));
+    try {
+      await provider.status(makeCfg({ walletProvider: 'privy' }), { json: true });
+    } finally {
+      console.log = origLog;
+      unlinkSync(privySessionPath);
+    }
+    const parsed = JSON.parse(logs[0]);
+    expect(parsed.provider).toBe('privy');
+    expect(parsed.loggedIn).toBe(true);
+    expect(parsed.address.toLowerCase()).toBe(MOCK_ADDRESS.toLowerCase());
+    expect(parsed.walletId).toBe(MOCK_WALLET_ID);
+  });
+
+  it('logout is a no-op when not logged in', async () => {
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => logs.push(args.join(' '));
+    try {
+      await provider.logout!(makeCfg({ walletProvider: 'privy' }));
+    } finally {
+      console.log = origLog;
+    }
+    expect(logs.some((l) => l.includes('Not logged in'))).toBe(true);
+  });
+
+  it('logout deletes session file', async () => {
+    writeFileSync(privySessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    expect(existsSync(privySessionPath)).toBe(true);
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => logs.push(args.join(' '));
+    try {
+      await provider.logout!(makeCfg({ walletProvider: 'privy' }));
+    } finally {
+      console.log = origLog;
+    }
+    expect(existsSync(privySessionPath)).toBe(false);
+    expect(logs.some((l) => l.includes('Logged out'))).toBe(true);
+  });
+
+  it('session file is stored with restrictive permissions (0o600)', () => {
+    writeFileSync(privySessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    try {
+      const stat = statSync(privySessionPath);
+      expect(stat.mode & 0o777).toBe(0o600);
+    } finally {
+      unlinkSync(privySessionPath);
+    }
+  });
+
+  it('--private-key overrides privy provider', async () => {
+    const PK = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d';
+    const cfg = makeCfg({ walletProvider: 'privy' });
+    const account = await requireAccount(cfg, PK);
+    expect(account.address).toBe(privateKeyToAccount(PK).address);
+  });
+
+  it('provider resolution via requireAccount dispatches to privy', async () => {
+    const cfg = makeCfg({ walletProvider: 'privy' });
+    await expect(requireAccount(cfg, undefined)).rejects.toThrow(/Not logged in to Privy/);
+  });
+
+  it('signMessage calls Privy personal_sign RPC', async () => {
+    writeFileSync(privySessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    const origId = process.env.PRIVY_APP_ID;
+    const origSecret = process.env.PRIVY_APP_SECRET;
+    process.env.PRIVY_APP_ID = 'test-app-id';
+    process.env.PRIVY_APP_SECRET = 'test-app-secret';
+
+    const mockSig = '0x' + 'ab'.repeat(65);
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { signature: mockSig } }),
+    }) as any;
+
+    try {
+      const account = await provider.getAccount(makeCfg({ walletProvider: 'privy' }));
+      const sig = await account.signMessage({ message: 'hello' });
+      expect(sig).toBe(mockSig);
+
+      const fetchCall = (globalThis.fetch as any).mock.calls[0];
+      expect(fetchCall[0]).toContain(`/wallets/${MOCK_WALLET_ID}/rpc`);
+      const body = JSON.parse(fetchCall[1].body);
+      expect(body.method).toBe('personal_sign');
+      expect(body.params.encoding).toBe('hex');
+    } finally {
+      globalThis.fetch = origFetch;
+      if (origId) process.env.PRIVY_APP_ID = origId;
+      else delete process.env.PRIVY_APP_ID;
+      if (origSecret) process.env.PRIVY_APP_SECRET = origSecret;
+      else delete process.env.PRIVY_APP_SECRET;
+      if (existsSync(privySessionPath)) unlinkSync(privySessionPath);
+    }
+  });
+
+  it('signTypedData calls Privy eth_signTypedData_v4 RPC', async () => {
+    writeFileSync(privySessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    const origId = process.env.PRIVY_APP_ID;
+    const origSecret = process.env.PRIVY_APP_SECRET;
+    process.env.PRIVY_APP_ID = 'test-app-id';
+    process.env.PRIVY_APP_SECRET = 'test-app-secret';
+
+    const mockSig = '0x' + 'cd'.repeat(65);
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { signature: mockSig } }),
+    }) as any;
+
+    try {
+      const account = await provider.getAccount(makeCfg({ walletProvider: 'privy' }));
+      const sig = await account.signTypedData({
+        domain: { name: 'Test', version: '1', chainId: 1 },
+        types: { Foo: [{ name: 'bar', type: 'uint256' }] },
+        primaryType: 'Foo',
+        message: { bar: 42n },
+      });
+      expect(sig).toBe(mockSig);
+
+      const fetchCall = (globalThis.fetch as any).mock.calls[0];
+      const body = JSON.parse(fetchCall[1].body);
+      expect(body.method).toBe('eth_signTypedData_v4');
+      expect(body.params.typed_data.primary_type).toBe('Foo');
+    } finally {
+      globalThis.fetch = origFetch;
+      if (origId) process.env.PRIVY_APP_ID = origId;
+      else delete process.env.PRIVY_APP_ID;
+      if (origSecret) process.env.PRIVY_APP_SECRET = origSecret;
+      else delete process.env.PRIVY_APP_SECRET;
+      if (existsSync(privySessionPath)) unlinkSync(privySessionPath);
+    }
+  });
+
+  it('signTransaction calls Privy secp256k1_sign RPC', async () => {
+    writeFileSync(privySessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    const origId = process.env.PRIVY_APP_ID;
+    const origSecret = process.env.PRIVY_APP_SECRET;
+    process.env.PRIVY_APP_ID = 'test-app-id';
+    process.env.PRIVY_APP_SECRET = 'test-app-secret';
+
+    // 65-byte signature: r (32) + s (32) + v (1)
+    const mockR = 'ab'.repeat(32);
+    const mockS = 'cd'.repeat(32);
+    const mockV = '1b'; // v = 27
+    const mockSig = `0x${mockR}${mockS}${mockV}`;
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { signature: mockSig } }),
+    }) as any;
+
+    try {
+      const account = await provider.getAccount(makeCfg({ walletProvider: 'privy' }));
+      const result = await account.signTransaction({
+        to: '0x0000000000000000000000000000000000000001',
+        value: 0n,
+        nonce: 0,
+        gas: 21000n,
+        gasPrice: 1000000000n,
+        chainId: 72344,
+        type: 'legacy',
+      } as any);
+
+      expect(result).toMatch(/^0x/);
+      const fetchCall = (globalThis.fetch as any).mock.calls[0];
+      const body = JSON.parse(fetchCall[1].body);
+      expect(body.method).toBe('secp256k1_sign');
+      expect(body.params.hash).toMatch(/^0x[0-9a-f]{64}$/);
+    } finally {
+      globalThis.fetch = origFetch;
+      if (origId) process.env.PRIVY_APP_ID = origId;
+      else delete process.env.PRIVY_APP_ID;
+      if (origSecret) process.env.PRIVY_APP_SECRET = origSecret;
+      else delete process.env.PRIVY_APP_SECRET;
+      if (existsSync(privySessionPath)) unlinkSync(privySessionPath);
+    }
+  });
+
+  it('RPC errors include Privy error details', async () => {
+    writeFileSync(privySessionPath, JSON.stringify(MOCK_SESSION), { mode: 0o600 });
+    const origId = process.env.PRIVY_APP_ID;
+    const origSecret = process.env.PRIVY_APP_SECRET;
+    process.env.PRIVY_APP_ID = 'test-app-id';
+    process.env.PRIVY_APP_SECRET = 'test-app-secret';
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      text: () => Promise.resolve(JSON.stringify({ error: { message: 'policy violation' } })),
+    }) as any;
+
+    try {
+      const account = await provider.getAccount(makeCfg({ walletProvider: 'privy' }));
+      await expect(account.signMessage({ message: 'test' })).rejects.toThrow(
+        /Privy RPC personal_sign failed \(403\): policy violation/,
       );
-    });
-
-    it(`${name}: does not expose exportPrivateKey (remote key material)`, () => {
-      expect(getProvider(name).exportPrivateKey).toBeUndefined();
-    });
-  }
+    } finally {
+      globalThis.fetch = origFetch;
+      if (origId) process.env.PRIVY_APP_ID = origId;
+      else delete process.env.PRIVY_APP_ID;
+      if (origSecret) process.env.PRIVY_APP_SECRET = origSecret;
+      else delete process.env.PRIVY_APP_SECRET;
+      if (existsSync(privySessionPath)) unlinkSync(privySessionPath);
+    }
+  });
 });
 
 describe('cdp provider', () => {
@@ -430,8 +725,8 @@ describe('account shims (requireAccount / getOwnAddress)', () => {
 
   it('dispatch to the selected provider', async () => {
     const cfg = makeCfg({ walletProvider: 'privy' });
-    await expect(requireAccount(cfg, undefined)).rejects.toThrow(/not yet implemented/);
-    await expect(getOwnAddress(cfg, undefined)).rejects.toThrow(/not yet implemented/);
+    await expect(requireAccount(cfg, undefined)).rejects.toThrow(/Not logged in to Privy/);
+    await expect(getOwnAddress(cfg, undefined)).rejects.toThrow(/Not logged in to Privy/);
   });
 
   it('--private-key overrides the provider entirely', async () => {
