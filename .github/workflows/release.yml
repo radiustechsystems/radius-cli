@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to validate, for example v0.2.0-alpha.0'
+        required: true
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    name: Validate, publish, and release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify tag matches package version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Release tags must look like v0.1.4 or v0.2.0-alpha.0; got $tag" >&2
+            exit 1
+          fi
+
+          package_version="$(node -p "require('./package.json').version")"
+          tag_version="${tag#v}"
+
+          if [ "$package_version" != "$tag_version" ]; then
+            echo "Tag $tag does not match package.json version $package_version" >&2
+            exit 1
+          fi
+
+          npm_tag="latest"
+          prerelease="false"
+          if [[ "$package_version" == *-* ]]; then
+            prerelease="true"
+            npm_tag="${package_version#*-}"
+            npm_tag="${npm_tag%%.*}"
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$package_version" >> "$GITHUB_OUTPUT"
+          echo "npm_tag=$npm_tag" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          package="radius-cli@${{ steps.version.outputs.version }}"
+          if npm view "$package" version >/dev/null 2>&1; then
+            echo "$package is already published; skipping npm publish."
+            exit 0
+          fi
+
+          npm publish --provenance --access public --tag ${{ steps.version.outputs.npm_tag }}
+
+      - name: Ensure npm dist-tag
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          npm dist-tag add \
+            "radius-cli@${{ steps.version.outputs.version }}" \
+            "${{ steps.version.outputs.npm_tag }}"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          args=(
+            "${{ steps.version.outputs.tag }}"
+            --title "radius-cli ${{ steps.version.outputs.tag }}"
+            --generate-notes
+          )
+
+          if [ "${{ steps.version.outputs.prerelease }}" = "true" ]; then
+            args+=(--prerelease)
+          else
+            args+=(--latest)
+          fi
+
+          if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "GitHub release ${{ steps.version.outputs.tag }} already exists; skipping release creation."
+          else
+            gh release create "${args[@]}"
+          fi
