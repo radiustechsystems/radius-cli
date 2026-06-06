@@ -2,7 +2,7 @@ import type { Address, Chain, PublicClient, WalletClient } from 'viem';
 
 export type NetworkName = 'mainnet' | 'testnet';
 
-export type WalletProviderName = 'keystore' | 'cdp' | 'para' | 'privy';
+export type WalletProviderName = 'keystore' | 'cdp' | 'para' | 'privy' | 'proxy';
 
 export interface ResolvedConfig {
   network: NetworkName;

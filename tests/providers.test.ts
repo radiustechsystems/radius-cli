@@ -14,6 +14,7 @@ process.env.RADIUS_HOME = radiusHome;
 const { getProvider } = await import('../src/lib/providers/index.js');
 const { requireAccount, getOwnAddress } = await import('../src/lib/account.js');
 const { disableProviderTelemetry } = await import('../src/lib/providerTelemetry.js');
+const { resolveConfig, writeProviderConfig, deleteProviderConfig } = await import('../src/lib/config.js');
 
 function makeCfg(overrides: Partial<ResolvedConfig> = {}): ResolvedConfig {
   return {
@@ -732,6 +733,316 @@ describe('para provider', () => {
       if (origKey) process.env.PARA_API_KEY = origKey;
       else delete process.env.PARA_API_KEY;
       if (existsSync(paraSessionPath)) unlinkSync(paraSessionPath);
+    }
+  });
+});
+
+describe('proxy provider', () => {
+  const provider = getProvider('proxy');
+  const MOCK_ADDRESS = '0xabcdef1234567890abcdef1234567890abcdef12';
+  const MOCK_SIGNATURE = `0x${'ab'.repeat(32)}${'cd'.repeat(32)}1b`;
+
+  function jsonResponse(body: unknown, status = 200): Response {
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      statusText: status >= 200 && status < 300 ? 'OK' : 'Error',
+      json: () => Promise.resolve(body),
+      text: () => Promise.resolve(JSON.stringify(body)),
+    } as Response;
+  }
+
+  function saveProxyEnv(): Record<string, string | undefined> {
+    return {
+      RADIUS_WALLET: process.env.RADIUS_WALLET,
+      RADIUS_WALLET_PROXY_URL: process.env.RADIUS_WALLET_PROXY_URL,
+      RADIUS_WALLET_ALIAS: process.env.RADIUS_WALLET_ALIAS,
+      RADIUS_WALLET_PROXY_TOKEN: process.env.RADIUS_WALLET_PROXY_TOKEN,
+      CF_ACCESS_CLIENT_ID: process.env.CF_ACCESS_CLIENT_ID,
+      CF_ACCESS_CLIENT_SECRET: process.env.CF_ACCESS_CLIENT_SECRET,
+    };
+  }
+
+  function restoreProxyEnv(saved: Record<string, string | undefined>): void {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+
+  function configureProxyEnv(): Record<string, string | undefined> {
+    const saved = saveProxyEnv();
+    process.env.RADIUS_WALLET_PROXY_URL = 'https://wallet-proxy.example/';
+    process.env.RADIUS_WALLET_ALIAS = 'agent0-main';
+    process.env.RADIUS_WALLET_PROXY_TOKEN = 'test-token';
+    process.env.CF_ACCESS_CLIENT_ID = 'access-client-id';
+    process.env.CF_ACCESS_CLIENT_SECRET = 'access-client-secret';
+    return saved;
+  }
+
+  it('--wallet proxy resolves through config selection', () => {
+    const cfg = resolveConfig({ wallet: 'proxy' });
+    expect(cfg.walletProvider).toBe('proxy');
+  });
+
+  it('RADIUS_WALLET=proxy resolves through env selection', () => {
+    const saved = saveProxyEnv();
+    process.env.RADIUS_WALLET = 'proxy';
+    try {
+      const cfg = resolveConfig({});
+      expect(cfg.walletProvider).toBe('proxy');
+    } finally {
+      restoreProxyEnv(saved);
+    }
+  });
+
+  it('does not expose exportPrivateKey (remote secret boundary)', () => {
+    expect(provider.exportPrivateKey).toBeUndefined();
+  });
+
+  it('getAddress rejects when URL or alias is missing', async () => {
+    const saved = saveProxyEnv();
+    delete process.env.RADIUS_WALLET_PROXY_URL;
+    delete process.env.RADIUS_WALLET_ALIAS;
+    try {
+      await expect(provider.getAddress(makeCfg({ walletProvider: 'proxy' }))).rejects.toThrow(
+        /Proxy wallet not configured/,
+      );
+    } finally {
+      restoreProxyEnv(saved);
+    }
+  });
+
+  it('getAddress calls the proxy address endpoint with optional auth headers', async () => {
+    const saved = configureProxyEnv();
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse({
+      provider: 'cdp',
+      alias: 'agent0-main',
+      address: MOCK_ADDRESS,
+    })) as any;
+
+    try {
+      const address = await provider.getAddress(makeCfg({ walletProvider: 'proxy' }));
+      expect(address.toLowerCase()).toBe(MOCK_ADDRESS.toLowerCase());
+
+      const fetchCall = (globalThis.fetch as any).mock.calls[0];
+      expect(fetchCall[0]).toBe('https://wallet-proxy.example/v1/wallets/agent0-main/address');
+      expect(fetchCall[1].method).toBe('GET');
+      expect(fetchCall[1].headers.authorization).toBe('Bearer test-token');
+      expect(fetchCall[1].headers['CF-Access-Client-Id']).toBe('access-client-id');
+      expect(fetchCall[1].headers['CF-Access-Client-Secret']).toBe('access-client-secret');
+    } finally {
+      globalThis.fetch = origFetch;
+      restoreProxyEnv(saved);
+    }
+  });
+
+  it('can read proxy URL and alias from providers.proxy config', async () => {
+    const saved = saveProxyEnv();
+    delete process.env.RADIUS_WALLET_PROXY_URL;
+    delete process.env.RADIUS_WALLET_ALIAS;
+    writeProviderConfig('proxy', {
+      url: 'https://config-wallet-proxy.example/',
+      alias: 'config-agent',
+      token: 'config-token',
+    });
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse({
+      provider: 'privy',
+      alias: 'config-agent',
+      address: MOCK_ADDRESS,
+    })) as any;
+
+    try {
+      const address = await provider.getAddress(makeCfg({ walletProvider: 'proxy' }));
+      expect(address.toLowerCase()).toBe(MOCK_ADDRESS.toLowerCase());
+      const fetchCall = (globalThis.fetch as any).mock.calls[0];
+      expect(fetchCall[0]).toBe('https://config-wallet-proxy.example/v1/wallets/config-agent/address');
+      expect(fetchCall[1].headers.authorization).toBe('Bearer config-token');
+    } finally {
+      globalThis.fetch = origFetch;
+      deleteProviderConfig('proxy');
+      restoreProxyEnv(saved);
+    }
+  });
+
+  it('signMessage posts to the proxy sign-message endpoint', async () => {
+    const saved = configureProxyEnv();
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn((url: string) => {
+      if (url.endsWith('/address')) {
+        return Promise.resolve(jsonResponse({ provider: 'privy', alias: 'agent0-main', address: MOCK_ADDRESS }));
+      }
+      return Promise.resolve(jsonResponse({ provider: 'privy', alias: 'agent0-main', signature: MOCK_SIGNATURE }));
+    }) as any;
+
+    try {
+      const account = await provider.getAccount(makeCfg({ walletProvider: 'proxy' }));
+      const signature = await account.signMessage({ message: 'hello' });
+      expect(signature).toBe(MOCK_SIGNATURE);
+
+      const signCall = (globalThis.fetch as any).mock.calls.find((call: any[]) => call[0].endsWith('/sign-message'));
+      expect(signCall[1].method).toBe('POST');
+      expect(JSON.parse(signCall[1].body)).toEqual({ message: 'hello' });
+    } finally {
+      globalThis.fetch = origFetch;
+      restoreProxyEnv(saved);
+    }
+  });
+
+  it('signTypedData posts typed data to the proxy', async () => {
+    const saved = configureProxyEnv();
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn((url: string) => {
+      if (url.endsWith('/address')) {
+        return Promise.resolve(jsonResponse({ provider: 'cdp', alias: 'agent0-main', address: MOCK_ADDRESS }));
+      }
+      return Promise.resolve(jsonResponse({ provider: 'cdp', alias: 'agent0-main', signature: MOCK_SIGNATURE }));
+    }) as any;
+
+    try {
+      const account = await provider.getAccount(makeCfg({ walletProvider: 'proxy' }));
+      const signature = await account.signTypedData({
+        domain: { name: 'Test', version: '1', chainId: 72344 },
+        types: { Permit: [{ name: 'amount', type: 'uint256' }] },
+        primaryType: 'Permit',
+        message: { amount: 42n },
+      });
+      expect(signature).toBe(MOCK_SIGNATURE);
+
+      const signCall = (globalThis.fetch as any).mock.calls.find((call: any[]) => call[0].endsWith('/sign-typed-data'));
+      const body = JSON.parse(signCall[1].body);
+      expect(body.typedData.primaryType).toBe('Permit');
+      expect(body.typedData.message.amount).toBe('42');
+    } finally {
+      globalThis.fetch = origFetch;
+      restoreProxyEnv(saved);
+    }
+  });
+
+  it('sign({ hash }) posts hash mode to the proxy sign-transaction endpoint', async () => {
+    const saved = configureProxyEnv();
+    const hash = `0x${'12'.repeat(32)}`;
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn((url: string) => {
+      if (url.endsWith('/address')) {
+        return Promise.resolve(jsonResponse({ provider: 'cdp', alias: 'agent0-main', address: MOCK_ADDRESS }));
+      }
+      return Promise.resolve(jsonResponse({ provider: 'cdp', alias: 'agent0-main', signature: MOCK_SIGNATURE }));
+    }) as any;
+
+    try {
+      const account = await provider.getAccount(makeCfg({ walletProvider: 'proxy' }));
+      const signature = await (account as any).sign({ hash });
+      expect(signature).toBe(MOCK_SIGNATURE);
+
+      const signCall = (globalThis.fetch as any).mock.calls.find((call: any[]) => call[0].endsWith('/sign-transaction'));
+      expect(JSON.parse(signCall[1].body)).toEqual({ hash });
+    } finally {
+      globalThis.fetch = origFetch;
+      restoreProxyEnv(saved);
+    }
+  });
+
+  it('signTransaction uses legacy transaction hash signing through the proxy', async () => {
+    const saved = configureProxyEnv();
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn((url: string) => {
+      if (url.endsWith('/address')) {
+        return Promise.resolve(jsonResponse({ provider: 'cdp', alias: 'agent0-main', address: MOCK_ADDRESS }));
+      }
+      return Promise.resolve(jsonResponse({ provider: 'cdp', alias: 'agent0-main', signature: MOCK_SIGNATURE }));
+    }) as any;
+
+    try {
+      const account = await provider.getAccount(makeCfg({ walletProvider: 'proxy' }));
+      const signed = await account.signTransaction({
+        to: '0x0000000000000000000000000000000000000001',
+        value: 0n,
+        nonce: 0,
+        gas: 21000n,
+        gasPrice: 1000000000n,
+        chainId: 72344,
+        type: 'legacy',
+      } as any);
+      expect(signed).toMatch(/^0x/);
+
+      const signCall = (globalThis.fetch as any).mock.calls.find((call: any[]) => call[0].endsWith('/sign-transaction'));
+      expect(JSON.parse(signCall[1].body).hash).toMatch(/^0x[0-9a-f]{64}$/);
+    } finally {
+      globalThis.fetch = origFetch;
+      restoreProxyEnv(saved);
+    }
+  });
+
+  it('status --json includes sanitized proxy config and remote capabilities', async () => {
+    const saved = configureProxyEnv();
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn((url: string) => {
+      if (url.endsWith('/status')) {
+        return Promise.resolve(jsonResponse({
+          provider: 'para',
+          alias: 'agent0-main',
+          status: 'configured',
+          address: MOCK_ADDRESS,
+        }));
+      }
+      return Promise.resolve(jsonResponse({
+        provider: 'para',
+        alias: 'agent0-main',
+        capabilities: {
+          address: true,
+          signMessage: true,
+          signTypedData: true,
+          signTransaction: true,
+          exportPrivateKey: false,
+        },
+      }));
+    }) as any;
+
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: any[]) => logs.push(args.join(' '));
+
+    try {
+      await provider.status(makeCfg({ walletProvider: 'proxy' }), { json: true });
+      const parsed = JSON.parse(logs[0]);
+      expect(parsed.provider).toBe('proxy');
+      expect(parsed.configured).toBe(true);
+      expect(parsed.loggedIn).toBe(true);
+      expect(parsed.alias).toBe('agent0-main');
+      expect(parsed.url).toBe('https://wallet-proxy.example');
+      expect(parsed.remoteProvider).toBe('para');
+      expect(parsed.address.toLowerCase()).toBe(MOCK_ADDRESS.toLowerCase());
+      expect(parsed.capabilities.exportPrivateKey).toBe(false);
+      expect(JSON.stringify(parsed)).not.toContain('test-token');
+      expect(JSON.stringify(parsed)).not.toContain('access-client-secret');
+    } finally {
+      console.log = origLog;
+      globalThis.fetch = origFetch;
+      restoreProxyEnv(saved);
+    }
+  });
+
+  it('proxy JSON errors include provider error code and message', async () => {
+    const saved = configureProxyEnv();
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse({
+      error: {
+        code: 'WALLET_NOT_FOUND',
+        message: 'Unknown wallet alias: agent9-main',
+      },
+    }, 404)) as any;
+
+    try {
+      await expect(provider.getAddress(makeCfg({ walletProvider: 'proxy' }))).rejects.toThrow(
+        /WALLET_NOT_FOUND: Unknown wallet alias: agent9-main/,
+      );
+    } finally {
+      globalThis.fetch = origFetch;
+      restoreProxyEnv(saved);
     }
   });
 });

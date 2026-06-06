@@ -5,7 +5,7 @@ import { isAddress, type Address } from 'viem';
 import { chainFor, DEFAULT_SBC_ADDRESS } from './chains.js';
 import type { GlobalOptions, NetworkName, ResolvedConfig, WalletProviderName } from '../types.js';
 
-const VALID_WALLET_PROVIDERS: WalletProviderName[] = ['keystore', 'cdp', 'para', 'privy'];
+const VALID_WALLET_PROVIDERS: WalletProviderName[] = ['keystore', 'cdp', 'para', 'privy', 'proxy'];
 
 const RADIUS_DIR = process.env.RADIUS_HOME ?? join(homedir(), '.radius');
 const CONFIG_PATH = join(RADIUS_DIR, 'config.json');
