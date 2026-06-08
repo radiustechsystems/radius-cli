@@ -220,6 +220,11 @@ export const paraProvider: WalletProvider = {
     const session: ParaSession = { email, userShare, walletId, address };
     writeSession(session);
 
+    // Release any SDK resources (timers, sockets) so the process exits cleanly.
+    if (typeof (para as any).disconnect === 'function') {
+      try { await (para as any).disconnect(); } catch { /* best-effort */ }
+    }
+
     console.log(`Logged in as ${email} (pregenerated wallet — not yet claimed)`);
     console.log(`Address: ${address}`);
     console.log(`Session saved to ${sessionPath()}`);

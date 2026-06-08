@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 export const SUPPORTED_VERBS = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options'] as const;
 export type HttpVerb = typeof SUPPORTED_VERBS[number];
 
-const FORBIDDEN_REQUEST_HEADERS = new Set(['host', 'x-payment']);
+const FORBIDDEN_REQUEST_HEADERS = new Set(['host', 'x-payment', 'payment-signature']);
 const MAX_RESPONSE_BYTES = 25 * 1024 * 1024;
 
 export interface HttpResponse {

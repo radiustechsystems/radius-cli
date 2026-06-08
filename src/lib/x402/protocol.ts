@@ -199,12 +199,19 @@ export function encodePaymentHeader(payload: PaymentPayload): string {
   return Buffer.from(json, 'utf8').toString('base64');
 }
 
+function extractTxHash(obj: Record<string, unknown>): string | undefined {
+  for (const key of ['transaction', 'txHash', 'transactionHash', 'hash']) {
+    if (typeof obj[key] === 'string') return obj[key];
+  }
+  return undefined;
+}
+
 export function decodePaymentResponse(headerValue: string): PaymentResponseBody {
   const json = Buffer.from(headerValue, 'base64').toString('utf8');
   const obj = JSON.parse(json) as Record<string, unknown>;
   return {
     success: obj.success === true,
-    transaction: typeof obj.transaction === 'string' ? obj.transaction : undefined,
+    transaction: extractTxHash(obj),
     network: typeof obj.network === 'string' ? obj.network : undefined,
     payer: typeof obj.payer === 'string' ? obj.payer : undefined,
     errorReason: typeof obj.errorReason === 'string' ? obj.errorReason : null,
