@@ -1,6 +1,6 @@
 import type { Command } from 'commander';
 import { confirm } from '@inquirer/prompts';
-import { formatUnits, parseUnits, type Address } from 'viem';
+import { formatUnits, isAddress, parseUnits, type Address } from 'viem';
 import { resolveConfig } from '../lib/config.js';
 import { requireAccount } from '../lib/account.js';
 import { makePublicClient } from '../lib/client.js';
@@ -20,6 +20,7 @@ import {
 import {
   decodePaymentResponse,
   encodePaymentHeader,
+  encodePermitPaymentHeader,
   networkIdForChain,
   parseChallenge,
   pickAccept,
@@ -32,7 +33,20 @@ import {
   readBalance,
   signTransferAuthorization,
 } from '../lib/x402/eip3009.js';
+import { readPermitNonce, signEip2612Permit, signPermit } from '../lib/x402/eip2612.js';
+import {
+  buildPermit2PaymentPayload,
+  PERMIT2_ADDRESS,
+  randomPermit2Nonce,
+  signPermit2WitnessTransfer,
+} from '../lib/x402/permit2.js';
 import type { GlobalOptions } from '../types.js';
+import {
+  EXIT_USAGE,
+  EXIT_BALANCE,
+  EXIT_NETWORK,
+  EXIT_PAYMENT,
+} from '../lib/exitCodes.js';
 
 interface SubOptions {
   header?: string[];
@@ -90,7 +104,7 @@ async function runX402(
   const verb = verbArg.toLowerCase();
   if (!isSupportedVerb(verb)) {
     process.stderr.write(`x402: unsupported verb '${verbArg}' (use one of ${SUPPORTED_VERBS.join(', ')})\n`);
-    process.exit(2);
+    process.exit(EXIT_USAGE);
   }
 
   const reqHeaders = parseHeaderArgs(subOpts.header);
@@ -102,20 +116,27 @@ async function runX402(
   const initial = await runRequest(verb as HttpVerb, url, { headers: reqHeaders, body });
   if (initial.status !== 402) {
     emit(initial, null, !!opts.json, !!subOpts.include);
-    process.exit(initial.status >= 400 ? 1 : 0);
+    process.exit(initial.status >= 400 ? EXIT_NETWORK : 0);
   }
 
   const cfg = resolveConfig(opts);
+  // Official Radius x402 v2 servers carry the challenge in a base64
+  // PAYMENT-REQUIRED response header; older servers put JSON in the body.
   let challenge;
+  const paymentRequired = initial.headers.get('payment-required');
   try {
-    const text = decodeBodyAsUtf8(initial.body) ?? '';
-    challenge = parseChallenge(JSON.parse(text));
+    if (paymentRequired) {
+      challenge = parseChallenge(JSON.parse(Buffer.from(paymentRequired, 'base64').toString('utf8')));
+    } else {
+      const text = decodeBodyAsUtf8(initial.body) ?? '';
+      challenge = parseChallenge(JSON.parse(text));
+    }
   } catch (e) {
     process.stderr.write(
-      `x402: server returned 402 but the body is not a valid challenge: ${(e as Error).message}\n`,
+      `x402: server returned 402 but no valid challenge in ${paymentRequired ? 'PAYMENT-REQUIRED header' : 'body'}: ${(e as Error).message}\n`,
     );
     process.stderr.write(safeBodyPreview(initial.body));
-    process.exit(2);
+    process.exit(EXIT_PAYMENT);
   }
 
   const accept = pickAccept(challenge.accepts, cfg.chain.id);
@@ -126,7 +147,7 @@ async function runX402(
     process.stderr.write(
       `x402: no compatible payment option. Wanted scheme=exact network=${networkIdForChain(cfg.chain.id)}; server offered: ${offered}\n`,
     );
-    process.exit(1);
+    process.exit(EXIT_PAYMENT);
   }
 
   const account = await requireAccount(cfg, opts.privateKey);
@@ -139,7 +160,7 @@ async function runX402(
     process.stderr.write(
       `x402: failed to read asset metadata at ${accept.asset}: ${(e as Error).message}\n`,
     );
-    process.exit(1);
+    process.exit(EXIT_NETWORK);
   }
 
   const balance = await readBalance(client, accept.asset, account.address);
@@ -151,13 +172,13 @@ async function runX402(
     process.stderr.write(
       `x402: insufficient balance. Need ${amountStr} ${symbol}, have ${balanceStr} ${symbol}.\n`,
     );
-    process.exit(1);
+    process.exit(EXIT_BALANCE);
   }
 
   const decided = await decideAutoPay(subOpts, accept, asset.decimals);
   if (decided === 'refuse-no-tty') {
     writeChallengeSummary(accept, asset.decimals, asset.symbol, balanceStr);
-    process.exit(2);
+    process.exit(EXIT_USAGE);
   }
   if (decided === 'prompt') {
     const proceed = await confirm({
@@ -166,42 +187,140 @@ async function runX402(
     });
     if (!proceed) {
       process.stderr.write('x402: payment declined.\n');
-      process.exit(1);
+      process.exit(EXIT_PAYMENT);
     }
   }
 
-  const authorization = makeAuthorization({
-    from: account.address,
-    to: accept.payTo,
-    value: accept.maxAmountRequired,
-    maxTimeoutSeconds: accept.maxTimeoutSeconds,
-  });
+  // Radius servers settle SBC via EIP-2612 permit + transferFrom (SBC has no
+  // EIP-3009) and advertise it in the challenge's extra. Standard x402 servers
+  // get the EIP-3009 transferWithAuthorization path.
+  const settlementSpender =
+    accept.extra?.settlementMethod === 'permit-transferFrom' &&
+    typeof accept.extra.settlementSpender === 'string' &&
+    isAddress(accept.extra.settlementSpender)
+      ? (accept.extra.settlementSpender as Address)
+      : undefined;
 
-  let signature;
-  try {
-    signature = await signTransferAuthorization(account, {
-      asset: accept.asset,
-      chainId: cfg.chain.id,
-      name: asset.name,
-      version: asset.version,
-      authorization,
+  // Official Radius v2 settlement: Permit2 dual-signature flow.
+  const usePermit2 = accept.extra?.assetTransferMethod === 'permit2';
+
+  let paymentHeader: string;
+  if (usePermit2) {
+    try {
+      const eip2612Nonce = await readPermitNonce(client, accept.asset, account.address);
+      const deadline = BigInt(
+        Math.floor(Date.now() / 1000) + (accept.maxTimeoutSeconds ?? 300),
+      );
+      const eip2612Signature = await signEip2612Permit(account, {
+        asset: accept.asset,
+        chainId: cfg.chain.id,
+        name: asset.name,
+        version: asset.version,
+        spender: PERMIT2_ADDRESS,
+        value: accept.maxAmountRequired,
+        nonce: eip2612Nonce,
+        deadline,
+      });
+      const permit2Nonce = randomPermit2Nonce();
+      const permit2Signature = await signPermit2WitnessTransfer(account, {
+        token: accept.asset,
+        chainId: cfg.chain.id,
+        amount: accept.maxAmountRequired,
+        payTo: accept.payTo,
+        nonce: permit2Nonce,
+        deadline,
+      });
+      const challengeResource =
+        challenge.resource && typeof challenge.resource === 'object'
+          ? (challenge.resource as { url?: string; description?: string; mimeType?: string })
+          : {};
+      paymentHeader = buildPermit2PaymentPayload({
+        chainId: cfg.chain.id,
+        resource: { ...challengeResource, url: challengeResource.url ?? url },
+        accepted: accept.raw,
+        token: accept.asset,
+        amount: accept.maxAmountRequired,
+        owner: account.address,
+        payTo: accept.payTo,
+        permit2Signature,
+        permit2Nonce,
+        eip2612Signature,
+        eip2612Nonce,
+        deadline,
+      });
+    } catch (e) {
+      process.stderr.write(
+        `x402: failed to sign permit2 payment: ${(e as Error).message}\n`,
+      );
+      process.exit(EXIT_PAYMENT);
+    }
+  } else if (settlementSpender) {
+    try {
+      const nonce = await readPermitNonce(client, accept.asset, account.address);
+      const deadline = BigInt(
+        Math.floor(Date.now() / 1000) + (accept.maxTimeoutSeconds ?? 300),
+      );
+      const permit = await signPermit(account, {
+        asset: accept.asset,
+        chainId: cfg.chain.id,
+        name: asset.name,
+        version: asset.version,
+        spender: settlementSpender,
+        value: accept.maxAmountRequired,
+        nonce,
+        deadline,
+      });
+      paymentHeader = encodePermitPaymentHeader({
+        x402Version: challenge.x402Version,
+        scheme: accept.scheme,
+        network: accept.network,
+        payload: permit,
+      });
+    } catch (e) {
+      process.stderr.write(
+        `x402: failed to sign EIP-2612 permit: ${(e as Error).message}\n`,
+      );
+      process.exit(EXIT_PAYMENT);
+    }
+  } else {
+    const authorization = makeAuthorization({
+      from: account.address,
+      to: accept.payTo,
+      value: accept.maxAmountRequired,
+      maxTimeoutSeconds: accept.maxTimeoutSeconds,
     });
-  } catch (e) {
-    process.stderr.write(
-      `x402: failed to sign EIP-3009 authorization (asset may not support transferWithAuthorization): ${(e as Error).message}\n`,
-    );
-    process.exit(1);
+
+    let signature;
+    try {
+      signature = await signTransferAuthorization(account, {
+        asset: accept.asset,
+        chainId: cfg.chain.id,
+        name: asset.name,
+        version: asset.version,
+        authorization,
+      });
+    } catch (e) {
+      process.stderr.write(
+        `x402: failed to sign EIP-3009 authorization (asset may not support transferWithAuthorization): ${(e as Error).message}\n`,
+      );
+      process.exit(EXIT_PAYMENT);
+    }
+
+    paymentHeader = encodePaymentHeader({
+      x402Version: challenge.x402Version,
+      scheme: accept.scheme,
+      network: accept.network,
+      accepted: accept.raw,
+      resource: challenge.resource,
+      payload: { signature, authorization },
+    });
   }
 
-  const paymentHeader = encodePaymentHeader({
-    x402Version: challenge.x402Version,
-    scheme: accept.scheme,
-    network: accept.network,
-    payload: { signature, authorization },
-  });
-
   const retryHeaders = new Headers(reqHeaders);
+  // Send both header spellings: official Radius v2 servers read
+  // PAYMENT-SIGNATURE, older x402 servers read X-Payment.
   retryHeaders.set('x-payment', paymentHeader);
+  retryHeaders.set('payment-signature', paymentHeader);
 
   const retry = await runRequest(verb as HttpVerb, url, {
     headers: retryHeaders,
@@ -215,12 +334,12 @@ async function runX402(
       process.stderr.write(
         'x402: server redirected the paid request cross-origin; refusing to replay X-PAYMENT.\n',
       );
-      process.exit(1);
+      process.exit(EXIT_NETWORK);
     }
   }
 
   let paymentResponse: PaymentResponseBody | null = null;
-  const xpr = retry.headers.get('x-payment-response');
+  const xpr = retry.headers.get('payment-response') ?? retry.headers.get('x-payment-response');
   if (xpr) {
     try { paymentResponse = decodePaymentResponse(xpr); } catch { /* ignore malformed */ }
   }
@@ -245,11 +364,11 @@ async function runX402(
     if (opts.json) {
       console.log(jsonStringify(envelope(retry, { ...summary, paid: false })));
     }
-    process.exit(1);
+    process.exit(EXIT_PAYMENT);
   }
 
   emit(retry, summary, !!opts.json, !!subOpts.include);
-  process.exit(retry.status >= 400 ? 1 : 0);
+  process.exit(retry.status >= 400 ? EXIT_NETWORK : 0);
 }
 
 type Decision = 'auto-pay' | 'prompt' | 'refuse-no-tty';

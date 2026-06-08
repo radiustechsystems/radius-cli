@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { Address, Hex, PrivateKeyAccount, PublicClient } from 'viem';
+import type { Address, Hex, LocalAccount, PublicClient } from 'viem';
 import type { Authorization } from './protocol.js';
 
 export const ERC20_X402_ABI = [
@@ -117,7 +117,7 @@ export function makeAuthorization(args: {
 }
 
 export async function signTransferAuthorization(
-  account: PrivateKeyAccount,
+  account: LocalAccount,
   args: {
     asset: Address;
     chainId: number;

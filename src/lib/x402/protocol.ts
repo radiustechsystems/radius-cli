@@ -14,11 +14,15 @@ export interface AcceptEntry {
   outputSchema?: unknown;
   maxTimeoutSeconds?: number;
   extra?: { name?: string; version?: string; [k: string]: unknown };
+  /** the accepts entry exactly as the server sent it — echoed back as `accepted` in v2 payment headers */
+  raw: Record<string, unknown>;
 }
 
 export interface Challenge {
   x402Version: number;
   accepts: AcceptEntry[];
+  /** v2 challenges carry a top-level resource object — echoed back in v2 payment headers */
+  resource?: unknown;
   error?: string;
 }
 
@@ -35,6 +39,9 @@ export interface PaymentPayload {
   x402Version: number;
   scheme: string;
   network: string;
+  /** v2 only: the chosen accepts entry verbatim and the challenge's resource object */
+  accepted?: Record<string, unknown>;
+  resource?: unknown;
   payload: { signature: Hex; authorization: Authorization };
 }
 
@@ -89,7 +96,14 @@ export function parseChallenge(raw: unknown): Challenge {
       network: asString(e.network, `accepts[${i}].network`),
       asset: asAddress(e.asset, `accepts[${i}].asset`),
       payTo: asAddress(e.payTo, `accepts[${i}].payTo`),
-      maxAmountRequired: asBigInt(e.maxAmountRequired, `accepts[${i}].maxAmountRequired`),
+      maxAmountRequired: asBigInt(
+        e.maxAmountRequired ?? e.amount,
+        e.maxAmountRequired !== undefined
+          ? `accepts[${i}].maxAmountRequired`
+          : e.amount !== undefined
+            ? `accepts[${i}].amount`
+            : `accepts[${i}].maxAmountRequired`,
+      ),
       resource: typeof e.resource === 'string' ? e.resource : undefined,
       description: typeof e.description === 'string' ? e.description : undefined,
       mimeType: typeof e.mimeType === 'string' ? e.mimeType : undefined,
@@ -101,13 +115,36 @@ export function parseChallenge(raw: unknown): Challenge {
       extra: e.extra && typeof e.extra === 'object' && !Array.isArray(e.extra)
         ? (e.extra as AcceptEntry['extra'])
         : undefined,
+      raw: e,
     } satisfies AcceptEntry;
   });
   return {
     x402Version: version,
     accepts: parsedAccepts,
+    resource: obj.resource,
     error: typeof obj.error === 'string' ? obj.error : undefined,
   };
+}
+
+/**
+ * Radius x402 flavor: SBC has no EIP-3009, so servers advertising
+ * `extra.settlementMethod: "permit-transferFrom"` settle via EIP-2612.
+ * The header keeps the flat v1-style envelope with a permit payload
+ * (`kind: "permit-eip2612"`) per the radius-dev integration guide.
+ */
+export function encodePermitPaymentHeader(args: {
+  x402Version: number;
+  scheme: string;
+  network: string;
+  payload: { kind: 'permit-eip2612'; [k: string]: unknown };
+}): string {
+  const json = JSON.stringify({
+    x402Version: args.x402Version,
+    scheme: args.scheme,
+    network: args.network,
+    payload: args.payload,
+  });
+  return Buffer.from(json, 'utf8').toString('base64');
 }
 
 export function networkIdForChain(chainId: number): string {
@@ -120,23 +157,53 @@ export function pickAccept(accepts: AcceptEntry[], chainId: number): AcceptEntry
 }
 
 export function encodePaymentHeader(payload: PaymentPayload): string {
-  const json = JSON.stringify({
-    x402Version: payload.x402Version,
-    scheme: payload.scheme,
-    network: payload.network,
-    payload: {
-      signature: payload.payload.signature,
-      authorization: {
-        from: payload.payload.authorization.from,
-        to: payload.payload.authorization.to,
-        value: payload.payload.authorization.value.toString(),
-        validAfter: payload.payload.authorization.validAfter,
-        validBefore: payload.payload.authorization.validBefore,
-        nonce: payload.payload.authorization.nonce,
-      },
-    },
-  });
+  const a = payload.payload.authorization;
+  // v2 (specs/schemes/exact/scheme_exact_evm.md): the header echoes the chosen
+  // accepts entry as `accepted` plus the challenge's `resource`, and the
+  // authorization validity bounds are strings. v1 keeps the flat envelope.
+  const json = payload.x402Version >= 2
+    ? JSON.stringify({
+        x402Version: payload.x402Version,
+        scheme: payload.scheme,
+        network: payload.network,
+        ...(payload.resource !== undefined ? { resource: payload.resource } : {}),
+        accepted: payload.accepted ?? { scheme: payload.scheme, network: payload.network },
+        payload: {
+          signature: payload.payload.signature,
+          authorization: {
+            from: a.from,
+            to: a.to,
+            value: a.value.toString(),
+            validAfter: a.validAfter.toString(),
+            validBefore: a.validBefore.toString(),
+            nonce: a.nonce,
+          },
+        },
+      })
+    : JSON.stringify({
+        x402Version: payload.x402Version,
+        scheme: payload.scheme,
+        network: payload.network,
+        payload: {
+          signature: payload.payload.signature,
+          authorization: {
+            from: a.from,
+            to: a.to,
+            value: a.value.toString(),
+            validAfter: a.validAfter,
+            validBefore: a.validBefore,
+            nonce: a.nonce,
+          },
+        },
+      });
   return Buffer.from(json, 'utf8').toString('base64');
+}
+
+function extractTxHash(obj: Record<string, unknown>): string | undefined {
+  for (const key of ['transaction', 'txHash', 'transactionHash', 'hash']) {
+    if (typeof obj[key] === 'string') return obj[key];
+  }
+  return undefined;
 }
 
 export function decodePaymentResponse(headerValue: string): PaymentResponseBody {
@@ -144,7 +211,7 @@ export function decodePaymentResponse(headerValue: string): PaymentResponseBody 
   const obj = JSON.parse(json) as Record<string, unknown>;
   return {
     success: obj.success === true,
-    transaction: typeof obj.transaction === 'string' ? obj.transaction : undefined,
+    transaction: extractTxHash(obj),
     network: typeof obj.network === 'string' ? obj.network : undefined,
     payer: typeof obj.payer === 'string' ? obj.payer : undefined,
     errorReason: typeof obj.errorReason === 'string' ? obj.errorReason : null,

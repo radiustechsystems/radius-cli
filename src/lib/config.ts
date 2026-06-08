@@ -3,11 +3,17 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { isAddress, type Address } from 'viem';
 import { chainFor, DEFAULT_SBC_ADDRESS } from './chains.js';
-import type { GlobalOptions, NetworkName, ResolvedConfig } from '../types.js';
+import type { GlobalOptions, NetworkName, ResolvedConfig, WalletProviderName } from '../types.js';
+
+const VALID_WALLET_PROVIDERS: WalletProviderName[] = ['keystore', 'cdp', 'para', 'privy', 'proxy'];
 
 const RADIUS_DIR = process.env.RADIUS_HOME ?? join(homedir(), '.radius');
 const CONFIG_PATH = join(RADIUS_DIR, 'config.json');
 const DEFAULT_KEYSTORE_PATH = join(RADIUS_DIR, 'keystore.json');
+
+interface ProviderConfig {
+  [key: string]: string | undefined;
+}
 
 interface FileConfig {
   network?: NetworkName;
@@ -16,6 +22,8 @@ interface FileConfig {
   rusdAddress?: string;
   cachedAddress?: string;
   passwordless?: boolean;
+  wallet?: WalletProviderName;
+  providers?: Record<string, ProviderConfig>;
 }
 
 function readFileConfig(): FileConfig {
@@ -56,7 +64,15 @@ export function resolveConfig(opts: GlobalOptions): ResolvedConfig {
   const keystorePath = process.env.RADIUS_KEYSTORE_PATH ?? DEFAULT_KEYSTORE_PATH;
   const password = process.env.RADIUS_PASSWORD;
 
-  return { network, chain, rpcUrl, sbcAddress, rusdAddress, keystorePath, password };
+  const walletRaw = opts.wallet ?? process.env.RADIUS_WALLET ?? file.wallet ?? 'keystore';
+  if (!VALID_WALLET_PROVIDERS.includes(walletRaw as WalletProviderName)) {
+    throw new Error(
+      `--wallet must be one of ${VALID_WALLET_PROVIDERS.join(', ')} (got '${walletRaw}')`,
+    );
+  }
+  const walletProvider = walletRaw as WalletProviderName;
+
+  return { network, chain, rpcUrl, sbcAddress, rusdAddress, keystorePath, password, walletProvider };
 }
 
 export function configPath(): string {
@@ -91,5 +107,36 @@ export function writePasswordless(passwordless: boolean): void {
   const file = readFileConfig();
   if (passwordless) file.passwordless = true;
   else delete file.passwordless;
+  writeFileConfig(file);
+}
+
+export function readWalletProvider(): WalletProviderName {
+  return readFileConfig().wallet ?? 'keystore';
+}
+
+export function writeWalletProvider(provider: WalletProviderName): void {
+  const file = readFileConfig();
+  if (provider === 'keystore') delete file.wallet;
+  else file.wallet = provider;
+  writeFileConfig(file);
+}
+
+export function readProviderConfig(provider: string): ProviderConfig {
+  return readFileConfig().providers?.[provider] ?? {};
+}
+
+export function writeProviderConfig(provider: string, update: Partial<ProviderConfig>): void {
+  const file = readFileConfig();
+  if (!file.providers) file.providers = {};
+  file.providers[provider] = { ...file.providers[provider], ...update };
+  writeFileConfig(file);
+}
+
+export function deleteProviderConfig(provider: string): void {
+  const file = readFileConfig();
+  if (file.providers) {
+    delete file.providers[provider];
+    if (Object.keys(file.providers).length === 0) delete file.providers;
+  }
   writeFileConfig(file);
 }

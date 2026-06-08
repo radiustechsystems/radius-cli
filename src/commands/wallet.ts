@@ -2,9 +2,10 @@ import { Command } from 'commander';
 import { confirm, password as promptPassword } from '@inquirer/prompts';
 import { readFileSync } from 'node:fs';
 import {
+  decodeErrorResult,
   encodeFunctionData,
-  formatEther,
   formatUnits,
+  formatEther,
   isAddress,
   parseEther,
   parseUnits,
@@ -13,16 +14,26 @@ import {
   type Hex,
 } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { resolveConfig, readPasswordless, writeCachedAddress, writePasswordless } from '../lib/config.js';
-import { keystoreExists, loadKeystorePrivateKey, saveKeystore } from '../lib/keystore.js';
+import { resolveConfig, writeCachedAddress, writePasswordless } from '../lib/config.js';
+import { keystoreExists, saveKeystore } from '../lib/keystore.js';
 import { getOwnAddress, requireAccount } from '../lib/account.js';
 import { makePublicClient, makeWalletClient } from '../lib/client.js';
 import { coerceArg, parseCastSignature } from '../lib/signature.js';
 import { formatUsd, formatUsdShort, jsonStringify } from '../lib/format.js';
+import { splitAggregateBalance } from '../lib/balance.js';
 import { registerWalletX402 } from './walletX402.js';
+import { getProvider } from '../lib/providers/index.js';
 import type { GlobalOptions } from '../types.js';
 
 const SBC_DECIMALS = 6;
+const TURNSTILE_SBC_RESERVE_RAW = parseUnits('0.1', SBC_DECIMALS);
+const SOLIDITY_ERROR_ABI = [
+  {
+    type: 'error',
+    name: 'Error',
+    inputs: [{ name: 'message', type: 'string' }],
+  },
+] as const;
 const ERC20_TRANSFER_ABI = [
   {
     type: 'function',
@@ -43,6 +54,19 @@ const ERC20_TRANSFER_ABI = [
   },
 ] as const;
 
+type WalletConfig = ReturnType<typeof resolveConfig>;
+
+interface WalletBalance {
+  address: Address;
+  aggregateWei: bigint;
+  nativeWei: bigint;
+  sbc: string;
+  sbcRawWei: bigint;
+  sbcError: string | null;
+  total: string;
+  rusd: string;
+}
+
 function readMessageArg(arg: string, raw: boolean): string | { raw: Hex } {
   const text = arg === '-' ? readFileSync(0, 'utf8') : arg;
   if (raw) {
@@ -62,6 +86,73 @@ function normalizePrivateKey(input: string): Hex {
     throw new Error('Private key must be a 32-byte hex string (64 hex chars).');
   }
   return withPrefix as Hex;
+}
+
+async function readWalletBalance(cfg: WalletConfig, address: Address): Promise<WalletBalance> {
+  const client = makePublicClient(cfg);
+  // eth_getBalance is the aggregate: token_balance x rate + raw_native.
+  // SBC is already included, so derive the raw-native (RUSD) remainder
+  // instead of summing. See splitAggregateBalance.
+  const aggregateWei = await client.getBalance({ address });
+
+  let sbc = '0';
+  let sbcRawWei = 0n;
+  let sbcError: string | null = null;
+  try {
+    sbcRawWei = await client.readContract({
+      address: cfg.sbcAddress!,
+      abi: ERC20_TRANSFER_ABI,
+      functionName: 'balanceOf',
+      args: [address],
+    });
+    sbc = formatUnits(sbcRawWei, SBC_DECIMALS);
+  } catch (e) {
+    sbcError = e instanceof Error ? e.message : String(e);
+  }
+
+  const { nativeWei } = splitAggregateBalance({
+    aggregateWei,
+    sbcRaw: sbcRawWei,
+    sbcDecimals: SBC_DECIMALS,
+  });
+  const rusd = formatEther(nativeWei);
+  const total = formatEther(aggregateWei);
+
+  return {
+    address,
+    aggregateWei,
+    nativeWei,
+    sbc,
+    sbcRawWei,
+    sbcError,
+    total,
+    rusd,
+  };
+}
+
+function formatBalanceLine(balance: WalletBalance): string {
+  if (balance.sbcError) {
+    return `Balance: $${formatUsdShort(balance.total)} (SBC/RUSD breakdown unavailable)`;
+  }
+  return `Balance: $${formatUsdShort(balance.total)} ($${formatUsd(balance.sbc)} SBC + $${formatUsd(balance.rusd)} RUSD)`;
+}
+
+async function printLoggedInProviderBalance(cfg: WalletConfig, opts: GlobalOptions): Promise<void> {
+  if (opts.json || cfg.walletProvider === 'keystore') return;
+
+  let address: Address;
+  try {
+    address = await getOwnAddress(cfg, opts.privateKey);
+  } catch {
+    return;
+  }
+
+  try {
+    console.log(formatBalanceLine(await readWalletBalance(cfg, address)));
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.log(`Balance: unavailable (${message})`);
+  }
 }
 
 async function readNewPassword(envPassword?: string): Promise<string> {
@@ -124,6 +215,47 @@ export function registerWallet(program: Command): void {
     });
 
   wallet
+    .command('login')
+    .description('Log in to the active wallet provider')
+    .option('--reset', 'clear saved credentials and session before logging in')
+    .action(async (subOpts: { reset?: boolean }, cmd) => {
+      const opts = cmd.optsWithGlobals() as GlobalOptions;
+      const cfg = resolveConfig(opts);
+      const provider = getProvider(cfg.walletProvider);
+      if (provider.login) {
+        await provider.login(cfg, { reset: subOpts.reset });
+        await printLoggedInProviderBalance(cfg, opts);
+      } else {
+        console.log(`${cfg.walletProvider} provider does not require login.`);
+      }
+    });
+
+  wallet
+    .command('logout')
+    .description('Log out of the active wallet provider')
+    .action(async (_subOpts, cmd) => {
+      const opts = cmd.optsWithGlobals() as GlobalOptions;
+      const cfg = resolveConfig(opts);
+      const provider = getProvider(cfg.walletProvider);
+      if (provider.logout) {
+        await provider.logout(cfg);
+      } else {
+        console.log(`${cfg.walletProvider} provider does not support logout.`);
+      }
+    });
+
+  wallet
+    .command('status')
+    .description('Show the current wallet provider and account status')
+    .action(async (_subOpts, cmd) => {
+      const opts = cmd.optsWithGlobals() as GlobalOptions;
+      const cfg = resolveConfig(opts);
+      const provider = getProvider(cfg.walletProvider);
+      await provider.status(cfg, opts);
+      await printLoggedInProviderBalance(cfg, opts);
+    });
+
+  wallet
     .command('address')
     .description('Print the address associated with the local account')
     .action(async (_subOpts, cmd) => {
@@ -143,6 +275,12 @@ export function registerWallet(program: Command): void {
     .action(async (_subOpts, cmd) => {
       const opts = cmd.optsWithGlobals() as GlobalOptions;
       const cfg = resolveConfig(opts);
+      const provider = getProvider(cfg.walletProvider);
+      if (!provider.exportPrivateKey) {
+        throw new Error(
+          `wallet export is not supported for the ${cfg.walletProvider} provider (remote key material is not exportable).`,
+        );
+      }
       if (!opts.privateKey && !keystoreExists(cfg.keystorePath)) {
         throw new Error(
           `No keystore at ${cfg.keystorePath}. Run \`radius-cli wallet new\` or pass --private-key.`,
@@ -158,9 +296,7 @@ export function registerWallet(program: Command): void {
       if (opts.privateKey) {
         pk = normalizePrivateKey(opts.privateKey);
       } else {
-        const password = cfg.password
-          ?? (readPasswordless() ? '' : await promptPassword({ message: 'Keystore password:', mask: '*' }));
-        pk = await loadKeystorePrivateKey(cfg.keystorePath, password);
+        pk = await provider.exportPrivateKey(cfg);
       }
       const address = privateKeyToAccount(pk).address;
       if (opts.json) {
@@ -242,49 +378,25 @@ export function registerWallet(program: Command): void {
         address = await getOwnAddress(cfg, opts.privateKey);
       }
 
-      const client = makePublicClient(cfg);
-      const rusdWei = await client.getBalance({ address });
-      const rusd = formatEther(rusdWei);
-
-      let sbc = '0';
-      let sbcRawWei = 0n;
-      let sbcError: string | null = null;
-      try {
-        sbcRawWei = await client.readContract({
-          address: cfg.sbcAddress!,
-          abi: ERC20_TRANSFER_ABI,
-          functionName: 'balanceOf',
-          args: [address],
-        });
-        sbc = formatUnits(sbcRawWei, SBC_DECIMALS);
-      } catch (e) {
-        sbcError = e instanceof Error ? e.message : String(e);
-      }
-
-      const total = Number(rusd) + Number(sbc);
+      const balance = await readWalletBalance(cfg, address);
 
       if (opts.json) {
         console.log(
           jsonStringify({
             address,
-            totalUsd: total,
-            sbc,
-            rusd,
-            sbcWei: sbcRawWei.toString(),
-            rusdWei: rusdWei.toString(),
-            sbcError,
+            totalUsd: Number(balance.total),
+            sbc: balance.sbc,
+            rusd: balance.rusd,
+            sbcWei: balance.sbcRawWei.toString(),
+            rusdWei: balance.nativeWei.toString(),
+            totalWei: balance.aggregateWei.toString(),
+            sbcError: balance.sbcError,
           }),
         );
         return;
       }
       console.log(`Address: ${address}`);
-      if (sbcError) {
-        console.log(`Balance: $${rusd} ($${formatUsd(rusd)} RUSD; SBC unavailable)`);
-      } else {
-        console.log(
-          `Balance: $${formatUsdShort(total)} ($${formatUsd(sbc)} SBC + $${formatUsd(rusd)} RUSD)`,
-        );
-      }
+      console.log(formatBalanceLine(balance));
     });
 
   wallet
@@ -321,10 +433,7 @@ export function registerWallet(program: Command): void {
           return;
         }
         if (symbol === 'SBC') {
-          if (!cfg.sbcAddress) {
-            throw new Error('SBC contract address is not configured. Set RADIUS_SBC_ADDRESS or pass --sbc.');
-          }
-          await sendErc20(cfg, cfg.sbcAddress, to, amount, SBC_DECIMALS, opts, wait, gas);
+          await sendSbc(cfg, to, amount, opts, wait, gas);
           return;
         }
       }
@@ -357,6 +466,66 @@ function parseGasLimit(input: string | undefined): bigint | undefined {
   }
   if (value <= 0n) throw new Error(`--gas-limit must be positive, got: ${input}`);
   return value;
+}
+
+function decodeSolidityErrorString(text: string): string | null {
+  if (!text.startsWith('0x08c379a0')) return null;
+  try {
+    const decoded = decodeErrorResult({ abi: SOLIDITY_ERROR_ABI, data: text as Hex });
+    return decoded.errorName === 'Error' && typeof decoded.args[0] === 'string'
+      ? decoded.args[0]
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function collectErrorText(value: unknown, seen = new WeakSet<object>(), depth = 0): string[] {
+  if (depth > 5 || value === null || value === undefined) return [];
+  if (typeof value === 'string') return [value, decodeSolidityErrorString(value)].filter((v): v is string => !!v);
+  if (typeof value !== 'object') return [String(value)];
+
+  if (seen.has(value)) return [];
+  seen.add(value);
+
+  const text: string[] = [];
+  if (value instanceof Error) {
+    text.push(value.message);
+    text.push(...collectErrorText(value.cause, seen, depth + 1));
+  }
+  for (const child of Object.values(value as Record<string, unknown>)) {
+    if (typeof child === 'string' || typeof child === 'object') {
+      text.push(...collectErrorText(child, seen, depth + 1));
+    }
+  }
+  return text;
+}
+
+function isTransferAmountExceedsBalanceError(error: unknown): boolean {
+  return collectErrorText(error).some((text) => text.includes('transfer amount exceeds balance'));
+}
+
+function formatTurnstileSpendableBalanceError(args: {
+  balanceRaw: bigint;
+  attemptedRaw: bigint;
+}): string {
+  const balance = formatUnits(args.balanceRaw, SBC_DECIMALS);
+  const attempted = formatUnits(args.attemptedRaw, SBC_DECIMALS);
+  const reserve = formatUnits(TURNSTILE_SBC_RESERVE_RAW, SBC_DECIMALS);
+
+  const lines = [
+    `SBC transfer failed: attempted to send ${attempted} SBC from a wallet with ${balance} SBC.`,
+    `On Radius, up to ${reserve} SBC can be reserved for Turnstile gas backing and may not be spendable by the sender.`,
+  ];
+
+  if (args.balanceRaw <= TURNSTILE_SBC_RESERVE_RAW) {
+    lines.push(`Top up the sender above ${reserve} SBC before sending SBC.`);
+  } else {
+    const spendable = formatUnits(args.balanceRaw - TURNSTILE_SBC_RESERVE_RAW, SBC_DECIMALS);
+    lines.push(`Estimated spendable SBC after the Turnstile reserve: ${spendable}. Reduce the amount or top up the sender.`);
+  }
+
+  return lines.join('\n');
 }
 
 async function sendNative(
@@ -417,6 +586,37 @@ async function sendErc20(
     chain: cfg.chain,
   });
   await reportTx(publicClient, hash, opts, wait);
+}
+
+async function sendSbc(
+  cfg: ReturnType<typeof resolveConfig>,
+  to: string,
+  amount: string,
+  opts: GlobalOptions,
+  wait: boolean,
+  gas: bigint | undefined,
+): Promise<void> {
+  if (!cfg.sbcAddress) {
+    throw new Error('SBC contract address is not configured. Set RADIUS_SBC_ADDRESS or pass --sbc.');
+  }
+  try {
+    await sendErc20(cfg, cfg.sbcAddress, to, amount, SBC_DECIMALS, opts, wait, gas);
+  } catch (e) {
+    if (!isTransferAmountExceedsBalanceError(e)) throw e;
+
+    const account = await requireAccount(cfg, opts.privateKey);
+    const publicClient = makePublicClient(cfg);
+    const balanceRaw = await publicClient.readContract({
+      address: cfg.sbcAddress,
+      abi: ERC20_TRANSFER_ABI,
+      functionName: 'balanceOf',
+      args: [account.address],
+    });
+    throw new Error(formatTurnstileSpendableBalanceError({
+      balanceRaw,
+      attemptedRaw: parseUnits(amount, SBC_DECIMALS),
+    }));
+  }
 }
 
 async function sendCastForm(

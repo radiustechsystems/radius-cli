@@ -1,0 +1,346 @@
+import { input, password as promptPassword, select } from '@inquirer/prompts';
+import {
+  type Address,
+  type Hex,
+  type LocalAccount,
+  toHex,
+} from 'viem';
+import { toAccount } from 'viem/accounts';
+import { readProviderConfig, writeProviderConfig, deleteProviderConfig } from '../config.js';
+import { jsonStringify } from '../format.js';
+import { disableProviderTelemetry } from '../providerTelemetry.js';
+import { signLegacyTransaction } from './remoteSigning.js';
+import { deleteProviderSession, providerSessionPath, readProviderSession, writeProviderSession } from './session.js';
+import type { ResolvedConfig, GlobalOptions } from '../../types.js';
+import type { WalletProvider } from './types.js';
+
+const PRIVY_API_BASE = 'https://api.privy.io/v1';
+const SESSION_FILE = 'privy-session.json';
+
+interface PrivySession {
+  walletId: string;
+  address: string;
+}
+
+interface PrivyCredentials {
+  appId: string;
+  appSecret: string;
+}
+
+interface PrivyWallet {
+  id: string;
+  address: string;
+}
+
+function readSession(): PrivySession | null {
+  return readProviderSession<PrivySession>(SESSION_FILE);
+}
+
+function writeSession(session: PrivySession): void {
+  writeProviderSession(SESSION_FILE, session);
+}
+
+function deleteSession(): void {
+  deleteProviderSession(SESSION_FILE);
+}
+
+async function resolveCredentials(opts: { interactive?: boolean } = {}): Promise<PrivyCredentials> {
+  disableProviderTelemetry('privy');
+  const config = readProviderConfig('privy');
+  const appId = process.env.PRIVY_APP_ID ?? config.appId;
+  const appSecret = process.env.PRIVY_APP_SECRET ?? config.appSecret;
+
+  if (appId && appSecret) return { appId, appSecret };
+
+  if (opts.interactive && process.stdin.isTTY) {
+    const prompted: PrivyCredentials = {
+      appId: appId ?? await input({ message: 'Privy App ID:' }),
+      appSecret: appSecret ?? await promptPassword({ message: 'Privy App Secret:', mask: '*' }),
+    };
+    if (!prompted.appId.trim() || !prompted.appSecret.trim()) {
+      throw new Error('Both Privy App ID and App Secret are required.');
+    }
+    writeProviderConfig('privy', {
+      appId: prompted.appId.trim(),
+      appSecret: prompted.appSecret.trim(),
+    });
+    console.log('Privy credentials saved to ~/.radius/config.json');
+    return prompted;
+  }
+
+  const missing = [
+    !appId && 'PRIVY_APP_ID',
+    !appSecret && 'PRIVY_APP_SECRET',
+  ].filter(Boolean);
+
+  throw new Error(
+    `Privy credentials not configured (missing: ${missing.join(', ')}).\n` +
+    'Run `radius-cli --wallet privy wallet login` to set them up,\n' +
+    'or set PRIVY_APP_ID and PRIVY_APP_SECRET environment variables.\n' +
+    'Get credentials from https://dashboard.privy.io',
+  );
+}
+
+function authHeaders(creds: PrivyCredentials): Record<string, string> {
+  const basic = Buffer.from(`${creds.appId}:${creds.appSecret}`).toString('base64');
+  return {
+    'authorization': `Basic ${basic}`,
+    'privy-app-id': creds.appId,
+    'content-type': 'application/json',
+  };
+}
+
+function parsePrivyWallets(json: unknown): PrivyWallet[] {
+  const obj = json as { data?: unknown; wallets?: unknown; items?: unknown };
+  const maybeWallets = Array.isArray(json)
+    ? json
+    : Array.isArray(obj.data)
+      ? obj.data
+      : Array.isArray(obj.wallets)
+        ? obj.wallets
+        : Array.isArray(obj.items)
+          ? obj.items
+          : [];
+
+  return maybeWallets.flatMap((wallet) => {
+    const candidate = wallet as { id?: unknown; address?: unknown };
+    return typeof candidate.id === 'string' && typeof candidate.address === 'string'
+      ? [{ id: candidate.id, address: candidate.address }]
+      : [];
+  });
+}
+
+async function listPrivyWallets(creds: PrivyCredentials): Promise<PrivyWallet[]> {
+  const res = await fetch(`${PRIVY_API_BASE}/wallets`, {
+    method: 'GET',
+    headers: authHeaders(creds),
+  });
+  if (!res.ok) return [];
+  return parsePrivyWallets(await res.json());
+}
+
+async function fetchPrivyWallet(creds: PrivyCredentials, walletId: string): Promise<PrivyWallet> {
+  const res = await fetch(`${PRIVY_API_BASE}/wallets/${walletId}`, {
+    method: 'GET',
+    headers: authHeaders(creds),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Failed to fetch wallet ${walletId}: ${res.status} ${text}`);
+  }
+  return await res.json() as PrivyWallet;
+}
+
+async function createPrivyWallet(creds: PrivyCredentials): Promise<PrivyWallet> {
+  const res = await fetch(`${PRIVY_API_BASE}/wallets`, {
+    method: 'POST',
+    headers: authHeaders(creds),
+    body: JSON.stringify({ chain_type: 'ethereum' }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Failed to create wallet: ${res.status} ${text}`);
+  }
+  return await res.json() as PrivyWallet;
+}
+
+async function choosePrivySession(creds: PrivyCredentials): Promise<PrivySession> {
+  const wallets = await listPrivyWallets(creds).catch(() => []);
+
+  if (wallets.length > 0 && process.stdin.isTTY) {
+    const choice = await select<{ type: 'existing'; wallet: PrivyWallet } | { type: 'new' } | { type: 'manual' }>({
+      message: 'Privy wallet:',
+      choices: [
+        ...wallets.map((wallet) => ({
+          name: `${wallet.address} (${wallet.id})`,
+          value: { type: 'existing' as const, wallet },
+        })),
+        { name: 'Create a new wallet', value: { type: 'new' as const } },
+        { name: 'Enter wallet ID manually', value: { type: 'manual' as const } },
+      ],
+    });
+
+    if (choice.type === 'existing') {
+      return { walletId: choice.wallet.id, address: choice.wallet.address };
+    }
+    if (choice.type === 'new') {
+      const wallet = await createPrivyWallet(creds);
+      console.log(`Created new Privy wallet`);
+      return { walletId: wallet.id, address: wallet.address };
+    }
+  }
+
+  const walletId = await input({
+    message: 'Privy wallet ID (leave empty to create new):',
+  });
+
+  if (walletId.trim()) {
+    const wallet = await fetchPrivyWallet(creds, walletId.trim());
+    return { walletId: wallet.id, address: wallet.address };
+  }
+
+  const wallet = await createPrivyWallet(creds);
+  console.log(`Created new Privy wallet`);
+  return { walletId: wallet.id, address: wallet.address };
+}
+
+async function privyRpc(
+  creds: PrivyCredentials,
+  walletId: string,
+  method: string,
+  params: Record<string, unknown>,
+  caip2?: string,
+): Promise<unknown> {
+  const body: Record<string, unknown> = { method, params };
+  if (caip2) body.caip2 = caip2;
+
+  const res = await fetch(`${PRIVY_API_BASE}/wallets/${walletId}/rpc`, {
+    method: 'POST',
+    headers: authHeaders(creds),
+    body: JSON.stringify(body, (_, v) => (typeof v === 'bigint' ? v.toString() : v)),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    let detail = '';
+    try {
+      const err = JSON.parse(text) as { error?: { message?: string } };
+      detail = err.error?.message ?? text;
+    } catch {
+      detail = text;
+    }
+    throw new Error(`Privy RPC ${method} failed (${res.status}): ${detail}`);
+  }
+
+  const json = await res.json() as { data?: unknown; method?: string };
+  return json.data;
+}
+
+function buildPrivyAccount(session: PrivySession, creds: PrivyCredentials): LocalAccount {
+  return toAccount({
+    address: session.address as Address,
+
+    async sign({ hash }) {
+      const data = await privyRpc(creds, session.walletId, 'secp256k1_sign', {
+        hash,
+      });
+      return (data as { signature: string }).signature as Hex;
+    },
+
+    async signMessage({ message }) {
+      let hexMessage: string;
+      if (typeof message === 'string') {
+        hexMessage = toHex(new TextEncoder().encode(message));
+      } else if (message.raw instanceof Uint8Array) {
+        hexMessage = toHex(message.raw);
+      } else {
+        hexMessage = message.raw;
+      }
+
+      const data = await privyRpc(creds, session.walletId, 'personal_sign', {
+        message: hexMessage,
+        encoding: 'hex',
+      });
+      return (data as { signature: string }).signature as Hex;
+    },
+
+    async signTransaction(tx) {
+      return signLegacyTransaction(tx, async (hash) => {
+        const data = await privyRpc(creds, session.walletId, 'secp256k1_sign', { hash });
+        return (data as { signature: string }).signature as Hex;
+      });
+    },
+
+    async signTypedData(typedData) {
+      const data = await privyRpc(creds, session.walletId, 'eth_signTypedData_v4', {
+        typed_data: {
+          domain: typedData.domain,
+          types: typedData.types,
+          primary_type: typedData.primaryType,
+          message: typedData.message,
+        },
+      });
+      return (data as { signature: string }).signature as Hex;
+    },
+  });
+}
+
+export const privyProvider: WalletProvider = {
+  async login(_cfg: ResolvedConfig, opts?: { reset?: boolean }): Promise<void> {
+    if (opts?.reset) {
+      deleteSession();
+      deleteProviderConfig('privy');
+      console.log('Privy credentials and session cleared.');
+    }
+
+    const existing = readSession();
+    if (existing) {
+      console.log(`Already logged in with Privy (${existing.address})`);
+      console.log('Run `radius-cli --wallet privy wallet logout` first to switch wallets.');
+      return;
+    }
+
+    const creds = await resolveCredentials({ interactive: true });
+    const session = await choosePrivySession(creds);
+
+    writeSession(session);
+    console.log(`Address: ${session.address}`);
+    console.log(`Wallet ID: ${session.walletId}`);
+    console.log(`Session saved to ${providerSessionPath(SESSION_FILE)}`);
+  },
+
+  async logout(_cfg: ResolvedConfig): Promise<void> {
+    const session = readSession();
+    if (!session) {
+      console.log('Not logged in to Privy.');
+      return;
+    }
+    deleteSession();
+    console.log(`Logged out of Privy (${session.address}).`);
+  },
+
+  async status(_cfg: ResolvedConfig, opts: GlobalOptions): Promise<void> {
+    const session = readSession();
+    if (opts.json) {
+      console.log(jsonStringify({
+        provider: 'privy',
+        loggedIn: !!session,
+        address: session?.address ?? null,
+        walletId: session?.walletId ?? null,
+      }));
+      return;
+    }
+    console.log('Provider: privy');
+    if (session) {
+      console.log(`Address:   ${session.address}`);
+      console.log(`Wallet ID: ${session.walletId}`);
+    } else {
+      console.log('Status:    not logged in');
+      console.log('Run `radius-cli --wallet privy wallet login` to set up Privy.');
+    }
+  },
+
+  async getAccount(_cfg: ResolvedConfig): Promise<LocalAccount> {
+    const session = readSession();
+    if (!session) {
+      throw new Error(
+        'Not logged in to Privy. Run `radius-cli --wallet privy wallet login` first.',
+      );
+    }
+    const creds = await resolveCredentials();
+    return buildPrivyAccount(session, creds);
+  },
+
+  async getAddress(_cfg: ResolvedConfig): Promise<Address> {
+    const session = readSession();
+    if (!session) {
+      throw new Error(
+        'Not logged in to Privy. Run `radius-cli --wallet privy wallet login` first.',
+      );
+    }
+    return session.address as Address;
+  },
+
+  // Privy uses server-side MPC — no exportable private key.
+  // Omitting exportPrivateKey makes wallet.ts throw the appropriate error.
+};
