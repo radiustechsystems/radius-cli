@@ -41,6 +41,12 @@ import {
   signPermit2WitnessTransfer,
 } from '../lib/x402/permit2.js';
 import type { GlobalOptions } from '../types.js';
+import {
+  EXIT_USAGE,
+  EXIT_BALANCE,
+  EXIT_NETWORK,
+  EXIT_PAYMENT,
+} from '../lib/exitCodes.js';
 
 interface SubOptions {
   header?: string[];
@@ -98,7 +104,7 @@ async function runX402(
   const verb = verbArg.toLowerCase();
   if (!isSupportedVerb(verb)) {
     process.stderr.write(`x402: unsupported verb '${verbArg}' (use one of ${SUPPORTED_VERBS.join(', ')})\n`);
-    process.exit(2);
+    process.exit(EXIT_USAGE);
   }
 
   const reqHeaders = parseHeaderArgs(subOpts.header);
@@ -110,7 +116,7 @@ async function runX402(
   const initial = await runRequest(verb as HttpVerb, url, { headers: reqHeaders, body });
   if (initial.status !== 402) {
     emit(initial, null, !!opts.json, !!subOpts.include);
-    process.exit(initial.status >= 400 ? 1 : 0);
+    process.exit(initial.status >= 400 ? EXIT_NETWORK : 0);
   }
 
   const cfg = resolveConfig(opts);
@@ -130,7 +136,7 @@ async function runX402(
       `x402: server returned 402 but no valid challenge in ${paymentRequired ? 'PAYMENT-REQUIRED header' : 'body'}: ${(e as Error).message}\n`,
     );
     process.stderr.write(safeBodyPreview(initial.body));
-    process.exit(2);
+    process.exit(EXIT_PAYMENT);
   }
 
   const accept = pickAccept(challenge.accepts, cfg.chain.id);
@@ -141,7 +147,7 @@ async function runX402(
     process.stderr.write(
       `x402: no compatible payment option. Wanted scheme=exact network=${networkIdForChain(cfg.chain.id)}; server offered: ${offered}\n`,
     );
-    process.exit(1);
+    process.exit(EXIT_PAYMENT);
   }
 
   const account = await requireAccount(cfg, opts.privateKey);
@@ -154,7 +160,7 @@ async function runX402(
     process.stderr.write(
       `x402: failed to read asset metadata at ${accept.asset}: ${(e as Error).message}\n`,
     );
-    process.exit(1);
+    process.exit(EXIT_NETWORK);
   }
 
   const balance = await readBalance(client, accept.asset, account.address);
@@ -166,13 +172,13 @@ async function runX402(
     process.stderr.write(
       `x402: insufficient balance. Need ${amountStr} ${symbol}, have ${balanceStr} ${symbol}.\n`,
     );
-    process.exit(1);
+    process.exit(EXIT_BALANCE);
   }
 
   const decided = await decideAutoPay(subOpts, accept, asset.decimals);
   if (decided === 'refuse-no-tty') {
     writeChallengeSummary(accept, asset.decimals, asset.symbol, balanceStr);
-    process.exit(2);
+    process.exit(EXIT_USAGE);
   }
   if (decided === 'prompt') {
     const proceed = await confirm({
@@ -181,7 +187,7 @@ async function runX402(
     });
     if (!proceed) {
       process.stderr.write('x402: payment declined.\n');
-      process.exit(1);
+      process.exit(EXIT_PAYMENT);
     }
   }
 
@@ -246,7 +252,7 @@ async function runX402(
       process.stderr.write(
         `x402: failed to sign permit2 payment: ${(e as Error).message}\n`,
       );
-      process.exit(1);
+      process.exit(EXIT_PAYMENT);
     }
   } else if (settlementSpender) {
     try {
@@ -274,7 +280,7 @@ async function runX402(
       process.stderr.write(
         `x402: failed to sign EIP-2612 permit: ${(e as Error).message}\n`,
       );
-      process.exit(1);
+      process.exit(EXIT_PAYMENT);
     }
   } else {
     const authorization = makeAuthorization({
@@ -297,7 +303,7 @@ async function runX402(
       process.stderr.write(
         `x402: failed to sign EIP-3009 authorization (asset may not support transferWithAuthorization): ${(e as Error).message}\n`,
       );
-      process.exit(1);
+      process.exit(EXIT_PAYMENT);
     }
 
     paymentHeader = encodePaymentHeader({
@@ -328,7 +334,7 @@ async function runX402(
       process.stderr.write(
         'x402: server redirected the paid request cross-origin; refusing to replay X-PAYMENT.\n',
       );
-      process.exit(1);
+      process.exit(EXIT_NETWORK);
     }
   }
 
@@ -358,11 +364,11 @@ async function runX402(
     if (opts.json) {
       console.log(jsonStringify(envelope(retry, { ...summary, paid: false })));
     }
-    process.exit(1);
+    process.exit(EXIT_PAYMENT);
   }
 
   emit(retry, summary, !!opts.json, !!subOpts.include);
-  process.exit(retry.status >= 400 ? 1 : 0);
+  process.exit(retry.status >= 400 ? EXIT_NETWORK : 0);
 }
 
 type Decision = 'auto-pay' | 'prompt' | 'refuse-no-tty';

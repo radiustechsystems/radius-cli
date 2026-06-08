@@ -8,6 +8,14 @@ import { registerStorage } from './commands/storage.js';
 import { registerTx } from './commands/tx.js';
 import { registerWallet } from './commands/wallet.js';
 import { readWalletProvider } from './lib/config.js';
+import {
+  CliError,
+  EXIT_GENERAL_ERROR,
+  EXIT_AUTH,
+  EXIT_BALANCE,
+  EXIT_CONFIG,
+  EXIT_NETWORK,
+} from './lib/exitCodes.js';
 
 const program = new Command();
 
@@ -40,6 +48,19 @@ async function main(): Promise<void> {
   }
 }
 
+function inferExitCode(msg: string): number {
+  const lower = msg.toLowerCase();
+  if (lower.includes('not logged in') || lower.includes('unauthorized') || lower.includes('not configured'))
+    return EXIT_AUTH;
+  if (lower.includes('not configured') || lower.includes('missing') || lower.includes('must be one of'))
+    return EXIT_CONFIG;
+  if (lower.includes('insufficient balance') || lower.includes('transfer amount exceeds balance'))
+    return EXIT_BALANCE;
+  if (lower.includes('rpc request failed') || lower.includes('exec failed') || lower.includes('execution reverted'))
+    return EXIT_NETWORK;
+  return EXIT_GENERAL_ERROR;
+}
+
 main().catch((err: unknown) => {
   let msg: string;
   if (err instanceof Error) {
@@ -50,6 +71,7 @@ main().catch((err: unknown) => {
   } else {
     msg = String(err);
   }
+  const exitCode = err instanceof CliError ? err.exitCode : inferExitCode(msg);
   process.stderr.write(`error: ${msg}\n`);
-  process.exit(1);
+  process.exit(exitCode);
 });
