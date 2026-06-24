@@ -70,7 +70,12 @@ Verbs: `get`, `post`, `put`, `patch`, `delete`, `head`, `options`.
 
 `-d, --data` accepts a literal string, `-d @path` to read from a file, or `-d -` to read from stdin. JSON-shaped bodies default to `Content-Type: application/json` unless one is set with `-H`.
 
-`--x402-threshold <decimal>` is in the asset's display units (e.g. `0.05` means 0.05 SBC, which is $0.05 since SBC is USD-pegged). When the offered fee is at or below the threshold, the request pays without prompting — designed for AI agents and other non-interactive use. With no threshold and no TTY, the command refuses (exit 2) rather than hang. The `exact` x402 scheme on EVM is supported (uses EIP-3009 `transferWithAuthorization`); the asset must implement it on the configured network.
+`--x402-threshold <decimal>` is in the asset's display units (e.g. `0.05` means 0.05 SBC, which is $0.05 since SBC is USD-pegged). When the offered fee is at or below the threshold, the request pays without prompting — designed for AI agents and other non-interactive use. For the `upto` scheme the threshold is compared against the authorized maximum. With no threshold and no TTY, the command refuses (exit 2) rather than hang.
+
+Both x402 v1 and v2 are supported, selected automatically from the server's advertised `x402Version`:
+
+- **`exact`** (v1, EIP-3009 `transferWithAuthorization`) — a fixed price; the asset must implement EIP-3009 on the configured network.
+- **`upto`** (v2, Uniswap Permit2 `permitWitnessTransferFrom` via the `x402UptoPermit2Proxy`) — the client signs a Permit2 authorization up to a maximum and the facilitator settles the actual usage (which may be less, or zero). `upto` needs a one-time ERC-20 `approve` for the canonical Permit2 contract; pass `--x402-approve-permit2` (or `-y`) to send it automatically, otherwise the CLI prompts.
 
 Body goes to stdout; payment confirmation and (optionally, with `--include`) headers go to stderr — pipeable.
 
