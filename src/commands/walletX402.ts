@@ -20,6 +20,7 @@ import {
 import {
   decodePaymentResponse,
   networkIdForChain,
+  parseUptoSettlementAmount,
   parseChallenge,
   V1_PAYMENT_RESPONSE_HEADER,
   V2_PAYMENT_REQUIRED_HEADER,
@@ -254,12 +255,28 @@ async function runX402(
   const xpr =
     retry.headers.get(V2_PAYMENT_RESPONSE_HEADER) ?? retry.headers.get(V1_PAYMENT_RESPONSE_HEADER);
   if (xpr) {
-    try { paymentResponse = decodePaymentResponse(xpr); } catch { /* ignore malformed */ }
+    try {
+      paymentResponse = decodePaymentResponse(xpr);
+    } catch (e) {
+      if (handler.scheme === 'upto') {
+        process.stderr.write(`x402: invalid upto payment response: ${(e as Error).message}\n`);
+        process.exit(1);
+      }
+    }
   }
 
   // For upto the facilitator reports the actual charged amount; fall back to the max.
-  const settledWei = paymentResponse?.amount ?? accept.maxAmountRequired.toString();
-  const settledStr = formatUnits(BigInt(settledWei), asset.decimals);
+  let settledAmount = accept.maxAmountRequired;
+  if (handler.scheme === 'upto' && paymentResponse?.amount !== undefined) {
+    try {
+      settledAmount = parseUptoSettlementAmount(paymentResponse.amount, accept.maxAmountRequired);
+    } catch (e) {
+      process.stderr.write(`x402: invalid upto payment response: ${(e as Error).message}\n`);
+      process.exit(1);
+    }
+  }
+  const settledWei = settledAmount.toString();
+  const settledStr = formatUnits(settledAmount, asset.decimals);
 
   const summary: PaymentSummary = {
     paid: retry.status >= 200 && retry.status < 300,

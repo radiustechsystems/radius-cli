@@ -61,6 +61,25 @@ export interface PaymentResponseBody {
   errorReason?: string | null;
 }
 
+/**
+ * Validate the settlement amount returned for an `upto` payment.
+ *
+ * The amount is expressed in atomic units and is an untrusted receipt field: a
+ * client must never present a value above the maximum it authorized.
+ */
+export function parseUptoSettlementAmount(amount: string, maximum: bigint): bigint {
+  if (!/^[0-9]+$/.test(amount)) {
+    throw new Error("x402 payment response: 'amount' must be a non-negative integer string");
+  }
+  const settled = BigInt(amount);
+  if (settled > maximum) {
+    throw new Error(
+      `x402 payment response: settlement amount ${settled} exceeds authorized maximum ${maximum}`,
+    );
+  }
+  return settled;
+}
+
 function asObject(v: unknown): Record<string, unknown> {
   if (v === null || typeof v !== 'object' || Array.isArray(v)) {
     throw new Error('x402 challenge: expected JSON object');
@@ -186,12 +205,15 @@ export function encodeBase64Json(value: unknown): string {
 export function decodePaymentResponse(headerValue: string): PaymentResponseBody {
   const json = Buffer.from(headerValue, 'base64').toString('utf8');
   const obj = JSON.parse(json) as Record<string, unknown>;
+  if (obj.amount !== undefined && (typeof obj.amount !== 'string' || !/^[0-9]+$/.test(obj.amount))) {
+    throw new Error("x402 payment response: 'amount' must be a non-negative integer string");
+  }
   return {
     success: obj.success === true,
     transaction: typeof obj.transaction === 'string' ? obj.transaction : undefined,
     network: typeof obj.network === 'string' ? obj.network : undefined,
     payer: typeof obj.payer === 'string' ? obj.payer : undefined,
-    amount: typeof obj.amount === 'string' ? obj.amount : undefined,
+    amount: obj.amount as string | undefined,
     errorReason: typeof obj.errorReason === 'string' ? obj.errorReason : null,
   };
 }

@@ -5,6 +5,7 @@ import {
   encodePaymentHeader,
   networkIdForChain,
   networkMatchesChain,
+  parseUptoSettlementAmount,
   parseChallenge,
 } from '../src/lib/x402/protocol.js';
 
@@ -170,5 +171,28 @@ describe('encodePaymentHeader / decodePaymentResponse', () => {
     expect(decoded.success).toBe(true);
     expect(decoded.amount).toBe('0');
     expect(decoded.transaction).toBe('');
+  });
+
+  it('rejects a malformed payment-response amount', () => {
+    const header = Buffer.from(JSON.stringify({ success: true, amount: '-1' }), 'utf8').toString('base64');
+    expect(() => decodePaymentResponse(header)).toThrow(/non-negative integer/);
+  });
+});
+
+describe('parseUptoSettlementAmount', () => {
+  it('accepts a zero or partial settlement within the authorized maximum', () => {
+    expect(parseUptoSettlementAmount('0', 100n)).toBe(0n);
+    expect(parseUptoSettlementAmount('60', 100n)).toBe(60n);
+    expect(parseUptoSettlementAmount('100', 100n)).toBe(100n);
+  });
+
+  it('rejects malformed or negative settlement amounts', () => {
+    expect(() => parseUptoSettlementAmount('-1', 100n)).toThrow(/non-negative integer/);
+    expect(() => parseUptoSettlementAmount('1.5', 100n)).toThrow(/non-negative integer/);
+    expect(() => parseUptoSettlementAmount('nope', 100n)).toThrow(/non-negative integer/);
+  });
+
+  it('rejects a settlement above the signed maximum', () => {
+    expect(() => parseUptoSettlementAmount('101', 100n)).toThrow(/exceeds authorized maximum/);
   });
 });
