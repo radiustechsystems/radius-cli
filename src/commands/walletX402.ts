@@ -19,6 +19,7 @@ import {
 } from '../lib/x402/http.js';
 import {
   decodePaymentResponse,
+  hasSuccessfulPaymentResponse,
   networkIdForChain,
   parseUptoSettlementAmount,
   parseChallenge,
@@ -279,7 +280,7 @@ async function runX402(
   const settledStr = formatUnits(settledAmount, asset.decimals);
 
   const summary: PaymentSummary = {
-    paid: retry.status >= 200 && retry.status < 300,
+    paid: retry.status >= 200 && retry.status < 300 && hasSuccessfulPaymentResponse(paymentResponse),
     scheme: handler.scheme,
     asset: accept.asset,
     assetSymbol: asset.symbol,
@@ -300,6 +301,12 @@ async function runX402(
       console.log(jsonStringify(envelope(retry, { ...summary, paid: false })));
     }
     process.exit(1);
+  }
+
+  if (retry.status >= 200 && retry.status < 300 && !summary.paid) {
+    process.stderr.write(
+      'x402: HTTP request succeeded, but payment settlement was not confirmed by a successful payment response.\n',
+    );
   }
 
   emit(retry, summary, !!opts.json, !!subOpts.include);

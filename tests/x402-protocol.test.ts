@@ -3,6 +3,7 @@ import {
   chainIdForNetwork,
   decodePaymentResponse,
   encodePaymentHeader,
+  hasSuccessfulPaymentResponse,
   networkIdForChain,
   networkMatchesChain,
   parseUptoSettlementAmount,
@@ -176,6 +177,18 @@ describe('encodePaymentHeader / decodePaymentResponse', () => {
   it('rejects a malformed payment-response amount', () => {
     const header = Buffer.from(JSON.stringify({ success: true, amount: '-1' }), 'utf8').toString('base64');
     expect(() => decodePaymentResponse(header)).toThrow(/non-negative integer/);
+  });
+
+  it('does not treat an unsuccessful receipt as settled', () => {
+    const header = Buffer.from(JSON.stringify({ success: false, errorReason: 'settlement_failed' }), 'utf8')
+      .toString('base64');
+    expect(hasSuccessfulPaymentResponse(decodePaymentResponse(header))).toBe(false);
+    expect(hasSuccessfulPaymentResponse(null)).toBe(false);
+  });
+
+  it('treats an explicit successful receipt as settled', () => {
+    const header = Buffer.from(JSON.stringify({ success: true }), 'utf8').toString('base64');
+    expect(hasSuccessfulPaymentResponse(decodePaymentResponse(header))).toBe(true);
   });
 });
 

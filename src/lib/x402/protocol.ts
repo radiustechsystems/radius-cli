@@ -61,6 +61,11 @@ export interface PaymentResponseBody {
   errorReason?: string | null;
 }
 
+/** A payment receipt substantiates settlement only when it explicitly reports success. */
+export function hasSuccessfulPaymentResponse(response: PaymentResponseBody | null): boolean {
+  return response?.success === true;
+}
+
 /**
  * Validate the settlement amount returned for an `upto` payment.
  *
