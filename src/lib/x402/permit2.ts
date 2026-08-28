@@ -15,6 +15,10 @@ export const CANONICAL_PERMIT2_ADDRESS: Address =
 export const X402_UPTO_PERMIT2_PROXY: Address =
   '0x4020A4f3b7b90ccA423B9fabCc0CE57C6C240002';
 
+/** x402ExactPermit2Proxy — the Permit2 spender for exact@v2. */
+export const X402_EXACT_PERMIT2_PROXY: Address =
+  '0x402085c248EeA27D92E8b30b2C58ed07f9E20001';
+
 // EIP-712 type set for the `upto` permit. Confirmed against the deployed
 // x402UptoPermit2Proxy: WITNESS_TYPEHASH = keccak256(
 //   "Witness(address to,address facilitator,uint256 validAfter)"). The Witness
@@ -36,6 +40,24 @@ export const PERMIT2_UPTO_TYPES = {
   Witness: [
     { name: 'to', type: 'address' },
     { name: 'facilitator', type: 'address' },
+    { name: 'validAfter', type: 'uint256' },
+  ],
+} as const;
+
+export const PERMIT2_EXACT_TYPES = {
+  PermitWitnessTransferFrom: [
+    { name: 'permitted', type: 'TokenPermissions' },
+    { name: 'spender', type: 'address' },
+    { name: 'nonce', type: 'uint256' },
+    { name: 'deadline', type: 'uint256' },
+    { name: 'witness', type: 'Witness' },
+  ],
+  TokenPermissions: [
+    { name: 'token', type: 'address' },
+    { name: 'amount', type: 'uint256' },
+  ],
+  Witness: [
+    { name: 'to', type: 'address' },
     { name: 'validAfter', type: 'uint256' },
   ],
 } as const;
@@ -78,6 +100,15 @@ export interface Permit2Authorization {
   witness: Permit2Witness;
 }
 
+export interface ExactPermit2Authorization {
+  permitted: { token: Address; amount: bigint };
+  from: Address;
+  spender: Address;
+  nonce: bigint;
+  deadline: number;
+  witness: { to: Address; validAfter: number };
+}
+
 /** Random 256-bit Permit2 unordered nonce. */
 export function randomPermit2Nonce(): bigint {
   return BigInt(`0x${randomBytes(32).toString('hex')}`);
@@ -100,6 +131,25 @@ export function makePermit2Authorization(args: {
     nonce: randomPermit2Nonce(),
     deadline: now + window,
     witness: { to: args.payTo, facilitator: args.facilitator, validAfter: now },
+  };
+}
+
+export function makeExactPermit2Authorization(args: {
+  from: Address;
+  asset: Address;
+  payTo: Address;
+  amount: bigint;
+  maxTimeoutSeconds: number | undefined;
+}): ExactPermit2Authorization {
+  const window = Math.min(Math.max(args.maxTimeoutSeconds ?? 600, 1), 600);
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    permitted: { token: args.asset, amount: args.amount },
+    from: args.from,
+    spender: X402_EXACT_PERMIT2_PROXY,
+    nonce: randomPermit2Nonce(),
+    deadline: now + window,
+    witness: { to: args.payTo, validAfter: now },
   };
 }
 
@@ -134,6 +184,29 @@ export async function signPermit2Authorization(
         facilitator: a.witness.facilitator,
         validAfter: BigInt(a.witness.validAfter),
       },
+    },
+  });
+}
+
+export async function signExactPermit2Authorization(
+  account: PrivateKeyAccount,
+  args: { chainId: number; authorization: ExactPermit2Authorization; permit2?: Address },
+): Promise<Hex> {
+  const a = args.authorization;
+  return await account.signTypedData({
+    domain: {
+      name: 'Permit2',
+      chainId: args.chainId,
+      verifyingContract: args.permit2 ?? CANONICAL_PERMIT2_ADDRESS,
+    },
+    types: PERMIT2_EXACT_TYPES,
+    primaryType: 'PermitWitnessTransferFrom',
+    message: {
+      permitted: { token: a.permitted.token, amount: a.permitted.amount },
+      spender: a.spender,
+      nonce: a.nonce,
+      deadline: BigInt(a.deadline),
+      witness: { to: a.witness.to, validAfter: BigInt(a.witness.validAfter) },
     },
   });
 }

@@ -30,14 +30,15 @@ const EIP3009_TYPES = {
 export interface AssetInfo {
   decimals: number;
   symbol: string | null;
-  name: string;
-  version: string;
+  name?: string;
+  version?: string;
 }
 
 export async function readAssetInfo(
   client: PublicClient,
   asset: Address,
   extra: { name?: string; version?: string } | undefined,
+  requireEip3009Metadata = false,
 ): Promise<AssetInfo> {
   const decimals = (await client.readContract({
     address: asset,
@@ -57,7 +58,7 @@ export async function readAssetInfo(
   }
 
   let name = extra?.name;
-  if (!name) {
+  if (!name && requireEip3009Metadata) {
     name = (await client.readContract({
       address: asset,
       abi: ERC20_X402_ABI,
@@ -66,7 +67,7 @@ export async function readAssetInfo(
   }
 
   let version = extra?.version;
-  if (!version) {
+  if (!version && requireEip3009Metadata) {
     try {
       version = (await client.readContract({
         address: asset,

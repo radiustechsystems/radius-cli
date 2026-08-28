@@ -1,6 +1,6 @@
 import type { Command } from 'commander';
 import { confirm } from '@inquirer/prompts';
-import { encodeFunctionData, formatUnits, maxUint256, parseUnits, type Address } from 'viem';
+import { encodeFunctionData, formatUnits, parseUnits, type Address } from 'viem';
 import { resolveConfig } from '../lib/config.js';
 import { requireAccount } from '../lib/account.js';
 import { makePublicClient, makeWalletClient } from '../lib/client.js';
@@ -66,7 +66,7 @@ export function registerWalletX402(wallet: Command): void {
     .description(
       [
         'Make an HTTP request and pay an x402 challenge if the server responds with 402.',
-        'Supports x402 v1 (exact / EIP-3009) and v2 (upto / Permit2).',
+        'Supports x402 v1 exact (EIP-3009), plus v2 exact (EIP-3009 or Permit2) and upto (Permit2).',
         '',
         '  radius-cli wallet x402 get https://example.com/resource',
         '  radius-cli wallet x402 post https://api.example.com/x -d \'{"a":1}\'',
@@ -84,7 +84,7 @@ export function registerWalletX402(wallet: Command): void {
     .option('-y, --yes', 'auto-confirm payment regardless of amount')
     .option(
       '--x402-approve-permit2',
-      'auto-approve the one-time Permit2 ERC-20 allowance needed by the upto scheme',
+      'approve Permit2 for the exact amount needed by this payment',
     )
     .option('--include', 'write response status and headers to stderr')
     .action(async (verbArg: string, url: string, subOpts: SubOptions, cmd) => {
@@ -132,7 +132,7 @@ async function runX402(
   let accept: AcceptEntry | undefined;
   let handler: SchemeHandler | undefined;
   for (const candidate of challenge.accepts) {
-    const h = selectHandler(candidate, cfg.chain.id);
+    const h = selectHandler(challenge.x402Version, candidate, cfg.chain.id);
     if (h) {
       accept = candidate;
       handler = h;
@@ -145,7 +145,7 @@ async function runX402(
       .join(', ');
     process.stderr.write(
       `x402: no compatible payment option for network=${networkIdForChain(cfg.chain.id)}. ` +
-        `Supported: exact@v1, upto@v2. Server offered: ${offered}\n`,
+        `Supported: exact@v1, exact@v2 (EIP-3009 or Permit2), upto@v2. Server offered: ${offered}\n`,
     );
     process.exit(1);
   }
@@ -155,7 +155,12 @@ async function runX402(
 
   let asset;
   try {
-    asset = await readAssetInfo(client, accept.asset, accept.extra);
+    asset = await readAssetInfo(
+      client,
+      accept.asset,
+      accept.extra,
+      !!handler.requiresEip3009Metadata,
+    );
   } catch (e) {
     process.stderr.write(
       `x402: failed to read asset metadata at ${accept.asset}: ${(e as Error).message}\n`,
@@ -194,8 +199,7 @@ async function runX402(
     }
   }
 
-  // upto rides on Permit2: the payer must have a one-time ERC-20 approval for Permit2.
-  if (isUpto) {
+  if (handler.requiresPermit2Approval) {
     const ok = await ensurePermit2Allowance(
       client,
       cfg,
@@ -356,14 +360,14 @@ async function ensurePermit2Allowance(
   if (!auto) {
     if (!process.stdin.isTTY) {
       process.stderr.write(
-        `x402: upto requires a one-time Permit2 approval for ${symbol} (have ` +
+        `x402: this payment requires a Permit2 approval for ${symbol} (have ` +
           `${formatUnits(allowance, decimals)}, need ${needStr}). ` +
           'Re-run with --x402-approve-permit2 (or -y) to grant it.\n',
       );
       return false;
     }
     const proceed = await confirm({
-      message: `Approve Permit2 (${CANONICAL_PERMIT2_ADDRESS}) to spend ${symbol}? (one-time, required by upto)`,
+      message: `Approve Permit2 (${CANONICAL_PERMIT2_ADDRESS}) to spend ${needStr} ${symbol} for this payment?`,
       default: false,
     });
     if (!proceed) {
@@ -377,7 +381,9 @@ async function ensurePermit2Allowance(
     const data = encodeFunctionData({
       abi: PERMIT2_ALLOWANCE_ABI,
       functionName: 'approve',
-      args: [CANONICAL_PERMIT2_ADDRESS, maxUint256],
+      // A Permit2 transfer consumes ERC-20 allowance. Limit this approval to the
+      // payment being made rather than granting an unbounded token allowance.
+      args: [CANONICAL_PERMIT2_ADDRESS, accept.maxAmountRequired],
     });
     const gasPrice = await client.getGasPrice();
     const hash = await walletClient.sendTransaction({
