@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
+import { createRequire } from 'node:module';
 import { registerCall } from './commands/call.js';
 import { registerCode } from './commands/code.js';
 import { registerNonce } from './commands/nonce.js';
@@ -8,12 +9,15 @@ import { registerStorage } from './commands/storage.js';
 import { registerTx } from './commands/tx.js';
 import { registerWallet } from './commands/wallet.js';
 
+const require = createRequire(import.meta.url);
+const { version } = require('../package.json') as { version: string };
+
 const program = new Command();
 
 program
   .name('radius-cli')
   .description('CLI wallet for the Radius network — like cast, with a built-in account')
-  .version('0.1.0')
+  .version(version)
   .option('--network <name>', "'mainnet' or 'testnet' (default: mainnet)")
   .option('--rpc-url <url>', 'override the RPC URL')
   .option('--private-key <hex>', 'sign with this key instead of the local keystore')
