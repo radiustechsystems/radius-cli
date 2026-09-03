@@ -1,6 +1,6 @@
 import type { Command } from 'commander';
 import { confirm } from '@inquirer/prompts';
-import { encodeFunctionData, formatUnits, parseUnits, type Address } from 'viem';
+import { encodeFunctionData, formatUnits, maxUint256, parseUnits, type Address } from 'viem';
 import { resolveConfig } from '../lib/config.js';
 import { requireAccount } from '../lib/account.js';
 import { makePublicClient, makeWalletClient } from '../lib/client.js';
@@ -84,7 +84,7 @@ export function registerWalletX402(wallet: Command): void {
     .option('-y, --yes', 'auto-confirm payment regardless of amount')
     .option(
       '--x402-approve-permit2',
-      'approve Permit2 for the exact amount needed by this payment',
+      'grant Permit2 an unlimited token approval if one is missing (one-time setup)',
     )
     .option('--include', 'write response status and headers to stderr')
     .action(async (verbArg: string, url: string, subOpts: SubOptions, cmd) => {
@@ -330,6 +330,9 @@ function readChallenge(res: HttpResponse): unknown {
 /**
  * Ensure the payer has approved the canonical Permit2 contract for at least the
  * authorized max. Sends an approve tx if missing (prompting unless -y / --x402-approve-permit2).
+ * The approval is unlimited (MaxUint256): the x402 spec treats it as one-time setup, and
+ * per-payment limits are already enforced by the signed Permit2 authorization (exact amount,
+ * deadline, single-use nonce, witness-bound recipient).
  * Returns false when the user declines or there's no way to proceed.
  */
 async function ensurePermit2Allowance(
@@ -362,12 +365,15 @@ async function ensurePermit2Allowance(
       process.stderr.write(
         `x402: this payment requires a Permit2 approval for ${symbol} (have ` +
           `${formatUnits(allowance, decimals)}, need ${needStr}). ` +
-          'Re-run with --x402-approve-permit2 (or -y) to grant it.\n',
+          'Re-run with --x402-approve-permit2 (or -y) to grant a one-time unlimited approval.\n',
       );
       return false;
     }
     const proceed = await confirm({
-      message: `Approve Permit2 (${CANONICAL_PERMIT2_ADDRESS}) to spend ${needStr} ${symbol} for this payment?`,
+      message:
+        `Grant Permit2 (${CANONICAL_PERMIT2_ADDRESS}) an unlimited ${symbol} approval? ` +
+        `One-time setup; this payment needs ${needStr} ${symbol}, and every payment still ` +
+        'requires its own signed authorization.',
       default: false,
     });
     if (!proceed) {
@@ -381,9 +387,10 @@ async function ensurePermit2Allowance(
     const data = encodeFunctionData({
       abi: PERMIT2_ALLOWANCE_ABI,
       functionName: 'approve',
-      // A Permit2 transfer consumes ERC-20 allowance. Limit this approval to the
-      // payment being made rather than granting an unbounded token allowance.
-      args: [CANONICAL_PERMIT2_ADDRESS, accept.maxAmountRequired],
+      // Unlimited approval, per the x402 spec's "one-time gas approval" model: an
+      // exact-amount allowance would cost an approve tx on every payment, while the
+      // signed Permit2 authorization already caps what each payment can move.
+      args: [CANONICAL_PERMIT2_ADDRESS, maxUint256],
     });
     const gasPrice = await client.getGasPrice();
     const hash = await walletClient.sendTransaction({

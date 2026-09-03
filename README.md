@@ -77,7 +77,7 @@ Both x402 v1 and v2 are supported, selected automatically from the server's adve
 - **`exact`** — a fixed price. v1 and v2 support EIP-3009 `transferWithAuthorization`; v2 also supports any ERC-20 advertised with `assetTransferMethod: "permit2"`, signing a Uniswap Permit2 `permitWitnessTransferFrom` authorization through `x402ExactPermit2Proxy`.
 - **`upto`** (v2, Uniswap Permit2 `permitWitnessTransferFrom` via the `x402UptoPermit2Proxy`) — the client signs a Permit2 authorization up to a maximum and the facilitator settles the actual usage (which may be less, or zero).
 
-Permit2 payments require an ERC-20 approval for the canonical Permit2 contract. Pass `--x402-approve-permit2` (or `-y`) to submit the approval automatically; otherwise the CLI prompts. The CLI approves only the amount needed for that payment, never an unlimited allowance, so later Permit2 payments may need another approval.
+Permit2 payments require an ERC-20 approval for the canonical Permit2 contract. Pass `--x402-approve-permit2` (or `-y`) to submit the approval automatically; otherwise the CLI prompts. The approval is unlimited and one-time, matching the x402 spec's "one-time gas approval" model: subsequent Permit2 payments need no further approval transactions, and each payment is still individually authorized by a signed Permit2 message capped to that payment's amount.
 
 Body goes to stdout; payment confirmation and (optionally, with `--include`) headers go to stderr — pipeable.
 
