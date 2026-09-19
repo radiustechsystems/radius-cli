@@ -95,6 +95,37 @@ const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transa
   `RADIUS_RPC_URL`, `RADIUS_FACILITATOR_URL`, `RADIUS_ASSET_ADDRESS` (alias `RADIUS_SBC_ADDRESS`), `RADIUS_PRIVATE_KEY`,
   `RADIUS_MAX_PER_REQUEST`; on Workers pass `c.env`.
 
+## ERC-20 interactions
+
+Metadata, allowance, `approve`, `transfer`, `transferFrom` and `Transfer` events as viem actions,
+defaulting to SBC on Radius networks. Reads take any viem client; writes take a wallet client with
+an account and wait for the receipt (Radius finality is sub-second). Amounts are `bigint` atomic
+units or a display string such as `"1.5"`, parsed with the token's decimals.
+
+```ts
+import { createWalletClient, http } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { radiusTestnet, erc20Actions, SBC } from 'radius-sdk';
+
+const wallet = createWalletClient({ account: privateKeyToAccount(KEY), chain: radiusTestnet.chain, transport: http() })
+  .extend(erc20Actions());                                  // erc20Actions({ token }) to default another token
+
+await wallet.getTokenMetadata();                             // { name: 'Stable Coin', symbol: 'SBC', decimals: 6, totalSupply }
+await wallet.transfer({ to, amount: '1.50' });               // { hash, status: 'success', explorerUrl }
+await wallet.approve({ spender, amount: 2_000_000n });       // atomic units; wait: false returns after sending
+await wallet.getAllowance({ owner: wallet.account.address, spender });
+await wallet.transferFrom({ from, to, amount: '0.10' });     // spend an allowance granted to this account
+await wallet.getTransfers({ to, fromBlock });                // decoded Transfer logs
+const unwatch = wallet.watchTransfers({ to, onTransfer: (t) => console.log(t.from, t.amount) });
+
+// Or call the actions directly, viem style, on any client:
+import { transfer, getAllowance } from 'radius-sdk';
+await transfer(wallet, { token: '0x…', to, amount: '3' });   // a bare address: decimals() is read on-chain
+```
+
+`createRadiusFetch(...)` gains `allowance(spender)` and `approve(spender, amount)` for the payment
+asset next to `send`.
+
 ## Balances: native RUSD vs stablecoins
 
 Radius differs from other EVM chains here. `eth_getBalance` (viem's `getBalance`, MetaMask's
@@ -175,7 +206,7 @@ self-hosted facilitator with your own auth or routing.
 
 | Path | What |
 | --- | --- |
-| `src/` | `networks`, `balances`, `amounts`, `receipt`, `errors`; `hono/` (server); `client/` (buyer) |
+| `src/` | `networks`, `balances`, `erc20`, `amounts`, `receipt`, `errors`; `hono/` (server); `client/` (buyer) |
 | `examples/worker-seller` | Hono worker: free `/`, paid `/api/lookup` and `/api/query` (`pnpm dev`) |
 | `examples/agent-buyer` | `buy.mjs` (pay a URL), `fresh-wallet.mjs` (gasless proof from a new wallet) |
 | `examples/demo-dapp` | Test-dapp style page exercising both sides in the browser (burner wallet or MetaMask) |
