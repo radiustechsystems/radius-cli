@@ -113,14 +113,58 @@ const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transa
   one transaction comes from SBC via Turnstile, so keep ~0.01 SBC spare.
 - `maxPerRequest` is a per-request ceiling, **not** a cumulative budget. An agent that loops can
   exceed any total unless you enforce one around it.
-- Wallet helpers on the same object: `address`, `balance()`, `send(to, '$0.05')`,
-  `permit2Allowance()`, `approvePermit2()`, `getSettlement(txHash)` to reconcile a payment on-chain
-  before charging again, `fund()` for a faucet drip (testnet ~0.5 SBC, mainnet ~0.01 SBC/day),
-  and `client` (the underlying `@x402/core` client).
+- Wallet helpers on the same object: `address`, `balance()` (SBC only), `balances()` (native RUSD,
+  SBC and the aggregate, separately; see [Balances](#balances-native-rusd-vs-stablecoins)),
+  `send(to, '$0.05')`, `permit2Allowance()`, `approvePermit2()`, `getSettlement(txHash)` to
+  reconcile a payment on-chain before charging again, `fund()` for a faucet drip (testnet ~0.5 SBC,
+  mainnet ~0.01 SBC/day), and `client` (the underlying `@x402/core` client).
 - Config from the environment with radius-cli's variable names:
   `createRadiusFetch({ ...radiusEnv(process.env), signer })` reads `RADIUS_NETWORK`,
   `RADIUS_RPC_URL`, `RADIUS_FACILITATOR_URL`, `RADIUS_ASSET_ADDRESS` (alias `RADIUS_SBC_ADDRESS`), `RADIUS_PRIVATE_KEY`,
   `RADIUS_MAX_PER_REQUEST`; on Workers pass `c.env`.
+
+## Balances: native RUSD vs stablecoins
+
+Radius differs from other EVM chains here. `eth_getBalance` (viem's `getBalance`, MetaMask's
+balance, `cast balance`) returns the account's native RUSD **plus** its convertible stablecoin
+holdings (SBC) valued 1:1 and rescaled to 18 decimals: the total the account can spend, since
+the Turnstile converts SBC into RUSD inline when a transaction needs it. Reading `eth_getBalance`
+and an SBC `balanceOf` and adding them double-counts the SBC. The EVM itself is unchanged: the
+`BALANCE` opcode (Solidity's `address.balance`) sees only the native amount.
+
+The SDK reports each part on its own, as plain viem actions or as a client extension:
+
+```ts
+import { createPublicClient, http } from 'viem';
+import { radiusTestnet, radiusActions, getBalances, getNativeBalance, getTokenBalance, SBC } from 'radius-sdk';
+
+const client = createPublicClient({ chain: radiusTestnet.chain, transport: http() }).extend(radiusActions());
+
+const b = await client.getBalances({ address });
+b.native.raw            // 2345678000000000000n  — native RUSD only (wei)
+b.native.aggregate      // 12345678000000000000n — what eth_getBalance / client.getBalance() returns
+b.native.convertible    // 10000000000000000000n — aggregate − raw: SBC value the Turnstile can convert
+b.tokens[0]             // { symbol: 'SBC', atomic: 10000000n, formatted: '10', decimals: 6, convertible: true, … }
+b.totalFormatted        // '12.345678' — raw + every token at 1:1, 18 decimals
+
+// Individually, or without the extension:
+await client.getNativeBalance({ address });                    // bigint, native RUSD only
+await client.getTokenBalance({ address, token: SBC });         // raw ERC-20 balanceOf
+await getNativeBalance(client, { address });                   // same actions, viem style
+await getBalances(client, { address, tokens: [SBC, { address: '0x…', symbol: 'USDX', decimals: 18 }] });
+```
+
+`getBalances` issues one `eth_getBalance`, one `eth_call` per token and one `eth_call` for the
+native balance, in parallel, and accepts `blockNumber` / `blockTag`. Default tokens are the
+network's payment asset (SBC), chosen from the client's chain id (or a `network` option).
+
+How the raw native balance is read: an `eth_call` with no `to` whose init code is
+`PUSH20 <address> BALANCE PUSH1 0 MSTORE PUSH1 32 PUSH1 0 RETURN`, so it needs no deployed
+contract and works on any node that executes standard EVM. `b.native.rawSource` says `evm` when
+that succeeded. Should a node refuse the call, `getBalances` falls back to subtracting the
+`convertible` tokens from the aggregate (`rawSource: 'derived'`, with the error in `rawError`);
+`nativeBalance: 'evm' | 'derived' | 'auto'` selects the strategy explicitly. Mark extra tokens
+`convertible: true` only if the Turnstile counts them in `eth_getBalance` (today: SBC).
 
 ## Networks and currency
 
@@ -159,10 +203,10 @@ self-hosted facilitator with your own auth or routing.
 
 | Path | What |
 | --- | --- |
-| `src/` | `networks`, `amounts`, `receipt`, `errors`; `hono/` (server); `client/` (buyer) |
+| `src/` | `networks`, `balances`, `amounts`, `receipt`, `errors`; `hono/` (server); `client/` (buyer) |
 | `examples/worker-seller` | Hono worker: free `/`, paid `/api/lookup` and `/api/query` (`pnpm dev`) |
 | `examples/agent-buyer` | `buy.mjs` (pay a URL), `fresh-wallet.mjs` (gasless proof from a new wallet) |
 | `examples/demo-dapp` | Test-dapp style page exercising both sides in the browser (burner wallet or MetaMask) |
-| `test/` | unit tests (facilitator and RPC mocked; `client-parity.test.ts` pins the wire format against radius-cli's); `test/e2e` real settlement on testnet or mainnet (`RADIUS_E2E=1 RADIUS_PRIVATE_KEY=… [RADIUS_NETWORK=mainnet] pnpm test:e2e`) |
+| `test/` | unit tests (facilitator and RPC mocked; `client-parity.test.ts` pins the wire format against radius-cli's; `balances.test.ts` runs the native-balance init code in a real EVM); `test/e2e` real settlement and a live balance reconciliation on testnet or mainnet (`RADIUS_E2E=1 RADIUS_PRIVATE_KEY=… [RADIUS_NETWORK=mainnet] pnpm test:e2e`) |
 
 Built on `@x402/core` (server and client), `@x402/evm` (client signing only) and viem.

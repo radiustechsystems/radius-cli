@@ -4,6 +4,7 @@ import { ExactEvmScheme, UptoEvmScheme, toClientEvmSigner, type ClientEvmSigner 
 import { createPublicClient, createWalletClient, http, isAddress, maxUint256, type Account, type PublicClient, type WalletClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { formatAmount, resolvePrice, type Price } from '../amounts.js';
+import { getBalances, type AccountBalances } from '../balances.js';
 import { RadiusPaymentError } from '../errors.js';
 import { describeSupportedSchemes } from '../schemes.js';
 import { PERMIT2_ADDRESS, resolveNetwork, type Address, type NetworkInput, type NetworkOverrides, type RadiusNetwork } from '../networks.js';
@@ -116,8 +117,13 @@ export interface RadiusFetch {
   readonly network: RadiusNetwork;
   /** Atomic cap per request. */
   readonly maxPerRequest: bigint;
-  /** Payment-asset balance of the signer. */
+  /** Payment-asset (SBC) balance of the signer: a raw ERC-20 `balanceOf`, nothing aggregated. */
   balance(): Promise<{ atomic: bigint; formatted: string }>;
+  /**
+   * Native RUSD, payment-asset and aggregate balances of the signer, reported separately.
+   * On Radius `eth_getBalance` is native plus convertible stablecoins; see `getBalances`.
+   */
+  balances(): Promise<AccountBalances>;
   /** Current ERC-20 allowance granted to Permit2 for the payment asset. */
   permit2Allowance(): Promise<bigint>;
   /** Send an unlimited Permit2 approval now (rather than lazily on first unsponsored payment). */
@@ -492,6 +498,8 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     return { atomic, formatted: formatAmount(atomic, network.asset.decimals, network.asset.symbol) };
   };
 
+  const balances = () => getBalances(publicClient, { address: account.address, network });
+
   const send = (to: Address, amount: Price): Promise<TxResult> => {
     const atomic = BigInt(resolvePrice(amount, network.asset).amount);
     return sendTx('send', (wc) =>
@@ -525,6 +533,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     network,
     maxPerRequest: cap,
     balance,
+    balances,
     permit2Allowance,
     approvePermit2,
     send,
@@ -536,6 +545,8 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
 
 export { getSettlement } from '../settlement.js';
 export type { Settlement, SettlementTransfer } from '../settlement.js';
+export { getBalances, getNativeBalance, getAggregateBalance, getTokenBalance, radiusActions } from '../balances.js';
+export type { AccountBalances, NativeBalance, TokenBalance, BalanceToken, RadiusActions } from '../balances.js';
 export { getPaymentReceipt, decodePaymentReceipt, parseUptoSettlementAmount } from '../receipt.js';
 export type { PaymentReceipt } from '../receipt.js';
 export { RadiusPaymentError } from '../errors.js';
