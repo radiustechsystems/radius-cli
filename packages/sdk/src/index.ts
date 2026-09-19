@@ -65,6 +65,48 @@ export type {
   GetTransfersParameters,
   WatchTransfersParameters,
 } from './erc20.js';
+export {
+  permit2Actions,
+  getPermit2Approval,
+  getPermit2Allowance,
+  isPermit2NonceUsed,
+  approvePermit2,
+  signPermit2Transfer,
+  signPermit2Allowance,
+  permit2TransferFrom,
+  permit2Permit,
+  permit2AllowanceTransferFrom,
+  permit2Domain,
+  permit2WitnessTypeString,
+  permit2WitnessHash,
+  permitWitnessTransferFromTypes,
+  encodeTypedDataType,
+  randomPermit2Nonce,
+  PERMIT2_ABI,
+  PERMIT_TRANSFER_FROM_TYPES,
+  PERMIT_SINGLE_TYPES,
+  TOKEN_PERMISSIONS_TYPE,
+  PERMIT2_DEFAULT_DEADLINE_SECONDS,
+} from './permit2.js';
+export type {
+  Permit2Actions,
+  Permit2ActionsConfig,
+  Permit2Witness,
+  PermitTransferFrom,
+  PermitSingle,
+  SignedPermit2Transfer,
+  SignedPermit2Allowance,
+  Permit2Allowance,
+  GetPermit2ApprovalParameters,
+  GetPermit2AllowanceParameters,
+  IsPermit2NonceUsedParameters,
+  ApprovePermit2Parameters,
+  SignPermit2TransferParameters,
+  SignPermit2AllowanceParameters,
+  Permit2TransferFromParameters,
+  Permit2PermitParameters,
+  Permit2AllowanceTransferFromParameters,
+} from './permit2.js';
 export { toAtomic, formatAmount, resolvePrice } from './amounts.js';
 export type { Price } from './amounts.js';
 export { RadiusPaymentError } from './errors.js';
