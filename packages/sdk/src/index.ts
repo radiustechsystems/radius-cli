@@ -27,6 +27,8 @@ export { toAtomic, formatAmount, resolvePrice } from './amounts.js';
 export type { Price } from './amounts.js';
 export { RadiusPaymentError } from './errors.js';
 export type { RadiusPaymentErrorCode } from './errors.js';
+export { createFaucetClient, FaucetError } from './faucet.js';
+export type { FaucetClient, FaucetClientOptions, FaucetDrip, FaucetStatus, FaucetChallenge, FaucetSigner, FaucetFundOptions, FaucetErrorCode } from './faucet.js';
 export { decodePaymentReceipt, getPaymentReceipt, parseUptoSettlementAmount, PAYMENT_RESPONSE_HEADER } from './receipt.js';
 export type { PaymentReceipt } from './receipt.js';
 export { radiusEnv } from './env.js';

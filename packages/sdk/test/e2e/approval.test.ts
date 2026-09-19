@@ -67,10 +67,14 @@ run(`${NET} e2e: unsponsored Permit2 approval`, () => {
   // Mainnet drips are 1/day and 0.01 SBC; don't burn one on a throwaway wallet.
   it.skipIf(NET === 'mainnet')('fund() drips from the faucet', async () => {
     const buyer = createRadiusFetch({ network: NET, signer: freshKey, maxPerRequest: '$0.01' });
+    const status = await buyer.faucet!.status(buyer.address);
+    expect(status.token).toBe('SBC');
+    expect(status.rateLimited).toBe(false);
     const before = (await buyer.balance()).atomic;
     const drip = await buyer.fund();
     expect(drip.success).toBe(true);
-    expect(drip.txHash).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(drip.txHash).toMatch(/^0x[0-9a-f]{64}$/i);
+    if (status.dripAmount) expect(drip.amount).toBe(status.dripAmount);
     const after = (await buyer.balance()).atomic;
     expect(after).toBeGreaterThan(before);
   }, 60_000);

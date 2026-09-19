@@ -38,5 +38,9 @@ mainnet, change both the var and fund the burner yourself (mainnet faucet is 0.0
 - The log: every `onPaymentRequired`, `onApprovalRequired`, and `onPaid` callback.
 - `/api/premium` with the default $0.01 ceiling: refused client-side before anything is signed.
 
-Note: the Radius faucet API has no CORS headers, so the worker proxies it at `/faucet/*` and the
-page passes `faucetUrl: <origin>/faucet` to the SDK. Node scripts can call the faucet directly.
+Note: the Radius faucet API has no CORS headers, so the worker proxies its three endpoints
+(`GET /status/:address`, `GET /challenge/:address`, `POST /drip`) at `/faucet/*` and the page passes
+`faucetUrl: <origin>/faucet` to the SDK. The wallet card's **faucet** line is
+`buyer().faucet.status(address)` (drip size, requests left or time until the rate limit lifts);
+**Faucet drip** is `buyer().fund()`, which drips unsigned and only asks the signer for an EIP-191
+signature if the faucet requires one. Node scripts can call the faucet directly (`radius-sdk/faucet`).
