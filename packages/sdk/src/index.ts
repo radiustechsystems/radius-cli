@@ -36,6 +36,35 @@ export type {
   GetNativeBalanceParameters,
   GetTokenBalanceParameters,
 } from './balances.js';
+export {
+  erc20Actions,
+  getTokenMetadata,
+  getAllowance,
+  approve,
+  transfer,
+  transferFrom,
+  getTransfers,
+  watchTransfers,
+  toTokenAtomic,
+  formatTokenAmount,
+} from './erc20.js';
+export type {
+  Erc20Actions,
+  Erc20ActionsConfig,
+  TokenMetadata,
+  TokenTransfer,
+  TokenInput,
+  TokenAmount,
+  TokenWalletClient,
+  TxResult,
+  GetTokenMetadataParameters,
+  GetAllowanceParameters,
+  ApproveParameters,
+  TransferParameters,
+  TransferFromParameters,
+  GetTransfersParameters,
+  WatchTransfersParameters,
+} from './erc20.js';
 export { toAtomic, formatAmount, resolvePrice } from './amounts.js';
 export type { Price } from './amounts.js';
 export { RadiusPaymentError } from './errors.js';
