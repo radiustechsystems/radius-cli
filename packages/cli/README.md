@@ -110,12 +110,10 @@ $ radius-cli --json wallet balance 0x4F2D8a3b1c0E5d9b8e7a6c5d4e3f2a1b0c9d8e7f
 {
   "address": "0x4F2D8a3b1c0E5d9b8e7a6c5d4e3f2a1b0c9d8e7f",
   "totalUsd": 12.345678,
-  "sbc": "10",
+  "sbc": "10.000000",
   "rusd": "2.345678",
   "sbcWei": "10000000",
   "rusdWei": "2345678000000000000",
-  "aggregateWei": "12345678000000000000",
-  "rusdSource": "evm",
   "sbcError": null
 }
 
@@ -141,7 +139,7 @@ Per-command JSON shapes:
 | `wallet export` | `{address, privateKey}` |
 | `wallet sign` | `{address, signature}` |
 | `wallet verify` | `{address, valid}` (exit 1 when invalid) |
-| `wallet balance` | `{address, totalUsd, sbc, rusd, sbcWei, rusdWei, aggregateWei, rusdSource, sbcError}` — `rusd` is native only, `totalUsd`/`aggregateWei` what `eth_getBalance` reports |
+| `wallet balance` | `{address, totalUsd, sbc, rusd, sbcWei, rusdWei, sbcError}` |
 | `wallet send` | `{hash, receipt?}` (no `receipt` with `--no-wait`) |
 | `wallet x402` | `{status, headers, body, bodyEncoding, payment}` |
 | `call` | decoded return value (single value or array) |
@@ -170,7 +168,6 @@ The SBC contract address must be configured for `wallet balance` and `wallet sen
 - **SBC** is an ERC-20 stablecoin (6 decimals). `wallet send … SBC` calls `transfer(address,uint256)` on the SBC contract.
 - Radius uses **fixed gas pricing**. All transactions will execute with the network gas price (n.b. they will fail if the requested gas price is too low).
 - If the account holds SBC but lacks RUSD, the network's Turnstile auto-converts SBC to RUSD inline for zero additional gas.
-- Because of that, **`eth_getBalance` on Radius returns native RUSD plus SBC valued 1:1** (the spendable total), not the native balance alone. `wallet balance` reports the native RUSD separately by reading it through the EVM's `BALANCE` opcode (an `eth_call` running `PUSH20 <addr> BALANCE …` as init code; `rusdSource: "evm"`), falling back to subtracting the SBC holdings from the aggregate (`rusdSource: "derived"`) if a node refuses that call. `totalUsd` is the aggregate.
 
 ## Development
 
