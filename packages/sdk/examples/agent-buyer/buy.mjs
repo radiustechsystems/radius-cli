@@ -19,7 +19,9 @@ const payFetch = createRadiusFetch({
   },
 });
 
-console.error(`payer ${payFetch.address}, balance ${(await payFetch.balance()).formatted}`);
+// balances() reports SBC and native RUSD separately (eth_getBalance alone would blend them).
+const { native, tokens: [sbc] } = await payFetch.balances();
+console.error(`payer ${payFetch.address}, balance ${sbc.formatted} ${sbc.symbol} + ${native.rawFormatted} ${native.symbol}`);
 try {
   const res = await payFetch(url);
   console.error(`HTTP ${res.status}`);
