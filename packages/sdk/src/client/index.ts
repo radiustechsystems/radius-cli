@@ -5,6 +5,7 @@ import { createPublicClient, createWalletClient, http, isAddress, maxUint256, ty
 import { privateKeyToAccount } from 'viem/accounts';
 import { formatAmount, resolvePrice, type Price } from '../amounts.js';
 import { getBalances, type AccountBalances } from '../balances.js';
+import { toTokenAtomic, type TokenAmount, type TxResult } from '../erc20.js';
 import { RadiusPaymentError } from '../errors.js';
 import { describeSupportedSchemes } from '../schemes.js';
 import { PERMIT2_ADDRESS, resolveNetwork, type Address, type NetworkInput, type NetworkOverrides, type RadiusNetwork } from '../networks.js';
@@ -97,11 +98,7 @@ export interface RadiusFetchOptions extends NetworkOverrides {
   fetch?: typeof globalThis.fetch;
 }
 
-export interface TxResult {
-  hash: `0x${string}`;
-  status: 'success' | 'reverted';
-  explorerUrl?: string;
-}
+export type { TxResult } from '../erc20.js';
 
 export interface FaucetResult {
   success: boolean;
@@ -130,6 +127,10 @@ export interface RadiusFetch {
   approvePermit2(): Promise<TxResult>;
   /** Transfer the payment asset. Needs a transaction-capable signer (private key or viem local account). */
   send(to: Address, amount: Price): Promise<TxResult>;
+  /** Payment-asset allowance the signer has granted to `spender` (atomic units). */
+  allowance(spender: Address): Promise<bigint>;
+  /** Approve `spender` for `amount` of the payment asset (bigint atomic, or "1.5" in display units). */
+  approve(spender: Address, amount: TokenAmount): Promise<TxResult>;
   /** Reconcile a settlement transaction on-chain (undefined while unknown to the node). */
   getSettlement(txHash: `0x${string}`): Promise<Settlement | undefined>;
   /** Request a faucet drip for this wallet (testnet ~0.5 SBC; mainnet ~0.01 SBC/day). */
@@ -500,6 +501,16 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
 
   const balances = () => getBalances(publicClient, { address: account.address, network });
 
+  const allowance = (spender: Address) =>
+    publicClient.readContract({ address: network.asset.address, abi: ERC20_ABI, functionName: 'allowance', args: [account.address, spender] });
+
+  const approve = async (spender: Address, amount: TokenAmount): Promise<TxResult> => {
+    const atomic = await toTokenAtomic(publicClient, network.asset, amount);
+    return sendTx('approve', (wc) =>
+      wc.writeContract({ address: network.asset.address, abi: ERC20_ABI, functionName: 'approve', args: [spender, atomic], chain, account: wc.account! }),
+    );
+  };
+
   const send = (to: Address, amount: Price): Promise<TxResult> => {
     const atomic = BigInt(resolvePrice(amount, network.asset).amount);
     return sendTx('send', (wc) =>
@@ -537,6 +548,8 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     permit2Allowance,
     approvePermit2,
     send,
+    allowance,
+    approve,
     getSettlement: (txHash: `0x${string}`) => getSettlement(network, txHash, publicClient),
     fund,
     client,
@@ -547,6 +560,8 @@ export { getSettlement } from '../settlement.js';
 export type { Settlement, SettlementTransfer } from '../settlement.js';
 export { getBalances, getNativeBalance, getAggregateBalance, getTokenBalance, radiusActions } from '../balances.js';
 export type { AccountBalances, NativeBalance, TokenBalance, BalanceToken, RadiusActions } from '../balances.js';
+export { erc20Actions, getTokenMetadata, getAllowance, approve, transfer, transferFrom, getTransfers, watchTransfers } from '../erc20.js';
+export type { Erc20Actions, TokenMetadata, TokenTransfer, TokenInput, TokenAmount } from '../erc20.js';
 export { getPaymentReceipt, decodePaymentReceipt, parseUptoSettlementAmount } from '../receipt.js';
 export type { PaymentReceipt } from '../receipt.js';
 export { RadiusPaymentError } from '../errors.js';
