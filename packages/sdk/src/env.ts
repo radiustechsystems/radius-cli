@@ -11,6 +11,7 @@ import type { Address, NetworkInput } from './networks.js';
  * | RADIUS_RPC_URL               | rpcUrl                      |
  * | RADIUS_FACILITATOR_URL       | facilitatorUrl              |
  * | RADIUS_FACILITATOR_API_KEY   | facilitator.apiKey          |
+ * | RADIUS_FAUCET_URL            | faucetUrl                   |
  * | RADIUS_ASSET_ADDRESS         | asset.address (payment token; default SBC) |
  * | RADIUS_SBC_ADDRESS           | alias of RADIUS_ASSET_ADDRESS (radius-cli's name) |
  * | RADIUS_PAY_TO                | payTo (server)              |
@@ -22,6 +23,7 @@ export interface RadiusEnvConfig {
   rpcUrl?: string;
   facilitatorUrl?: string;
   facilitator?: { apiKey?: string };
+  faucetUrl?: string;
   asset?: { address: Address };
   payTo?: Address;
   signer?: `0x${string}`;
@@ -37,6 +39,7 @@ export function radiusEnv(env: Record<string, string | undefined> = defaultEnv()
   if (env.RADIUS_RPC_URL) out.rpcUrl = env.RADIUS_RPC_URL;
   if (env.RADIUS_FACILITATOR_URL) out.facilitatorUrl = env.RADIUS_FACILITATOR_URL;
   if (env.RADIUS_FACILITATOR_API_KEY) out.facilitator = { apiKey: env.RADIUS_FACILITATOR_API_KEY };
+  if (env.RADIUS_FAUCET_URL) out.faucetUrl = env.RADIUS_FAUCET_URL;
   const assetAddress = env.RADIUS_ASSET_ADDRESS ?? env.RADIUS_SBC_ADDRESS;
   if (assetAddress) out.asset = { address: requireAddress(assetAddress, env.RADIUS_ASSET_ADDRESS ? 'RADIUS_ASSET_ADDRESS' : 'RADIUS_SBC_ADDRESS') };
   if (env.RADIUS_PAY_TO) out.payTo = requireAddress(env.RADIUS_PAY_TO, 'RADIUS_PAY_TO');

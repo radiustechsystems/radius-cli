@@ -6,6 +6,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { formatAmount, resolvePrice, type Price } from '../amounts.js';
 import { getBalances, type AccountBalances } from '../balances.js';
 import { RadiusPaymentError } from '../errors.js';
+import { createFaucetClient, FaucetError, type FaucetClient, type FaucetDrip, type FaucetFundOptions, type FaucetSigner } from '../faucet.js';
 import { describeSupportedSchemes } from '../schemes.js';
 import { PERMIT2_ADDRESS, resolveNetwork, type Address, type NetworkInput, type NetworkOverrides, type RadiusNetwork } from '../networks.js';
 import { decodePaymentReceipt, parseUptoSettlementAmount, type PaymentReceipt } from '../receipt.js';
@@ -103,13 +104,8 @@ export interface TxResult {
   explorerUrl?: string;
 }
 
-export interface FaucetResult {
-  success: boolean;
-  /** Display amount dripped, e.g. "0.5". */
-  amount?: string;
-  txHash?: `0x${string}`;
-  raw: unknown;
-}
+/** Result of `fund()`: a successful faucet drip (`radius-sdk/faucet`'s `FaucetDrip`). */
+export type FaucetResult = FaucetDrip;
 
 export interface RadiusFetch {
   (input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
@@ -132,8 +128,15 @@ export interface RadiusFetch {
   send(to: Address, amount: Price): Promise<TxResult>;
   /** Reconcile a settlement transaction on-chain (undefined while unknown to the node). */
   getSettlement(txHash: `0x${string}`): Promise<Settlement | undefined>;
-  /** Request a faucet drip for this wallet (testnet ~0.5 SBC; mainnet ~0.01 SBC/day). */
-  fund(): Promise<FaucetResult>;
+  /**
+   * Request a faucet drip for this wallet (testnet ~0.5 SBC; mainnet ~0.01 SBC/day). Drips unsigned
+   * and signs the faucet's EIP-191 challenge only when it asks (`signature_required`); pass
+   * `{ signature: 'always' | 'never' }` to force either. Throws `FaucetError` (`code: 'faucet'`,
+   * `faucetCode: 'rate_limited' | …`, `retryAfterMs`).
+   */
+  fund(options?: Pick<FaucetFundOptions, 'signature'>): Promise<FaucetResult>;
+  /** The network's faucet API (`status()`, `challenge()`, `drip()`); undefined when the network has no faucet. */
+  readonly faucet?: FaucetClient;
   /** Escape hatch to the underlying x402 client. */
   readonly client: x402Client;
 }
@@ -507,25 +510,14 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     );
   };
 
-  const fund = async (): Promise<FaucetResult> => {
-    if (!network.faucetUrl) throw new RadiusPaymentError('faucet', `No faucet configured for network ${network.name}`);
-    const signMessage = (account as { signMessage?: (a: { message: string }) => Promise<`0x${string}`> }).signMessage;
-    if (typeof signMessage !== 'function') throw new RadiusPaymentError('faucet', 'fund() needs a signer with signMessage (EIP-191), e.g. a private key or viem local account');
-    const base = network.faucetUrl.replace(/\/+$/, '');
-    const token = network.asset.symbol;
-    const challenge = (await (await fetch(`${base}/challenge/${account.address}?token=${token}`)).json()) as { message?: string };
-    if (!challenge.message) throw new RadiusPaymentError('faucet', 'Faucet returned no challenge message', challenge);
-    const signature = await signMessage.call(account, { message: challenge.message });
-    const res = await fetch(`${base}/drip`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ address: account.address, token, signature }),
-    });
-    const raw = (await res.json().catch(() => ({}))) as { success?: boolean; amount?: string; tx_hash?: `0x${string}`; error?: { code?: string; message?: string; retry_after_ms?: number } };
-    if (!res.ok || raw.success !== true) {
-      throw new RadiusPaymentError('faucet', `Faucet drip failed: ${raw.error?.code ?? res.status} ${raw.error?.message ?? ''}`.trim(), raw);
-    }
-    return { success: true, amount: raw.amount, txHash: raw.tx_hash, raw };
+  const faucet = network.faucetUrl ? createFaucetClient({ network, fetch: baseFetch }) : undefined;
+  const fund = async (opts: Pick<FaucetFundOptions, 'signature'> = {}): Promise<FaucetResult> => {
+    if (!faucet) throw new FaucetError('no_faucet', `No faucet configured for network ${network.name}`);
+    // Private keys, viem local accounts and the wrapped WalletClient can personal_sign; a bare
+    // `{ address, signTypedData }` signer cannot, so it gets unsigned drips only.
+    const signMessage = (account as Partial<FaucetSigner>).signMessage;
+    const signer: FaucetSigner | undefined = typeof signMessage === 'function' ? { signMessage: (a) => signMessage.call(account, a) } : undefined;
+    return faucet.fund(account.address, { signer, signature: opts.signature });
   };
 
   return Object.assign(paidFetch, {
@@ -539,6 +531,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     send,
     getSettlement: (txHash: `0x${string}`) => getSettlement(network, txHash, publicClient),
     fund,
+    faucet,
     client,
   });
 }
@@ -561,5 +554,7 @@ export type {
 export { getPaymentReceipt, decodePaymentReceipt, parseUptoSettlementAmount } from '../receipt.js';
 export type { PaymentReceipt } from '../receipt.js';
 export { RadiusPaymentError } from '../errors.js';
+export { createFaucetClient, FaucetError } from '../faucet.js';
+export type { FaucetClient, FaucetClientOptions, FaucetDrip, FaucetStatus, FaucetChallenge, FaucetSigner, FaucetFundOptions, FaucetErrorCode } from '../faucet.js';
 export { radiusEnv } from '../env.js';
 export type { RadiusEnvConfig } from '../env.js';

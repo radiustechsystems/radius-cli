@@ -117,10 +117,11 @@ const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transa
   SBC and the aggregate, separately; see [Balances](#balances-native-rusd-vs-stablecoins)),
   `send(to, '$0.05')`, `permit2Allowance()`, `approvePermit2()`, `getSettlement(txHash)` to
   reconcile a payment on-chain before charging again, `fund()` for a faucet drip (testnet ~0.5 SBC,
-  mainnet ~0.01 SBC/day), and `client` (the underlying `@x402/core` client).
+  mainnet ~0.01 SBC/day) with `faucet` (the faucet client, see [Faucet](#faucet-test-funds)) for
+  its status, and `client` (the underlying `@x402/core` client).
 - Config from the environment with radius-cli's variable names:
   `createRadiusFetch({ ...radiusEnv(process.env), signer })` reads `RADIUS_NETWORK`,
-  `RADIUS_RPC_URL`, `RADIUS_FACILITATOR_URL`, `RADIUS_ASSET_ADDRESS` (alias `RADIUS_SBC_ADDRESS`), `RADIUS_PRIVATE_KEY`,
+  `RADIUS_RPC_URL`, `RADIUS_FACILITATOR_URL`, `RADIUS_FAUCET_URL`, `RADIUS_ASSET_ADDRESS` (alias `RADIUS_SBC_ADDRESS`), `RADIUS_PRIVATE_KEY`,
   `RADIUS_MAX_PER_REQUEST`; on Workers pass `c.env`.
 
 ## Balances: native RUSD vs stablecoins
@@ -170,6 +171,44 @@ that succeeded. Should a node refuse the call, `getBalances` falls back to subtr
 `convertible: true` only if the Turnstile counts them in `eth_getBalance` (today: SBC); other
 tokens are reported in `tokens` but not valued 1:1 in `total`.
 
+## Faucet (test funds)
+
+A typed client for the Radius faucet API as described by its OpenAPI document
+(`<faucetUrl>/openapi.json`, e.g. https://testnet.radiustech.xyz/api/v1/faucet/openapi.json):
+`GET /status/{address}`, `GET /challenge/{address}` and `POST /drip`.
+
+```ts
+import { createFaucetClient, FaucetError } from 'radius-sdk/faucet';
+import { privateKeyToAccount } from 'viem/accounts';
+
+const faucet = createFaucetClient({ network: 'testnet' });       // or { url: 'https://…/api/v1/faucet' }
+const account = privateKeyToAccount(process.env.RADIUS_PRIVATE_KEY);
+
+await faucet.status(account.address);      // { rateLimited, retryAfterMs?, remainingRequests, dripAmount: '0.5', … }
+const drip = await faucet.fund(account.address, { signer: account });   // { success: true, amount, txHash, explorerUrl }
+
+try { await faucet.fund(account.address, { signer: account }); }
+catch (e) { if (e instanceof FaucetError && e.faucetCode === 'rate_limited') console.log(`retry in ${e.retryAfterMs} ms`); }
+```
+
+- `fund()` drips unsigned first and, if the faucet answers `signature_required`, fetches the EIP-191
+  challenge, signs it with `signer.signMessage` (any viem local account) and drips again; one retry
+  on `invalid_signature` with a fresh challenge. Testnet currently drips unsigned, mainnet is
+  expected to require signatures, and the switch can flip at any time, so the fallback is always
+  on. `{ signature: 'always' }` skips the unsigned attempt, `'never'` disables the fallback; without
+  a signer a signature demand throws `signer_required`. `status()`, `challenge()` and `drip()` are
+  the raw endpoints.
+- Errors are `FaucetError` (a `RadiusPaymentError` with `code: 'faucet'`) carrying the API's own
+  `faucetCode` (`signature_required`, `invalid_signature`, `invalid_address`, `invalid_token`,
+  `rate_limited`, `faucet_empty`, `sbc_not_configured`, `internal_error`), the HTTP `status`,
+  `retryAfterMs` for rate limits, and the raw body in `details`. Response text is treated as data:
+  only the documented fields are read.
+- `createRadiusFetch(…).fund()` is this flow for the signer's address on the configured network
+  (`faucetUrl` override for a same-origin proxy, as the demo dapp does for CORS), and
+  `createRadiusFetch(…).faucet` is the client itself.
+- Token defaults to the network's payment asset symbol (SBC); `token` overrides it. The client has
+  no viem dependency and is Workers- and browser-safe (no I/O at module scope).
+
 ## Networks and currency
 
 ```ts
@@ -207,10 +246,10 @@ self-hosted facilitator with your own auth or routing.
 
 | Path | What |
 | --- | --- |
-| `src/` | `networks`, `balances`, `amounts`, `receipt`, `errors`; `hono/` (server); `client/` (buyer) |
+| `src/` | `networks`, `balances`, `amounts`, `receipt`, `errors`, `faucet`; `hono/` (server); `client/` (buyer) |
 | `examples/worker-seller` | Hono worker: free `/`, paid `/api/lookup` and `/api/query` (`pnpm dev`) |
-| `examples/agent-buyer` | `buy.mjs` (pay a URL), `fresh-wallet.mjs` (gasless proof from a new wallet) |
+| `examples/agent-buyer` | `buy.mjs` (pay a URL), `fund.mjs` (faucet drip + status), `fresh-wallet.mjs` (gasless proof from a new wallet, faucet-funded) |
 | `examples/demo-dapp` | Test-dapp style page exercising both sides in the browser (burner wallet or MetaMask) |
-| `test/` | unit tests (facilitator and RPC mocked; `client-parity.test.ts` pins the wire format against radius-cli's; `balances.test.ts` runs the native-balance init code in a real EVM); `test/e2e` real settlement and a live balance reconciliation on testnet or mainnet (`RADIUS_E2E=1 RADIUS_PRIVATE_KEY=… [RADIUS_NETWORK=mainnet] pnpm test:e2e`) |
+| `test/` | unit tests (facilitator, RPC and faucet mocked; `client-parity.test.ts` pins the wire format against radius-cli's; `balances.test.ts` runs the native-balance init code in a real EVM); `test/e2e` real settlement and a live balance reconciliation on testnet or mainnet (`RADIUS_E2E=1 RADIUS_PRIVATE_KEY=… [RADIUS_NETWORK=mainnet] pnpm test:e2e`) |
 
 Built on `@x402/core` (server and client), `@x402/evm` (client signing only) and viem.

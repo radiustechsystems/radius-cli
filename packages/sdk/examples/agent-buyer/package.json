@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "buy": "node buy.mjs"
+    "buy": "node buy.mjs",
+    "fund": "node fund.mjs",
+    "fresh-wallet": "node fresh-wallet.mjs"
   },
   "dependencies": {
     "hono": "^4.13.7",

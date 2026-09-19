@@ -1,6 +1,7 @@
 // Buyer side of the demo. Everything payment-related goes through radius-sdk/client;
 // this file is only wiring between buttons, inputs and result boxes.
 import { createRadiusFetch, getPaymentReceipt, RadiusPaymentError, type PaymentOffer, type RadiusFetch } from 'radius-sdk/client';
+import { FaucetError, type FaucetStatus } from 'radius-sdk/faucet';
 import { radiusMainnet, radiusTestnet, type RadiusNetwork } from 'radius-sdk';
 import { createWalletClient, custom, type WalletClient } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
@@ -36,6 +37,7 @@ function buyer(): RadiusFetch {
   return createRadiusFetch({
     network: network(),
     // The faucet API has no CORS headers; the worker proxies it at /faucet (see src/worker.ts).
+    // The SDK's faucet client (buyer().faucet / buyer().fund()) then talks to this origin.
     faucetUrl: `${location.origin}/faucet`,
     signer,
     maxPerRequest: $<HTMLInputElement>('c-max').value || '$0',
@@ -67,7 +69,8 @@ function show(id: string, value: unknown) {
   $(id).textContent = typeof value === 'string' ? value : JSON.stringify(value, (_k, v) => (typeof v === 'bigint' ? v.toString() : v), 2);
 }
 function fail(id: string, e: unknown) {
-  const msg = e instanceof RadiusPaymentError ? `[${e.code}] ${e.message}` : e instanceof Error ? e.message : String(e);
+  // FaucetError carries the faucet API's own code (rate_limited, faucet_empty, …) under the SDK's 'faucet' code.
+  const msg = e instanceof FaucetError ? `[faucet:${e.faucetCode}] ${e.message}` : e instanceof RadiusPaymentError ? `[${e.code}] ${e.message}` : e instanceof Error ? e.message : String(e);
   show(id, `ERROR ${msg}`);
   log(msg, 'bad');
 }
@@ -96,16 +99,30 @@ async function refreshWallet() {
     const [bal, allowance] = await Promise.all([b.balance(), b.permit2Allowance()]);
     $('w-balance').textContent = bal.formatted;
     $('w-allowance').textContent = allowance >= 2n ** 200n ? 'unlimited' : allowance.toString();
+    // GET /status/:address on the faucet: drip size and whether this wallet may drip right now.
+    $('w-faucet').textContent = b.faucet ? await b.faucet.status(b.address).then(describeFaucet, (e) => `unavailable (${e instanceof Error ? e.message : e})`) : 'none for this network';
     $('status').textContent = `${network().name} · ${modeSel.value === 'metamask' ? 'MetaMask' : 'burner'} · ${short(b.address)}`;
   } catch (e) {
     $('status').textContent = e instanceof Error ? e.message : String(e);
   }
 }
+function describeFaucet(s: FaucetStatus): string {
+  const drip = s.dripAmount ? `${s.dripAmount} ${s.token} per drip` : s.token;
+  if (s.rateLimited) return `${drip} · rate limited${s.retryAfterMs ? `, retry in ${Math.ceil(s.retryAfterMs / 1000)} s` : ''}`;
+  return s.remainingRequests !== undefined ? `${drip} · ${s.remainingRequests} requests left` : drip;
+}
 $('w-refresh').onclick = refreshWallet;
 $('w-new').onclick = () => { if (confirm('Generate a new burner key? The old one is discarded.')) { localStorage.removeItem(KEY_STORAGE); burnerKey(); modeSel.value = 'burner'; refreshWallet(); } };
 $('w-import').onclick = () => { const k = prompt('Private key (0x…)'); if (k && /^0x[0-9a-fA-F]{64}$/.test(k)) { localStorage.setItem(KEY_STORAGE, k); modeSel.value = 'burner'; refreshWallet(); } else if (k) alert('not a 32-byte hex key'); };
 $('w-export').onclick = () => show('w-result', { burnerPrivateKey: burnerKey(), note: 'test funds only' });
-$('w-fund').onclick = (ev) => run('w-result', ev.target as HTMLButtonElement, async () => { const r = await buyer().fund(); log(`faucet dripped ${r.amount} SBC (${r.txHash})`, 'ok'); await refreshWallet(); return r; });
+// fund(): unsigned drip first; if the faucet answers signature_required the SDK fetches the
+// challenge, asks the signer (burner key, or a MetaMask personal_sign prompt) and drips again.
+$('w-fund').onclick = (ev) => run('w-result', ev.target as HTMLButtonElement, async () => {
+  const r = await buyer().fund();
+  log(`faucet dripped ${r.amount ?? '?'} ${r.token} (${r.explorerUrl ?? r.txHash})`, 'ok');
+  await refreshWallet();
+  return r;
+});
 $('w-approve').onclick = (ev) => run('w-result', ev.target as HTMLButtonElement, async () => { const r = await buyer().approvePermit2(); await refreshWallet(); return r; });
 $('w-send').onclick = (ev) => run('w-result', ev.target as HTMLButtonElement, async () => {
   const to = $<HTMLInputElement>('w-sendTo').value.trim() as `0x${string}`;
