@@ -16,6 +16,7 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { resolveConfig, readPasswordless, writeCachedAddress, writePasswordless } from '../lib/config.js';
 import { keystoreExists, loadKeystorePrivateKey, saveKeystore } from '../lib/keystore.js';
 import { getOwnAddress, requireAccount } from '../lib/account.js';
+import { deriveNativeBalance, getNativeBalance } from '../lib/balance.js';
 import { makePublicClient, makeWalletClient } from '../lib/client.js';
 import { coerceArg, parseCastSignature } from '../lib/signature.js';
 import { formatUsd, formatUsdShort, jsonStringify } from '../lib/format.js';
@@ -228,7 +229,7 @@ export function registerWallet(program: Command): void {
 
   wallet
     .command('balance')
-    .description('Show RUSD (native) and SBC balances for an address (defaults to own)')
+    .description('Show native RUSD, SBC and total spendable balances for an address (defaults to own)')
     .argument('[address]', 'address to query (defaults to own)')
     .action(async (addressArg: string | undefined, _subOpts, cmd) => {
       const opts = cmd.optsWithGlobals() as GlobalOptions;
@@ -243,35 +244,51 @@ export function registerWallet(program: Command): void {
       }
 
       const client = makePublicClient(cfg);
-      const rusdWei = await client.getBalance({ address });
-      const rusd = formatEther(rusdWei);
+      // On Radius eth_getBalance is native RUSD plus SBC valued 1:1 (the spendable total);
+      // the raw native amount comes from the EVM's BALANCE opcode. See lib/balance.ts.
+      const [aggregateWei, nativeRead, sbcRead] = await Promise.all([
+        client.getBalance({ address }),
+        getNativeBalance(client, address).then(
+          (wei) => ({ wei }),
+          (e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }),
+        ),
+        client
+          .readContract({ address: cfg.sbcAddress!, abi: ERC20_TRANSFER_ABI, functionName: 'balanceOf', args: [address] })
+          .then(
+            (atomic) => ({ atomic }),
+            (e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }),
+          ),
+      ]);
 
-      let sbc = '0';
-      let sbcRawWei = 0n;
-      let sbcError: string | null = null;
-      try {
-        sbcRawWei = await client.readContract({
-          address: cfg.sbcAddress!,
-          abi: ERC20_TRANSFER_ABI,
-          functionName: 'balanceOf',
-          args: [address],
-        });
-        sbc = formatUnits(sbcRawWei, SBC_DECIMALS);
-      } catch (e) {
-        sbcError = e instanceof Error ? e.message : String(e);
+      const sbcError = 'error' in sbcRead ? sbcRead.error : null;
+      const sbcRawWei = 'atomic' in sbcRead ? sbcRead.atomic : 0n;
+      const sbc = formatUnits(sbcRawWei, SBC_DECIMALS);
+
+      let rusdWei: bigint;
+      let rusdSource: 'evm' | 'derived';
+      if ('wei' in nativeRead) {
+        rusdWei = nativeRead.wei;
+        rusdSource = 'evm';
+      } else if (!sbcError) {
+        rusdWei = deriveNativeBalance(aggregateWei, sbcRawWei, SBC_DECIMALS);
+        rusdSource = 'derived';
+      } else {
+        throw new Error(`Could not read the native RUSD balance: ${nativeRead.error} (and SBC: ${sbcError})`);
       }
-
-      const total = Number(rusd) + Number(sbc);
+      const rusd = formatEther(rusdWei);
+      const totalUsd = formatEther(aggregateWei);
 
       if (opts.json) {
         console.log(
           jsonStringify({
             address,
-            totalUsd: total,
+            totalUsd: Number(totalUsd),
             sbc,
             rusd,
             sbcWei: sbcRawWei.toString(),
             rusdWei: rusdWei.toString(),
+            aggregateWei: aggregateWei.toString(),
+            rusdSource,
             sbcError,
           }),
         );
@@ -279,10 +296,10 @@ export function registerWallet(program: Command): void {
       }
       console.log(`Address: ${address}`);
       if (sbcError) {
-        console.log(`Balance: $${rusd} ($${formatUsd(rusd)} RUSD; SBC unavailable)`);
+        console.log(`Balance: $${formatUsdShort(totalUsd)} ($${formatUsd(rusd)} RUSD; SBC unavailable)`);
       } else {
         console.log(
-          `Balance: $${formatUsdShort(total)} ($${formatUsd(sbc)} SBC + $${formatUsd(rusd)} RUSD)`,
+          `Balance: $${formatUsdShort(totalUsd)} ($${formatUsd(sbc)} SBC + $${formatUsd(rusd)} RUSD)`,
         );
       }
     });

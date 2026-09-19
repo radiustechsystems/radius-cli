@@ -23,6 +23,19 @@ export type {
   CustomNetworkFromChain,
   CustomNetworkFromChainId,
 } from './networks.js';
+export { getBalances, getNativeBalance, getAggregateBalance, getTokenBalance, radiusActions, defaultTokens, nativeBalanceBytecode } from './balances.js';
+export type {
+  AccountBalances,
+  NativeBalance,
+  TokenBalance,
+  BalanceToken,
+  BalanceClient,
+  RadiusActions,
+  RadiusActionsConfig,
+  GetBalancesParameters,
+  GetNativeBalanceParameters,
+  GetTokenBalanceParameters,
+} from './balances.js';
 export { toAtomic, formatAmount, resolvePrice } from './amounts.js';
 export type { Price } from './amounts.js';
 export { RadiusPaymentError } from './errors.js';
