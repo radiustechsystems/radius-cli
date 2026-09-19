@@ -628,6 +628,8 @@ export type {
   GetTransfersParameters,
   WatchTransfersParameters,
 } from '../erc20.js';
+export { permit2Actions, getPermit2Approval, getPermit2Allowance, isPermit2NonceUsed, approvePermit2, signPermit2Transfer, signPermit2Allowance, permit2TransferFrom, permit2Permit, permit2AllowanceTransferFrom } from '../permit2.js';
+export type { Permit2Actions, Permit2Witness, SignedPermit2Transfer, SignedPermit2Allowance, Permit2Allowance } from '../permit2.js';
 export { getPaymentReceipt, decodePaymentReceipt, parseUptoSettlementAmount } from '../receipt.js';
 export type { PaymentReceipt } from '../receipt.js';
 export { RadiusPaymentError } from '../errors.js';
