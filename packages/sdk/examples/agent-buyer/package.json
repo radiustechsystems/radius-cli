@@ -5,6 +5,7 @@
   "scripts": {
     "buy": "node buy.mjs",
     "fund": "node fund.mjs",
+    "swap": "node swap.mjs",
     "fresh-wallet": "node fresh-wallet.mjs"
   },
   "dependencies": {

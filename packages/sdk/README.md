@@ -121,7 +121,7 @@ const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transa
   its status, and `client` (the underlying `@x402/core` client).
 - Config from the environment with radius-cli's variable names:
   `createRadiusFetch({ ...radiusEnv(process.env), signer })` reads `RADIUS_NETWORK`,
-  `RADIUS_RPC_URL`, `RADIUS_FACILITATOR_URL`, `RADIUS_FAUCET_URL`, `RADIUS_ASSET_ADDRESS` (alias `RADIUS_SBC_ADDRESS`), `RADIUS_PRIVATE_KEY`,
+  `RADIUS_RPC_URL`, `RADIUS_FACILITATOR_URL`, `RADIUS_FAUCET_URL`, `RADIUS_SWAP_URL`, `RADIUS_ASSET_ADDRESS` (alias `RADIUS_SBC_ADDRESS`), `RADIUS_PRIVATE_KEY`,
   `RADIUS_MAX_PER_REQUEST`; on Workers pass `c.env`.
 
 ## Balances: native RUSD vs stablecoins
@@ -213,6 +213,62 @@ catch (e) { if (e instanceof FaucetError && e.faucetCode === 'rate_limited') con
 - Token defaults to the network's payment asset symbol (SBC); `token` overrides it. The client has
   no viem dependency and is Workers- and browser-safe (no I/O at module scope).
 
+## Swap (move SBC/USDC between Radius and Base or Ethereum)
+
+A typed client for the Radius Swap API as described by its OpenAPI document
+(`<swapUrl>/openapi.json`, e.g. https://testnet.radiustech.xyz/api/v1/swap/openapi.json). The API
+moves stablecoins across chains through Brale: you sign an EIP-712 `SwapIntent`, the API returns an
+exact unsigned ERC-20 transfer on the source chain, you sign it unchanged, the API broadcasts it and
+runs the swap; the destination payout follows.
+
+```ts
+import { createSwapClient, SwapError } from 'radius-sdk/swap';
+import { privateKeyToAccount } from 'viem/accounts';
+
+const swap = createSwapClient({ network: 'testnet' });    // or { url: 'https://…/api/v1/swap' }
+const account = privateKeyToAccount(process.env.RADIUS_PRIVATE_KEY);   // must hold the source token AND source-chain gas
+
+console.log(await swap.routes());   // [{ sourceChain: 'base_sepolia', sourceToken: 'SBC', destinationChain: 'radius_testnet', destinationToken: 'SBC', sourceChainId: 84532, … }]
+
+try {
+  const { broadcast, status } = await swap.swap(
+    { sourceChain: 'base_sepolia', sourceToken: 'SBC', destinationChain: 'radius_testnet', destinationToken: 'SBC', amount: '1.5' },
+    account,                                       // destinationAddress defaults to the signer
+    { wait: { untilPayout: true, onStatus: (s) => console.log(s.status) } },
+  );
+  console.log(broadcast.sessionId, broadcast.txHash, status?.payoutTx);
+} catch (e) {
+  if (e instanceof SwapError) console.error(e.swapCode, e.message, e.requestId);   // e.g. INSUFFICIENT_GAS, ACTIVE_PREPARED_TX_EXISTS, SWAP_FAILED
+}
+```
+
+- `swap()` is `prepare()` → `signPrepared()` → `broadcast()` → `waitForCompletion()`; each step is
+  public for agents that want to checkpoint between them (`prepared.swapToken` is single-use for
+  broadcast; `broadcast.swapToken` reads the session). `prepare()` resolves the route from
+  `GET /instructions` (cached), signs `SwapIntent` with the source chain's id in the EIP-712 domain
+  and the deployment's `environment`, and defaults `destinationAddress` to the signer,
+  `idempotencyKey` to a random `idem_…`, `expiresAt` to five minutes. `amount` is a decimal string
+  ("1.5"), signed as-is.
+- The signer must `signTypedData` and, for `signPrepared()` / `swap()`, `signTransaction`: a private
+  key or viem local account. Injected wallets cannot sign a raw transaction, so in a browser use
+  `prepare()` and submit the prepared transfer another way. `unsignedTx` is hex quantities on the
+  wire; `toSignableTransaction()` decodes them for viem without changing a value.
+- `waitForCompletion()` polls `status()` every 3 s (the API's floor) until `complete` / `failed` /
+  `expired`, optionally `untilPayout` (the destination `payoutTx` can land shortly after
+  `complete`), and throws `TIMEOUT` after 10 minutes by default. `swap()` throws `SWAP_FAILED` with
+  the final status in `details` when a session fails.
+- Recovery: `sessionListToken(account)` signs `SwapSessionListAccess` for a wallet-scoped token and
+  `listSessions(token, { status, cursor, … })` returns durable sessions plus active prepared swaps,
+  each with a fresh token, so a lost response or expired token never strands a swap.
+- Errors are `SwapError` (a `RadiusPaymentError` with `code: 'swap'`) decoded from the Radius API
+  envelope: the API's `swapCode` (`INVALID_SIGNATURE`, `INSUFFICIENT_SOURCE_TOKEN`,
+  `INSUFFICIENT_GAS`, `ACTIVE_PREPARED_TX_EXISTS`, `TOKEN_EXPIRED`, `RATE_LIMITED`, …), HTTP
+  `status`, `requestId`, `retryAfterMs`, `errorDetails` and the raw body in `details`.
+  `instructions().errorCodes` carries the API's own description and recommended action per code.
+- `createRadiusFetch(…).swap` is this client for the buyer's network; `RADIUS_SWAP_URL` /
+  `swapUrl` override the URL. Testnet routes: Base Sepolia SBC ↔ Radius testnet SBC, Sepolia SBC →
+  Radius testnet SBC; mainnet: Base / Ethereum USDC ↔ Radius SBC.
+
 ## Networks and currency
 
 ```ts
@@ -231,7 +287,7 @@ Chain identity lives in viem `Chain` objects: `radiusMainnetChain` (id 723487) a
 `radiusTestnetChain` (id 72344), native currency RUSD, defined here with the same values as
 viem's `radius` / `radiusTestnet` (importing `viem/chains` would load every chain viem knows). A `RadiusNetwork` is one of those
 chains (`network.chain`, the source of truth) plus the Radius-specific `facilitatorUrl`,
-`faucetUrl` and `asset`; `chainId`, `network` (CAIP-2 `eip155:<id>`), `rpcUrl`, `explorerUrl`
+`faucetUrl`, `swapUrl` and `asset`; `chainId`, `network` (CAIP-2 `eip155:<id>`), `rpcUrl`, `explorerUrl`
 and `testnet` are derived from the chain. An `rpcUrl` override yields a network whose `chain`
 also uses that RPC.
 
@@ -250,10 +306,10 @@ self-hosted facilitator with your own auth or routing.
 
 | Path | What |
 | --- | --- |
-| `src/` | `networks`, `balances`, `amounts`, `receipt`, `errors`, `faucet`; `hono/` (server); `client/` (buyer) |
+| `src/` | `networks`, `balances`, `amounts`, `receipt`, `errors`, `faucet`, `swap`; `hono/` (server); `client/` (buyer) |
 | `examples/worker-seller` | Hono worker: free `/`, paid `/api/lookup` and `/api/query` (`pnpm dev`) |
-| `examples/agent-buyer` | `buy.mjs` (pay a URL), `fund.mjs` (faucet drip + status), `fresh-wallet.mjs` (gasless proof from a new wallet, faucet-funded) |
+| `examples/agent-buyer` | `buy.mjs` (pay a URL), `fund.mjs` (faucet drip + status), `swap.mjs` (cross-chain swap into or out of Radius), `fresh-wallet.mjs` (gasless proof from a new wallet, faucet-funded) |
 | `examples/demo-dapp` | Test-dapp style page exercising both sides in the browser (burner wallet or MetaMask) |
-| `test/` | unit tests (facilitator, RPC and faucet mocked; `client-parity.test.ts` pins the wire format against radius-cli's; `balances.test.ts` runs the native-balance init code in a real EVM); `test/e2e` real settlement and a live balance reconciliation on testnet or mainnet (`RADIUS_E2E=1 RADIUS_PRIVATE_KEY=… [RADIUS_NETWORK=mainnet] pnpm test:e2e`) |
+| `test/` | unit tests (facilitator, RPC, faucet and swap API mocked; `client-parity.test.ts` pins the wire format against radius-cli's; `balances.test.ts` runs the native-balance init code in a real EVM); `test/e2e` real settlement and a live balance reconciliation on testnet or mainnet (`RADIUS_E2E=1 RADIUS_PRIVATE_KEY=… [RADIUS_NETWORK=mainnet] pnpm test:e2e`) |
 
 Built on `@x402/core` (server and client), `@x402/evm` (client signing only) and viem.

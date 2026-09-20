@@ -15,6 +15,8 @@ export type RadiusPaymentErrorCode =
   | 'approval_failed'
   /** A faucet call failed; thrown as `FaucetError` (see `radius-sdk/faucet`) with the API's own `faucetCode`. */
   | 'faucet'
+  /** A swap API call failed; thrown as `SwapError` (see `radius-sdk/swap`) with the API's own `swapCode`. */
+  | 'swap'
   | 'config';
 
 export class RadiusPaymentError extends Error {
