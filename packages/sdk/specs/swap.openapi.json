@@ -1,0 +1,1629 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Radius Swap API",
+    "version": "1.0.0",
+    "description": "Public scaffold for Radius swap session endpoints used by agents."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Swap",
+      "description": "Public swap session endpoints."
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "Bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Short-lived scoped swap_token returned by prepare, broadcast, or session-list authorization."
+      }
+    },
+    "schemas": {
+      "UnsignedSwapTransaction": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "description": "0x-prefixed EVM address.",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+          },
+          "data": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]+$",
+            "description": "ABI-encoded ERC-20 transfer calldata.",
+            "example": "0xa9059cbb00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "value": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]+$",
+            "description": "ETH value for the transaction. Always 0x0 for ERC-20 transfers.",
+            "example": "0x0"
+          },
+          "chainId": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "description": "Numeric EVM chain ID used inside the unsigned transaction payload.",
+            "example": 8453
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "legacy"
+            ],
+            "description": "Prepared transaction type.",
+            "example": "legacy"
+          },
+          "nonce": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]+$",
+            "description": "Pending nonce encoded as a hex quantity.",
+            "example": "0x7"
+          },
+          "gas": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]+$",
+            "description": "Estimated gas limit encoded as hex.",
+            "example": "0x186a0"
+          },
+          "gasPrice": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]+$",
+            "description": "Legacy gas price encoded as a hex quantity.",
+            "example": "0x3b9aca00"
+          }
+        },
+        "required": [
+          "to",
+          "data",
+          "value",
+          "chainId",
+          "type",
+          "nonce",
+          "gas",
+          "gasPrice"
+        ]
+      },
+      "PrepareSwapIntentResponse": {
+        "type": "object",
+        "properties": {
+          "swap_token": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Short-lived JWT scoped to a prepared swap, session status, or wallet session list.",
+            "example": "eyJhbGciOiJIUzI1NiJ9.scaffold.payload"
+          },
+          "swap_token_expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC timestamp in ISO 8601 format.",
+            "example": "2026-05-07T01:00:00Z"
+          },
+          "prepared_tx_expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC timestamp in ISO 8601 format.",
+            "example": "2026-05-07T01:00:00Z"
+          },
+          "deposit_address": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "description": "0x-prefixed EVM address.",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+          },
+          "deposit_token_address": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "description": "0x-prefixed EVM address.",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+          },
+          "deposit_chain": {
+            "type": "string",
+            "enum": [
+              "base",
+              "base_sepolia",
+              "ethereum",
+              "sepolia",
+              "radius",
+              "radius_testnet"
+            ],
+            "description": "Supported Brale transfer type / public chain identifier.",
+            "example": "base"
+          },
+          "deposit_token": {
+            "type": "string",
+            "enum": [
+              "USDC",
+              "SBC"
+            ],
+            "description": "Supported public asset symbol.",
+            "example": "USDC"
+          },
+          "destination_chain": {
+            "type": "string",
+            "enum": [
+              "base",
+              "base_sepolia",
+              "ethereum",
+              "sepolia",
+              "radius",
+              "radius_testnet"
+            ],
+            "description": "Supported Brale transfer type / public chain identifier.",
+            "example": "base"
+          },
+          "destination_token": {
+            "type": "string",
+            "enum": [
+              "USDC",
+              "SBC"
+            ],
+            "description": "Supported public asset symbol.",
+            "example": "USDC"
+          },
+          "payout_token_address": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "description": "0x-prefixed EVM address.",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^\\d+(\\.\\d+)?$",
+            "description": "Decimal amount as a string.",
+            "example": "100.00"
+          },
+          "unsigned_tx": {
+            "$ref": "#/components/schemas/UnsignedSwapTransaction"
+          }
+        },
+        "required": [
+          "swap_token",
+          "swap_token_expires_at",
+          "prepared_tx_expires_at",
+          "deposit_address",
+          "deposit_token_address",
+          "deposit_chain",
+          "deposit_token",
+          "destination_chain",
+          "destination_token",
+          "payout_token_address",
+          "amount",
+          "unsigned_tx"
+        ]
+      },
+      "SwapErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "INVALID_REQUEST",
+                  "NOT_FOUND",
+                  "METHOD_NOT_ALLOWED",
+                  "UNSUPPORTED_CHAIN",
+                  "UNSUPPORTED_TOKEN",
+                  "UNSUPPORTED_ROUTE",
+                  "INVALID_AMOUNT",
+                  "INVALID_SIGNATURE",
+                  "SIGNATURE_EXPIRED",
+                  "IDEMPOTENCY_KEY_ALREADY_USED",
+                  "ACTIVE_PREPARED_TX_EXISTS",
+                  "INVALID_SIGNED_TX",
+                  "TX_RECIPIENT_MISMATCH",
+                  "TX_TOKEN_MISMATCH",
+                  "TX_AMOUNT_MISMATCH",
+                  "INSUFFICIENT_SOURCE_TOKEN",
+                  "INSUFFICIENT_GAS",
+                  "SOURCE_PREFLIGHT_FAILED",
+                  "UNAUTHORIZED",
+                  "TOKEN_EXPIRED",
+                  "ADDRESS_BLOCKED",
+                  "TOKEN_SESSION_MISMATCH",
+                  "PREPARED_TX_NOT_FOUND",
+                  "PREPARED_TX_EXPIRED",
+                  "SESSION_NOT_FOUND",
+                  "SESSION_EXPIRED",
+                  "SESSION_ALREADY_BROADCAST",
+                  "SESSION_NOT_CANCELLABLE",
+                  "RATE_LIMITED",
+                  "INTERNAL_ERROR"
+                ],
+                "description": "Stable machine-readable error code."
+              },
+              "message": {
+                "type": "string",
+                "description": "Human-readable explanation of the failure."
+              },
+              "request_id": {
+                "type": "string",
+                "description": "Matches the X-Request-Id response header; include it when reporting issues.",
+                "example": "req_b7c2f9d4-3d62-4f1e-9c3a-8a2f6f1f4b21"
+              },
+              "retry_after_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Milliseconds to wait before retrying. Also exposed as the Retry-After header (seconds)."
+              },
+              "details": {
+                "type": "object",
+                "additionalProperties": {},
+                "description": "Structured, code-specific context (e.g. challenge, tx_hash)."
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "request_id"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "PrepareSwapIntentRequest": {
+        "type": "object",
+        "properties": {
+          "source_chain": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Public source chain name that will be embedded into the prepared typed data.",
+            "example": "base_sepolia"
+          },
+          "source_token": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Public source token symbol that will be embedded into the prepared typed data.",
+            "example": "SBC"
+          },
+          "destination_chain": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Public destination chain name that selects the swap route.",
+            "example": "radius_testnet"
+          },
+          "destination_token": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Public destination token symbol that selects the swap route.",
+            "example": "SBC"
+          },
+          "source_address": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "description": "0x-prefixed EVM address. Case is preserved from the original request for signature verification.",
+            "example": "0x742d35cc6634c0532925a3b844bc9e7595f2bd18"
+          },
+          "destination_address": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "description": "0x-prefixed EVM address. Case is preserved from the original request for signature verification.",
+            "example": "0x742d35cc6634c0532925a3b844bc9e7595f2bd18"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^\\d+(\\.\\d+)?$",
+            "description": "Decimal amount as a string.",
+            "example": "100.00"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Agent-provided idempotency key for the signed swap intent.",
+            "example": "idem_01jv6e7av4pmk8m5ebj0x7xf82"
+          },
+          "expires_at": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "description": "Unix timestamp in seconds.",
+            "example": 1786233600
+          },
+          "signature": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{130}$",
+            "description": "EIP-712 typed data signature.",
+            "example": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "required": [
+          "source_chain",
+          "source_token",
+          "destination_chain",
+          "destination_token",
+          "source_address",
+          "destination_address",
+          "amount",
+          "idempotency_key",
+          "expires_at",
+          "signature"
+        ]
+      },
+      "BroadcastSwapTransactionResponse": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "pattern": "^sess_[A-Za-z0-9]+$",
+            "description": "Opaque swap session identifier.",
+            "example": "sess_abc123"
+          },
+          "swap_token": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Short-lived JWT scoped to a prepared swap, session status, or wallet session list.",
+            "example": "eyJhbGciOiJIUzI1NiJ9.scaffold.payload"
+          },
+          "swap_token_expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC timestamp in ISO 8601 format.",
+            "example": "2026-05-07T01:00:00Z"
+          },
+          "tx_hash": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{64}$",
+            "description": "0x-prefixed transaction hash.",
+            "example": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending_broadcast",
+              "pending_deposit",
+              "processing",
+              "complete",
+              "failed",
+              "expired"
+            ],
+            "description": "Swap session lifecycle status.",
+            "example": "pending_deposit"
+          }
+        },
+        "required": [
+          "session_id",
+          "swap_token",
+          "swap_token_expires_at",
+          "tx_hash",
+          "status"
+        ]
+      },
+      "BroadcastSwapTransactionRequest": {
+        "type": "object",
+        "properties": {
+          "signed_tx": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]+$",
+            "description": "Signed transaction bytes ready for broadcast.",
+            "example": "0xf8aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "required": [
+          "signed_tx"
+        ]
+      },
+      "SwapErrorDetails": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "INVALID_REQUEST",
+              "NOT_FOUND",
+              "METHOD_NOT_ALLOWED",
+              "UNSUPPORTED_CHAIN",
+              "UNSUPPORTED_TOKEN",
+              "UNSUPPORTED_ROUTE",
+              "INVALID_AMOUNT",
+              "INVALID_SIGNATURE",
+              "SIGNATURE_EXPIRED",
+              "IDEMPOTENCY_KEY_ALREADY_USED",
+              "ACTIVE_PREPARED_TX_EXISTS",
+              "INVALID_SIGNED_TX",
+              "TX_RECIPIENT_MISMATCH",
+              "TX_TOKEN_MISMATCH",
+              "TX_AMOUNT_MISMATCH",
+              "INSUFFICIENT_SOURCE_TOKEN",
+              "INSUFFICIENT_GAS",
+              "SOURCE_PREFLIGHT_FAILED",
+              "UNAUTHORIZED",
+              "TOKEN_EXPIRED",
+              "ADDRESS_BLOCKED",
+              "TOKEN_SESSION_MISMATCH",
+              "PREPARED_TX_NOT_FOUND",
+              "PREPARED_TX_EXPIRED",
+              "SESSION_NOT_FOUND",
+              "SESSION_EXPIRED",
+              "SESSION_ALREADY_BROADCAST",
+              "SESSION_NOT_CANCELLABLE",
+              "RATE_LIMITED",
+              "INTERNAL_ERROR"
+            ],
+            "description": "Stable machine-readable error code.\n\n| Code | When it fires | Caller action |\n| --- | --- | --- |\n| INVALID_REQUEST | The request body, path, query, or headers are missing required fields or failed validation. | Fix the request shape and retry. |\n| NOT_FOUND | No route matches the requested path. | Check the request path against the OpenAPI document. |\n| METHOD_NOT_ALLOWED | The HTTP method is not supported on this path. | Use a method from the Allow response header. |\n| UNSUPPORTED_CHAIN | The selected source or destination chain is not supported by the active swap environment. | Choose a chain from /instructions supported_routes and start a new prepare. |\n| UNSUPPORTED_TOKEN | The selected source or destination token is not supported by the active swap environment. | Choose a token from /instructions supported_routes and start a new prepare. |\n| UNSUPPORTED_ROUTE | The selected source chain, source token, destination chain, and destination token do not match a supported route. | Choose an exact route from /instructions supported_routes and start a new prepare. |\n| INVALID_AMOUNT | The amount is not a valid positive decimal amount for the selected source token. | Fix the amount and sign a new intent. |\n| INVALID_SIGNATURE | The EIP-712 signature does not match the submitted swap intent. | Rebuild the typed data exactly as documented, sign it again, and retry prepare. |\n| SIGNATURE_EXPIRED | The signed expires_at timestamp is in the past. | Create a new request with a future expiration, sign it, and retry. |\n| IDEMPOTENCY_KEY_ALREADY_USED | The idempotency_key was already consumed for this source wallet and chain. | Generate a new idempotency_key, sign a new swap intent, and retry prepare. |\n| ACTIVE_PREPARED_TX_EXISTS | A prepared transaction is already active for this source wallet and source chain. | Broadcast the existing prepared transaction, wait for it to expire, or retry prepare after it is consumed. |\n| INVALID_SIGNED_TX | The signed_tx is malformed or does not preserve a protected field from the prepared unsigned_tx. | Sign the exact unsigned_tx from the latest prepare response and retry broadcast. |\n| TX_RECIPIENT_MISMATCH | The signed transaction ERC-20 transfer recipient differs from the prepared deposit address. | Do not retry the same signed_tx. Re-sign the exact unsigned_tx, or start a new prepare if the intended route changed. |\n| TX_TOKEN_MISMATCH | The signed transaction target token contract differs from the prepared source token contract. | Do not retry the same signed_tx. Re-sign the exact unsigned_tx, or start a new prepare if the intended token changed. |\n| TX_AMOUNT_MISMATCH | The signed transaction ERC-20 transfer amount differs from the prepared amount. | Do not retry the same signed_tx. Re-sign the exact unsigned_tx, or start a new prepare if the intended amount changed. |\n| INSUFFICIENT_SOURCE_TOKEN | The source wallet does not have enough source token balance during prepare preflight. | Fund the source token balance or reduce the amount, then sign a new intent and retry prepare. |\n| INSUFFICIENT_GAS | The source wallet does not have enough native gas token for the prepared transaction. | Fund gas on the source chain, then sign a new intent and retry prepare. |\n| SOURCE_PREFLIGHT_FAILED | The source-chain RPC preflight failed while preparing nonce, gas, fees, or balance checks. | If the response is 500, retry prepare with the same intent before it expires. If it is 400, fix wallet or route state and sign a new intent. |\n| UNAUTHORIZED | The bearer swap_token is missing, invalid, or not scoped for the requested operation. | Use a current swap_token for this operation, or re-authenticate with the wallet to list sessions. |\n| TOKEN_EXPIRED | The bearer swap_token has expired. | For session status/listing, re-authenticate with the wallet. For unbroadcast prepared swaps, use listing to recover a fresh prepared swap_token or start a new prepare. |\n| ADDRESS_BLOCKED | The source wallet is blocked from using the swap API. | Stop retrying from this address and contact support if the block is unexpected. |\n| TOKEN_SESSION_MISMATCH | The bearer swap_token is valid but scoped to a different prepared swap or session. | Use the swap_token returned for the requested swap or re-authenticate with the wallet to list sessions. |\n| PREPARED_TX_NOT_FOUND | The prepared swap referenced by the swap_token is unknown, already consumed, or no longer active. | Use /swap/status or wallet session listing to recover the durable session if broadcast may have succeeded; otherwise start a new prepare. |\n| PREPARED_TX_EXPIRED | The prepared transaction expired before broadcast. | Start a new prepare. |\n| SESSION_NOT_FOUND | No durable swap session exists for the requested session_id. | Check the session_id or start a new prepare and broadcast flow. |\n| SESSION_EXPIRED | The durable swap session is past its polling or action window. | Stop polling this session and start a new prepare if the swap still needs to happen. |\n| SESSION_ALREADY_BROADCAST | The prepared transaction has already created a durable session. | Use the returned or listed session_id and continue polling it instead of broadcasting again. |\n| SESSION_NOT_CANCELLABLE | The session is already complete, failed, expired, or otherwise past the cancellable state. | Stop retrying cancel and inspect the session status. |\n| RATE_LIMITED | The caller exceeded the prepare request rate limit. | Wait for the retry window before sending another prepare request. |\n| INTERNAL_ERROR | The API hit an unexpected internal failure. | Retry later with backoff and include request_id if contacting support. |",
+            "example": "SESSION_EXPIRED"
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable explanation of the failure.",
+            "example": "Session sess_abc123 has expired and can no longer accept a broadcast"
+          },
+          "request_id": {
+            "type": "string",
+            "description": "Request identifier for support/debugging.",
+            "example": "req_xyz456"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "request_id"
+        ]
+      },
+      "SwapStatusResponse": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "prepared",
+              "session"
+            ],
+            "description": "Whether this item is still prepared in KV or has a durable D1 session.",
+            "example": "session"
+          },
+          "session_id": {
+            "type": "string",
+            "pattern": "^sess_[A-Za-z0-9]+$",
+            "description": "Opaque swap session identifier.",
+            "example": "sess_abc123"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "prepared",
+              "pending_broadcast",
+              "pending_deposit",
+              "processing",
+              "complete",
+              "failed",
+              "expired"
+            ],
+            "description": "Prepared or durable swap lifecycle status.",
+            "example": "prepared"
+          },
+          "source_chain": {
+            "type": "string",
+            "enum": [
+              "base",
+              "base_sepolia",
+              "ethereum",
+              "sepolia",
+              "radius",
+              "radius_testnet"
+            ],
+            "description": "Supported Brale transfer type / public chain identifier.",
+            "example": "base"
+          },
+          "source_token": {
+            "type": "string",
+            "enum": [
+              "USDC",
+              "SBC"
+            ],
+            "description": "Supported public asset symbol.",
+            "example": "USDC"
+          },
+          "source_address": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "description": "0x-prefixed EVM address.",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+          },
+          "destination_address": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "description": "0x-prefixed EVM address.",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+          },
+          "destination_chain": {
+            "type": "string",
+            "enum": [
+              "base",
+              "base_sepolia",
+              "ethereum",
+              "sepolia",
+              "radius",
+              "radius_testnet"
+            ],
+            "description": "Supported Brale transfer type / public chain identifier.",
+            "example": "base"
+          },
+          "destination_token": {
+            "type": "string",
+            "enum": [
+              "USDC",
+              "SBC"
+            ],
+            "description": "Supported public asset symbol.",
+            "example": "USDC"
+          },
+          "deposit_address": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "description": "0x-prefixed EVM address.",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+          },
+          "deposit_token_address": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "description": "0x-prefixed EVM address.",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+          },
+          "payout_token_address": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "description": "0x-prefixed EVM address.",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+          },
+          "amount": {
+            "type": "string",
+            "pattern": "^\\d+(\\.\\d+)?$",
+            "description": "Decimal amount as a string.",
+            "example": "100.00"
+          },
+          "unsigned_tx": {
+            "$ref": "#/components/schemas/UnsignedSwapTransaction"
+          },
+          "prepared_tx_expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC timestamp in ISO 8601 format.",
+            "example": "2026-05-07T01:00:00Z"
+          },
+          "swap_token": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Short-lived JWT scoped to a prepared swap, session status, or wallet session list.",
+            "example": "eyJhbGciOiJIUzI1NiJ9.scaffold.payload"
+          },
+          "swap_token_expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC timestamp in ISO 8601 format.",
+            "example": "2026-05-07T01:00:00Z"
+          },
+          "tx_hash": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{64}$",
+            "description": "0x-prefixed transaction hash.",
+            "example": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "payout_tx": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{64}$",
+            "description": "0x-prefixed transaction hash.",
+            "example": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC timestamp in ISO 8601 format.",
+            "example": "2026-05-07T01:00:00Z"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC timestamp in ISO 8601 format.",
+            "example": "2026-05-07T01:00:00Z"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC timestamp in ISO 8601 format.",
+            "example": "2026-05-07T01:00:00Z"
+          },
+          "error": {
+            "$ref": "#/components/schemas/SwapErrorDetails"
+          }
+        },
+        "required": [
+          "kind",
+          "status"
+        ]
+      },
+      "SwapSessionListTokenResponse": {
+        "type": "object",
+        "properties": {
+          "swap_token": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Short-lived JWT scoped to a prepared swap, session status, or wallet session list.",
+            "example": "eyJhbGciOiJIUzI1NiJ9.scaffold.payload"
+          },
+          "swap_token_expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC timestamp in ISO 8601 format.",
+            "example": "2026-05-07T01:00:00Z"
+          }
+        },
+        "required": [
+          "swap_token",
+          "swap_token_expires_at"
+        ]
+      },
+      "SwapSessionListTokenRequest": {
+        "type": "object",
+        "properties": {
+          "source_address": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "description": "0x-prefixed EVM address. Case is preserved from the original request for signature verification.",
+            "example": "0x742d35cc6634c0532925a3b844bc9e7595f2bd18"
+          },
+          "expires_at": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "description": "Unix timestamp in seconds.",
+            "example": 1786233600
+          },
+          "signature": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{130}$",
+            "description": "EIP-712 typed data signature.",
+            "example": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "required": [
+          "source_address",
+          "expires_at",
+          "signature"
+        ]
+      },
+      "SwapSessionListResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SwapStatusResponse"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "SupportedSwapRoute": {
+        "type": "object",
+        "properties": {
+          "source_chain": {
+            "type": "string",
+            "enum": [
+              "base",
+              "base_sepolia",
+              "ethereum",
+              "sepolia",
+              "radius",
+              "radius_testnet"
+            ],
+            "description": "Supported Brale transfer type / public chain identifier.",
+            "example": "base"
+          },
+          "source_token": {
+            "type": "string",
+            "enum": [
+              "USDC",
+              "SBC"
+            ],
+            "description": "Supported public asset symbol.",
+            "example": "USDC"
+          },
+          "destination_chain": {
+            "type": "string",
+            "enum": [
+              "base",
+              "base_sepolia",
+              "ethereum",
+              "sepolia",
+              "radius",
+              "radius_testnet"
+            ],
+            "description": "Supported Brale transfer type / public chain identifier.",
+            "example": "base"
+          },
+          "destination_token": {
+            "type": "string",
+            "enum": [
+              "USDC",
+              "SBC"
+            ],
+            "description": "Supported public asset symbol.",
+            "example": "USDC"
+          },
+          "source_chain_id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "description": "EVM chain ID of the source chain — use in the EIP-712 domain.",
+            "example": 84532
+          },
+          "source_token_contract": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "description": "ERC-20 contract address for the source token on the source chain.",
+            "example": "0xf9FB20B8E097904f0aB7d12e9DbeE88f2dcd0F16"
+          },
+          "source_token_decimals": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Decimal precision of the source token — use to encode the amount.",
+            "example": 6
+          },
+          "destination_chain_id": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "description": "EVM chain ID of the destination chain.",
+            "example": 72344
+          },
+          "destination_token_contract": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "description": "ERC-20 contract address for the destination token on the destination chain.",
+            "example": "0x33ad9e4bd16b69b5bfded37d8b5d9ff9aba014fb"
+          },
+          "destination_token_decimals": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Decimal precision of the destination token.",
+            "example": 6
+          }
+        },
+        "required": [
+          "source_chain",
+          "source_token",
+          "destination_chain",
+          "destination_token",
+          "source_chain_id",
+          "source_token_contract",
+          "source_token_decimals",
+          "destination_chain_id",
+          "destination_token_contract",
+          "destination_token_decimals"
+        ]
+      },
+      "SwapInstructionStep": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "example": 1
+          },
+          "name": {
+            "type": "string",
+            "example": "Sign an EIP-712 session request"
+          },
+          "description": {
+            "type": "string",
+            "example": "Build the typed data payload and sign it with signTypedData."
+          },
+          "signing_scheme": {
+            "type": "string"
+          },
+          "typed_data_primary_type": {
+            "type": "string"
+          },
+          "typed_data_domain_template": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "typed_data_types": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "type"
+                ]
+              }
+            }
+          },
+          "typed_data_message_template": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "viem_signing_example": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "required_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "required_headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "key_response_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "terminal_statuses": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "pending_broadcast",
+                "pending_deposit",
+                "processing",
+                "complete",
+                "failed",
+                "expired"
+              ],
+              "description": "Swap session lifecycle status.",
+              "example": "pending_deposit"
+            }
+          }
+        },
+        "required": [
+          "step",
+          "name",
+          "description"
+        ]
+      },
+      "SwapErrorCodeGuidance": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "INVALID_REQUEST",
+              "NOT_FOUND",
+              "METHOD_NOT_ALLOWED",
+              "UNSUPPORTED_CHAIN",
+              "UNSUPPORTED_TOKEN",
+              "UNSUPPORTED_ROUTE",
+              "INVALID_AMOUNT",
+              "INVALID_SIGNATURE",
+              "SIGNATURE_EXPIRED",
+              "IDEMPOTENCY_KEY_ALREADY_USED",
+              "ACTIVE_PREPARED_TX_EXISTS",
+              "INVALID_SIGNED_TX",
+              "TX_RECIPIENT_MISMATCH",
+              "TX_TOKEN_MISMATCH",
+              "TX_AMOUNT_MISMATCH",
+              "INSUFFICIENT_SOURCE_TOKEN",
+              "INSUFFICIENT_GAS",
+              "SOURCE_PREFLIGHT_FAILED",
+              "UNAUTHORIZED",
+              "TOKEN_EXPIRED",
+              "ADDRESS_BLOCKED",
+              "TOKEN_SESSION_MISMATCH",
+              "PREPARED_TX_NOT_FOUND",
+              "PREPARED_TX_EXPIRED",
+              "SESSION_NOT_FOUND",
+              "SESSION_EXPIRED",
+              "SESSION_ALREADY_BROADCAST",
+              "SESSION_NOT_CANCELLABLE",
+              "RATE_LIMITED",
+              "INTERNAL_ERROR"
+            ],
+            "description": "Stable machine-readable error code.\n\n| Code | When it fires | Caller action |\n| --- | --- | --- |\n| INVALID_REQUEST | The request body, path, query, or headers are missing required fields or failed validation. | Fix the request shape and retry. |\n| NOT_FOUND | No route matches the requested path. | Check the request path against the OpenAPI document. |\n| METHOD_NOT_ALLOWED | The HTTP method is not supported on this path. | Use a method from the Allow response header. |\n| UNSUPPORTED_CHAIN | The selected source or destination chain is not supported by the active swap environment. | Choose a chain from /instructions supported_routes and start a new prepare. |\n| UNSUPPORTED_TOKEN | The selected source or destination token is not supported by the active swap environment. | Choose a token from /instructions supported_routes and start a new prepare. |\n| UNSUPPORTED_ROUTE | The selected source chain, source token, destination chain, and destination token do not match a supported route. | Choose an exact route from /instructions supported_routes and start a new prepare. |\n| INVALID_AMOUNT | The amount is not a valid positive decimal amount for the selected source token. | Fix the amount and sign a new intent. |\n| INVALID_SIGNATURE | The EIP-712 signature does not match the submitted swap intent. | Rebuild the typed data exactly as documented, sign it again, and retry prepare. |\n| SIGNATURE_EXPIRED | The signed expires_at timestamp is in the past. | Create a new request with a future expiration, sign it, and retry. |\n| IDEMPOTENCY_KEY_ALREADY_USED | The idempotency_key was already consumed for this source wallet and chain. | Generate a new idempotency_key, sign a new swap intent, and retry prepare. |\n| ACTIVE_PREPARED_TX_EXISTS | A prepared transaction is already active for this source wallet and source chain. | Broadcast the existing prepared transaction, wait for it to expire, or retry prepare after it is consumed. |\n| INVALID_SIGNED_TX | The signed_tx is malformed or does not preserve a protected field from the prepared unsigned_tx. | Sign the exact unsigned_tx from the latest prepare response and retry broadcast. |\n| TX_RECIPIENT_MISMATCH | The signed transaction ERC-20 transfer recipient differs from the prepared deposit address. | Do not retry the same signed_tx. Re-sign the exact unsigned_tx, or start a new prepare if the intended route changed. |\n| TX_TOKEN_MISMATCH | The signed transaction target token contract differs from the prepared source token contract. | Do not retry the same signed_tx. Re-sign the exact unsigned_tx, or start a new prepare if the intended token changed. |\n| TX_AMOUNT_MISMATCH | The signed transaction ERC-20 transfer amount differs from the prepared amount. | Do not retry the same signed_tx. Re-sign the exact unsigned_tx, or start a new prepare if the intended amount changed. |\n| INSUFFICIENT_SOURCE_TOKEN | The source wallet does not have enough source token balance during prepare preflight. | Fund the source token balance or reduce the amount, then sign a new intent and retry prepare. |\n| INSUFFICIENT_GAS | The source wallet does not have enough native gas token for the prepared transaction. | Fund gas on the source chain, then sign a new intent and retry prepare. |\n| SOURCE_PREFLIGHT_FAILED | The source-chain RPC preflight failed while preparing nonce, gas, fees, or balance checks. | If the response is 500, retry prepare with the same intent before it expires. If it is 400, fix wallet or route state and sign a new intent. |\n| UNAUTHORIZED | The bearer swap_token is missing, invalid, or not scoped for the requested operation. | Use a current swap_token for this operation, or re-authenticate with the wallet to list sessions. |\n| TOKEN_EXPIRED | The bearer swap_token has expired. | For session status/listing, re-authenticate with the wallet. For unbroadcast prepared swaps, use listing to recover a fresh prepared swap_token or start a new prepare. |\n| ADDRESS_BLOCKED | The source wallet is blocked from using the swap API. | Stop retrying from this address and contact support if the block is unexpected. |\n| TOKEN_SESSION_MISMATCH | The bearer swap_token is valid but scoped to a different prepared swap or session. | Use the swap_token returned for the requested swap or re-authenticate with the wallet to list sessions. |\n| PREPARED_TX_NOT_FOUND | The prepared swap referenced by the swap_token is unknown, already consumed, or no longer active. | Use /swap/status or wallet session listing to recover the durable session if broadcast may have succeeded; otherwise start a new prepare. |\n| PREPARED_TX_EXPIRED | The prepared transaction expired before broadcast. | Start a new prepare. |\n| SESSION_NOT_FOUND | No durable swap session exists for the requested session_id. | Check the session_id or start a new prepare and broadcast flow. |\n| SESSION_EXPIRED | The durable swap session is past its polling or action window. | Stop polling this session and start a new prepare if the swap still needs to happen. |\n| SESSION_ALREADY_BROADCAST | The prepared transaction has already created a durable session. | Use the returned or listed session_id and continue polling it instead of broadcasting again. |\n| SESSION_NOT_CANCELLABLE | The session is already complete, failed, expired, or otherwise past the cancellable state. | Stop retrying cancel and inspect the session status. |\n| RATE_LIMITED | The caller exceeded the prepare request rate limit. | Wait for the retry window before sending another prepare request. |\n| INTERNAL_ERROR | The API hit an unexpected internal failure. | Retry later with backoff and include request_id if contacting support. |",
+            "example": "SESSION_EXPIRED"
+          },
+          "description": {
+            "type": "string",
+            "description": "One-line description of when this error code fires.",
+            "example": "The prepared transaction expired before broadcast."
+          },
+          "caller_action": {
+            "type": "string",
+            "description": "Recommended recovery action for agents and API clients.",
+            "example": "Start a new prepare."
+          }
+        },
+        "required": [
+          "code",
+          "description",
+          "caller_action"
+        ]
+      },
+      "SwapInstructionsResponse": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string",
+            "example": "1"
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "mainnet"
+            ],
+            "description": "Resolved swap environment for this deployment — use as the EIP-712 message `environment` field.",
+            "example": "testnet"
+          },
+          "overview": {
+            "type": "string"
+          },
+          "supported_routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SupportedSwapRoute"
+            }
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SwapInstructionStep"
+            }
+          },
+          "important_rules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error_codes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SwapErrorCodeGuidance"
+            }
+          }
+        },
+        "required": [
+          "version",
+          "environment",
+          "overview",
+          "supported_routes",
+          "steps",
+          "important_rules",
+          "error_codes"
+        ]
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "/api/v1/swap/prepare": {
+      "post": {
+        "tags": [
+          "Swap"
+        ],
+        "summary": "Prepare a swap transaction",
+        "description": "Verifies a signed swap intent, preflights the source wallet, stores a short-lived prepared transaction in KV, and returns a complete unsigned transfer transaction the client must sign exactly as returned.\n\nExample viem payload to sign before calling this endpoint:\n\n```ts\nconst signature = await walletClient.signTypedData({\n  account,\n  domain: {\n    name: 'Radius Swap API',\n    version: '1',\n    chainId: 84532,\n  },\n  types: {\n    SwapIntent: [\n      { name: 'sourceAddress', type: 'address' },\n      { name: 'sourceChain', type: 'string' },\n      { name: 'sourceToken', type: 'string' },\n      { name: 'destinationChain', type: 'string' },\n      { name: 'destinationToken', type: 'string' },\n      { name: 'destinationAddress', type: 'address' },\n      { name: 'amount', type: 'string' },\n      { name: 'idempotencyKey', type: 'string' },\n      { name: 'expiresAt', type: 'uint256' },\n      { name: 'environment', type: 'string' },\n    ],\n  },\n  primaryType: 'SwapIntent',\n  message: {\n    sourceAddress: '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18',\n    sourceChain: 'base_sepolia',\n    sourceToken: 'SBC',\n    destinationChain: 'radius_testnet',\n    destinationToken: 'SBC',\n    destinationAddress: '0x2222222222222222222222222222222222222222',\n    amount: '100.00',\n    idempotencyKey: 'idem_01jv6e7av4pmk8m5ebj0x7xf82',\n    expiresAt: 1786233600n,\n    environment: 'testnet',\n  },\n});\n```",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareSwapIntentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Prepared transaction, scoped swap token, and unsigned transaction returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrepareSwapIntentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or malformed request field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid, expired, or wrong-scope swap token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The agent address is blocked or forbidden for this swap.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested swap state was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The idempotency key has already been used or an active prepared transaction already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many prepare requests from this address.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/swap/broadcast": {
+      "post": {
+        "tags": [
+          "Swap"
+        ],
+        "summary": "Broadcast a prepared swap and create the durable session",
+        "description": "Validates and broadcasts the exact signed transaction referenced by the prepared swap token, creates the durable swap session, and starts the workflow.",
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BroadcastSwapTransactionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed transaction accepted, session created, and workflow started.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BroadcastSwapTransactionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Signed transaction is malformed, invalid, or does not match the prepared transaction.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid, expired, or wrong-scope swap token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Swap token is valid but not scoped to this swap.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No active prepared transaction exists for the swap token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Prepared transaction has expired or has already been consumed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/swap/status": {
+      "get": {
+        "tags": [
+          "Swap"
+        ],
+        "summary": "Get prepared or durable swap status",
+        "description": "Returns the prepared swap referenced by a prepared swap token, or the durable session referenced by a session status token.",
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current prepared or durable swap state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid, expired, or wrong-scope swap token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Swap token is valid but not scoped to this swap.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No prepared swap or durable session found for the token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Prepared transaction has expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/swap/sessions/token": {
+      "post": {
+        "tags": [
+          "Swap"
+        ],
+        "summary": "Create a wallet-scoped session list token",
+        "description": "Verifies a short-lived EIP-712 wallet signature and returns a swap token that can list durable sessions and active prepared swaps for that source wallet.\n\nExample viem payload to sign before calling this endpoint:\n\n```ts\nconst signature = await walletClient.signTypedData({\n  account,\n  domain: {\n    name: 'Radius Swap API',\n    version: '1',\n  },\n  types: {\n    SwapSessionListAccess: [\n      { name: 'sourceAddress', type: 'address' },\n      { name: 'expiresAt', type: 'uint256' },\n      { name: 'environment', type: 'string' },\n    ],\n  },\n  primaryType: 'SwapSessionListAccess',\n  message: {\n    sourceAddress: '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18',\n    expiresAt: 1786233600n,\n    environment: 'testnet',\n  },\n});\n```",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SwapSessionListTokenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Wallet-scoped session list token returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapSessionListTokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or malformed request field, invalid signature, or expired signature.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid, expired, or wrong-scope swap token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested swap state was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/swap/sessions": {
+      "get": {
+        "tags": [
+          "Swap"
+        ],
+        "summary": "List wallet sessions and active prepared swaps",
+        "description": "Lists durable swap sessions for the wallet authenticated by the session list token. Active prepared swaps are included on the first page by default and include a fresh prepared-scope swap token.",
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+$",
+              "description": "Maximum durable sessions to return. Defaults to 25, maximum 100.",
+              "example": "25"
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Opaque pagination cursor returned by the previous response.",
+              "example": "eyJjcmVhdGVkX2F0IjoxNzE1MDQwMDAwLCJzZXNzaW9uX2lkIjoic2Vzc18xMjMifQ"
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "prepared",
+                "pending_broadcast",
+                "pending_deposit",
+                "processing",
+                "complete",
+                "failed",
+                "expired"
+              ],
+              "description": "Optional status filter. Use prepared to return only active prepared swaps.",
+              "example": "prepared"
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "base",
+                "base_sepolia",
+                "ethereum",
+                "sepolia",
+                "radius",
+                "radius_testnet"
+              ],
+              "description": "Optional source chain filter.",
+              "example": "base"
+            },
+            "required": false,
+            "name": "source_chain",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^0x[a-fA-F0-9]{64}$",
+              "description": "Optional source transaction hash filter for durable sessions.",
+              "example": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "required": false,
+            "name": "tx_hash",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Wallet session list returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapSessionListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed query parameter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid, expired, or wrong-scope swap token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Requested swap state was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/swap/instructions": {
+      "get": {
+        "tags": [
+          "Swap"
+        ],
+        "summary": "Get machine-readable agent instructions",
+        "description": "Returns a prompt-style guide that an LLM agent can ingest before preparing and broadcasting a swap.",
+        "responses": {
+          "200": {
+            "description": "Agent-facing usage instructions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapInstructionsResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal failure.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SwapErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {}
+}

@@ -1,6 +1,8 @@
 /**
  * Client for the Radius faucet API (`<faucetUrl>/openapi.json` documents it; testnet:
- * https://testnet.radiustech.xyz/api/v1/faucet/openapi.json).
+ * https://testnet.radiustech.xyz/api/v1/faucet/openapi.json). Wire types come from
+ * `src/generated/faucet.ts`, generated from `specs/faucet.openapi.json`; this file is the
+ * hand-written flow on top and is what breaks when the spec changes incompatibly.
  *
  * Endpoints:
  *   GET  /status/{address}?token=SBC     rate-limit state and drip amounts
@@ -23,27 +25,36 @@
  */
 
 import { RadiusPaymentError } from './errors.js';
+import type { components as FaucetApi, paths as FaucetPaths } from './generated/faucet.js';
 import { resolveNetwork, type Address, type NetworkInput, type NetworkOverrides, type RadiusNetwork } from './networks.js';
+import type { ErrorDetailsOf, JsonBody, JsonOk } from './openapi.js';
 
-/** Machine-readable error codes the faucet documents, plus the client's own for malformed answers. */
+// ---- wire contract (generated from specs/faucet.openapi.json; see src/openapi.ts) ----------------
+// Each operation this client speaks, by path: a renamed or removed endpoint fails to compile here.
+type StatusOp = FaucetPaths['/api/v1/faucet/status/{address}']['get'];
+type ChallengeOp = FaucetPaths['/api/v1/faucet/challenge/{address}']['get'];
+type DripOp = FaucetPaths['/api/v1/faucet/drip']['post'];
+/** Wire shapes, as the faucet API documents them. */
+export type FaucetApiSchemas = FaucetApi['schemas'];
+type StatusResponse = JsonOk<StatusOp>;
+type ChallengeResponse = JsonOk<ChallengeOp>;
+type DripSuccess = JsonOk<DripOp>;
+type DripRequest = JsonBody<DripOp>;
+type ErrorEnvelope = ErrorDetailsOf<FaucetApiSchemas['FaucetErrorResponse']>;
+/** Token symbols the faucet drips (from the spec). */
+export type FaucetToken = DripRequest['token'];
+/** Error codes the faucet API documents (from the spec). */
+export type FaucetApiErrorCode = ErrorEnvelope['code'];
+
+/**
+ * `FaucetApiErrorCode` (`signature_required`, `rate_limited`, `faucet_empty`, `transaction_reverted`,
+ * `receipt_timeout`, `native_drip_failed`, …) plus the client's own codes. Kept open (`string`) so a
+ * code newer than this SDK passes through untouched.
+ */
 export type FaucetErrorCode =
-  | 'invalid_request'
-  | 'signature_required'
-  | 'invalid_signature'
-  | 'rate_limited'
-  /** Faucet wallet is low on SBC or RUSD; nothing was sent. */
-  | 'faucet_empty'
-  | 'sbc_not_configured'
-  | 'faucet_not_configured'
-  /** Drip mined but reverted (`errorDetails.tx_hash`); the quota was consumed. */
-  | 'transaction_reverted'
-  /** Drip broadcast but no receipt in time (`errorDetails.tx_hash`); it may still confirm. */
-  | 'receipt_timeout'
-  /** SBC arrived but the RUSD gas drip failed (`errorDetails.tx_hash` is the SBC transfer). */
-  | 'native_drip_failed'
-  | 'not_found'
-  | 'method_not_allowed'
-  | 'internal_error'
+  | FaucetApiErrorCode
+  /** Client-side: the address is not a 0x address; nothing was sent. */
+  | 'invalid_address'
   /** Client-side: the faucet answered with something that is not the documented JSON. */
   | 'invalid_response'
   /** Client-side: the faucet wants a signature and no signer was given. */
@@ -147,8 +158,8 @@ export interface FaucetClientOptions extends NetworkOverrides {
   network?: NetworkInput;
   /** Faucet base URL; overrides the network's (`faucetUrl` from `NetworkOverrides` is an alias). */
   url?: string;
-  /** Token symbol to request; defaults to the network's payment asset (SBC). */
-  token?: string;
+  /** Token symbol to request; defaults to the network's payment asset (SBC, the only one the spec lists). */
+  token?: FaucetToken | (string & {});
   /** Underlying fetch (defaults to globalThis.fetch). */
   fetch?: typeof globalThis.fetch;
 }
@@ -178,16 +189,6 @@ function isObject(v: unknown): v is JsonObject {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-function optionalString(o: JsonObject, key: string): string | undefined {
-  const v = o[key];
-  return typeof v === 'string' ? v : undefined;
-}
-
-function optionalNumber(o: JsonObject, key: string): number | undefined {
-  const v = o[key];
-  return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
-}
-
 interface ParsedError {
   code: FaucetErrorCode;
   message?: string;
@@ -207,15 +208,16 @@ function readError(body: unknown, res: Response): ParsedError {
   const out: ParsedError = { code: 'invalid_response' };
   let code: string | undefined;
   if (isObject(err)) {
-    code = optionalString(err, 'code');
-    out.message = optionalString(err, 'message');
-    out.requestId = optionalString(err, 'request_id');
-    out.retryAfterMs = optionalNumber(err, 'retry_after_ms');
-    if (isObject(err.details)) out.errorDetails = err.details;
+    const e = err as Partial<ErrorEnvelope>;
+    if (typeof e.code === 'string') code = e.code;
+    if (typeof e.message === 'string') out.message = e.message;
+    if (typeof e.request_id === 'string') out.requestId = e.request_id;
+    if (typeof e.retry_after_ms === 'number' && Number.isFinite(e.retry_after_ms)) out.retryAfterMs = e.retry_after_ms;
+    if (isObject(e.details)) out.errorDetails = e.details;
   } else if (typeof err === 'string') {
     code = err;
-    out.message = optionalString(o, 'message');
-    out.retryAfterMs = optionalNumber(o, 'retry_after_ms');
+    if (typeof o.message === 'string') out.message = o.message;
+    if (typeof o.retry_after_ms === 'number' && Number.isFinite(o.retry_after_ms)) out.retryAfterMs = o.retry_after_ms;
   }
   if (out.retryAfterMs === undefined) {
     const header = Number(res.headers.get('retry-after'));
@@ -271,55 +273,49 @@ export function createFaucetClient(options: FaucetClientOptions = {}): FaucetCli
   const status = async (address: Address): Promise<FaucetStatus> => {
     const a = requireAddress(address);
     const raw = await call(`/status/${a}?token=${encodeURIComponent(token)}`);
-    if (typeof raw.rate_limited !== 'boolean') throw new FaucetError('invalid_response', 'Faucet status has no boolean rate_limited', { details: raw });
-    const out: FaucetStatus = { address: optionalString(raw, 'address') ?? a.toLowerCase(), token: optionalString(raw, 'token') ?? token, rateLimited: raw.rate_limited, raw };
-    const retry = optionalNumber(raw, 'retry_after_ms');
-    if (retry !== undefined) out.retryAfterMs = retry;
+    // Field names come from the spec; values are still checked, JSON being untrusted input.
+    const r = raw as Partial<StatusResponse>;
+    if (typeof r.rate_limited !== 'boolean') throw new FaucetError('invalid_response', 'Faucet status has no boolean rate_limited', { details: raw });
+    const out: FaucetStatus = { address: typeof r.address === 'string' ? r.address : a.toLowerCase(), token: typeof r.token === 'string' ? r.token : token, rateLimited: r.rate_limited, raw };
+    if (typeof r.retry_after_ms === 'number' && Number.isFinite(r.retry_after_ms)) out.retryAfterMs = r.retry_after_ms;
     // `remaining_requests` is null on the wire when the faucet has no limit (Infinity does not survive JSON).
-    const remaining = optionalNumber(raw, 'remaining_requests');
-    if (remaining !== undefined) out.remainingRequests = remaining;
-    const drip = raw.drip_amount;
+    if (typeof r.remaining_requests === 'number' && Number.isFinite(r.remaining_requests)) out.remainingRequests = r.remaining_requests;
+    const drip: unknown = r.drip_amount;
     if (typeof drip === 'string') out.dripAmount = drip;
     else if (typeof drip === 'number') out.dripAmount = String(drip);
-    const native = optionalString(raw, 'native_drip_amount');
-    if (native !== undefined) out.nativeDripAmount = native;
-    if (raw.unlimited === true) out.unlimited = true;
+    if (typeof r.native_drip_amount === 'string') out.nativeDripAmount = r.native_drip_amount;
+    if (r.unlimited === true) out.unlimited = true;
     return out;
   };
 
   const challenge = async (address: Address): Promise<FaucetChallenge> => {
     const a = requireAddress(address);
     const raw = await call(`/challenge/${a}?token=${encodeURIComponent(token)}`);
-    const message = optionalString(raw, 'message');
-    if (!message) throw new FaucetError('invalid_response', 'Faucet challenge has no message to sign', { details: raw });
-    return { message, address: optionalString(raw, 'address') ?? a.toLowerCase(), token: optionalString(raw, 'token') ?? token, raw };
+    const r = raw as Partial<ChallengeResponse>;
+    if (typeof r.message !== 'string' || !r.message) throw new FaucetError('invalid_response', 'Faucet challenge has no message to sign', { details: raw });
+    return { message: r.message, address: typeof r.address === 'string' ? r.address : a.toLowerCase(), token: typeof r.token === 'string' ? r.token : token, raw };
   };
 
   const drip = async (address: Address, signature?: `0x${string}`): Promise<FaucetDrip> => {
     const a = requireAddress(address);
-    const raw = await call('/drip', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(signature ? { address: a, token, signature } : { address: a, token }),
-    });
-    if (raw.success !== true) throw new FaucetError('invalid_response', 'Faucet drip answered without success: true', { status: 200, details: raw });
-    const out: FaucetDrip = { success: true, address: optionalString(raw, 'address') ?? a, token: optionalString(raw, 'token') ?? token, raw };
-    const amount = optionalString(raw, 'amount');
-    if (amount !== undefined) out.amount = amount;
-    const hash = optionalString(raw, 'tx_hash') ?? optionalString(raw, 'txHash');
-    if (hash && TX_HASH.test(hash)) {
-      out.txHash = hash as `0x${string}`;
-      const link = explorer(hash);
+    // The spec enumerates the tokens; `token` is left open for custom assets and cast at the boundary.
+    const body: Omit<DripRequest, 'token'> & { token: string } = signature ? { address: a, token, signature } : { address: a, token };
+    const raw = await call('/drip', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const r = raw as Partial<DripSuccess>;
+    if (r.success !== true) throw new FaucetError('invalid_response', 'Faucet drip answered without success: true', { status: 200, details: raw });
+    const out: FaucetDrip = { success: true, address: typeof r.address === 'string' ? r.address : a, token: typeof r.token === 'string' ? r.token : token, raw };
+    if (typeof r.amount === 'string') out.amount = r.amount;
+    if (typeof r.tx_hash === 'string' && TX_HASH.test(r.tx_hash)) {
+      out.txHash = r.tx_hash as `0x${string}`;
+      const link = explorer(r.tx_hash);
       if (link) out.explorerUrl = link;
     }
-    if (isObject(raw.native)) {
-      const n = raw.native;
-      const nativeHash = optionalString(n, 'tx_hash');
-      out.native = { token: optionalString(n, 'token') ?? 'RUSD', amount: optionalString(n, 'amount') ?? '' };
-      if (nativeHash && TX_HASH.test(nativeHash)) out.native.txHash = nativeHash as `0x${string}`;
+    if (isObject(r.native)) {
+      const n = r.native as Partial<NonNullable<DripSuccess['native']>>;
+      out.native = { token: typeof n.token === 'string' ? n.token : 'RUSD', amount: typeof n.amount === 'string' ? n.amount : '' };
+      if (typeof n.tx_hash === 'string' && TX_HASH.test(n.tx_hash)) out.native.txHash = n.tx_hash as `0x${string}`;
     }
-    const next = optionalNumber(raw, 'next_drip_at');
-    if (next !== undefined) out.nextDripAt = next;
+    if (typeof r.next_drip_at === 'number' && Number.isFinite(r.next_drip_at)) out.nextDripAt = r.next_drip_at;
     return out;
   };
 

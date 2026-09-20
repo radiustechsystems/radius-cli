@@ -226,14 +226,29 @@ start, but stale if the facilitator changes), or `facilitator: myClient` where `
 implements `FacilitatorClient` from `@x402/core/server` (`getSupported`, `verify`, `settle`) for a
 self-hosted facilitator with your own auth or routing.
 
+## Generated API types
+
+The faucet and swap clients speak the Radius HTTP APIs; their wire types are generated from the
+APIs' OpenAPI documents rather than typed by hand:
+
+- `specs/*.openapi.json` are copies of `apps/*/openapi/openapi.json` in `radiustechsystems/api-monorepo`.
+- `src/generated/*.ts` is produced from them by `pnpm generate:api` (openapi-typescript, pinned).
+  `src/faucet.ts` and `src/swap.ts` import their request, response, enum and error-code types from
+  there and compile against them, so an incompatible spec change fails `tsc` in the client that
+  speaks it. `SwapApiSchemas` / `FaucetApiSchemas` expose the raw wire shapes.
+- When a spec changes on the monorepo's `main`, `.github/workflows/regenerate-api-clients.yml`
+  regenerates and opens a PR here; `pnpm check:api` in CI fails if the generated files are stale;
+  `test/contract.test.ts` checks the clients against the specs. Details in `specs/README.md`.
+
 ## Layout
 
 | Path | What |
 | --- | --- |
-| `src/` | `networks`, `amounts`, `receipt`, `errors`, `faucet`, `swap`; `hono/` (server); `client/` (buyer) |
+| `src/` | `networks`, `amounts`, `receipt`, `errors`, `faucet`, `swap`, `openapi` (type helpers); `generated/` (from `specs/`); `hono/` (server); `client/` (buyer) |
+| `specs/` | OpenAPI documents of the faucet and swap APIs, synced from the API monorepo (`specs/README.md`) |
 | `examples/worker-seller` | Hono worker: free `/`, paid `/api/lookup` and `/api/query` (`pnpm dev`) |
 | `examples/agent-buyer` | `buy.mjs` (pay a URL), `fund.mjs` (faucet drip + status), `swap.mjs` (cross-chain swap into or out of Radius), `fresh-wallet.mjs` (gasless proof from a new wallet, faucet-funded) |
 | `examples/demo-dapp` | Test-dapp style page exercising both sides in the browser (burner wallet or MetaMask) |
-| `test/` | unit tests (facilitator, RPC, faucet and swap API mocked; `client-parity.test.ts` pins the wire format against radius-cli's); `test/e2e` real settlement on testnet or mainnet (`RADIUS_E2E=1 RADIUS_PRIVATE_KEY=… [RADIUS_NETWORK=mainnet] pnpm test:e2e`) |
+| `test/` | unit tests (facilitator, RPC, faucet and swap API mocked; `contract.test.ts` checks the clients and fixtures against `specs/`; `client-parity.test.ts` pins the wire format against radius-cli's); `test/e2e` real settlement on testnet or mainnet (`RADIUS_E2E=1 RADIUS_PRIVATE_KEY=… [RADIUS_NETWORK=mainnet] pnpm test:e2e`) |
 
 Built on `@x402/core` (server and client), `@x402/evm` (client signing only) and viem.

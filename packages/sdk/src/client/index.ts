@@ -544,6 +544,6 @@ export { RadiusPaymentError } from '../errors.js';
 export { createFaucetClient, FaucetError } from '../faucet.js';
 export { createSwapClient, SwapError } from '../swap.js';
 export type { SwapClient, SwapIntent, SwapResult, SwapStatus, PreparedSwap, SwapBroadcast, SwapSigner } from '../swap.js';
-export type { FaucetClient, FaucetClientOptions, FaucetDrip, FaucetStatus, FaucetChallenge, FaucetSigner, FaucetFundOptions, FaucetErrorCode } from '../faucet.js';
+export type { FaucetClient, FaucetClientOptions, FaucetDrip, FaucetStatus, FaucetChallenge, FaucetSigner, FaucetFundOptions, FaucetErrorCode, FaucetApiErrorCode } from '../faucet.js';
 export { radiusEnv } from '../env.js';
 export type { RadiusEnvConfig } from '../env.js';

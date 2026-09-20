@@ -1,7 +1,9 @@
 /**
  * Client for the Radius Swap API (`<swapUrl>/openapi.json` documents it; testnet:
  * https://testnet.radiustech.xyz/api/v1/swap/openapi.json). Moves SBC/USDC between Radius and
- * Base / Ethereum (and their testnets) through Brale.
+ * Base / Ethereum (and their testnets) through Brale. Wire types come from `src/generated/swap.ts`,
+ * generated from `specs/swap.openapi.json`; this file is the hand-written flow on top and is what
+ * breaks when the spec changes incompatibly.
  *
  * Endpoints (all JSON; protected ones take `Authorization: Bearer <swap_token>`):
  *   GET  /instructions           supported routes (chain ids, token contracts, decimals), agent guide
@@ -24,50 +26,51 @@
 
 import type { Hex, TypedDataDomain } from 'viem';
 import { RadiusPaymentError } from './errors.js';
+import type { components as SwapApi, paths as SwapPaths } from './generated/swap.js';
 import { resolveNetwork, type Address, type NetworkInput, type NetworkOverrides, type RadiusNetwork } from './networks.js';
+import type { AssertAssignable, ErrorDetailsOf, JsonBody, JsonOk, Query } from './openapi.js';
 
-/** Public chain identifiers the API accepts (the testnet deployment serves the `*_sepolia` / `radius_testnet` ones). */
-export type SwapChain = 'base' | 'base_sepolia' | 'ethereum' | 'sepolia' | 'radius' | 'radius_testnet' | (string & {});
-export type SwapToken = 'USDC' | 'SBC' | (string & {});
-export type SwapEnvironment = 'testnet' | 'mainnet';
-/** Durable session lifecycle. */
-export type SwapSessionStatus = 'pending_broadcast' | 'pending_deposit' | 'processing' | 'complete' | 'failed' | 'expired';
-/** A prepared (not yet broadcast) swap, or a session status. */
-export type SwapFlowStatus = 'prepared' | SwapSessionStatus;
+// ---- wire contract (generated from specs/swap.openapi.json; see src/openapi.ts) ------------------
+// Each operation this client speaks, by path: a renamed or removed endpoint fails to compile here.
+type InstructionsOp = SwapPaths['/api/v1/swap/instructions']['get'];
+type PrepareOp = SwapPaths['/api/v1/swap/prepare']['post'];
+type BroadcastOp = SwapPaths['/api/v1/swap/broadcast']['post'];
+type StatusOp = SwapPaths['/api/v1/swap/status']['get'];
+type SessionListTokenOp = SwapPaths['/api/v1/swap/sessions/token']['post'];
+type ListSessionsOp = SwapPaths['/api/v1/swap/sessions']['get'];
+/** Wire shapes, as the swap API documents them. */
+export type SwapApiSchemas = SwapApi['schemas'];
+type InstructionsResponse = JsonOk<InstructionsOp>;
+type PrepareRequestWire = JsonBody<PrepareOp>;
+type PrepareResponse = JsonOk<PrepareOp>;
+type BroadcastRequestWire = JsonBody<BroadcastOp>;
+type BroadcastResponse = JsonOk<BroadcastOp>;
+type StatusResponse = JsonOk<StatusOp>;
+type SessionListTokenRequestWire = JsonBody<SessionListTokenOp>;
+type SessionListTokenResponse = JsonOk<SessionListTokenOp>;
+type ListSessionsQuery = Query<ListSessionsOp>;
+type ListSessionsResponse = JsonOk<ListSessionsOp>;
+type ErrorEnvelope = ErrorDetailsOf<SwapApiSchemas['SwapErrorResponse']>;
+type SupportedRoute = SwapApiSchemas['SupportedSwapRoute'];
+
+/** Public chain identifiers the API accepts (from the spec; the testnet deployment serves the `*_sepolia` / `radius_testnet` ones). */
+export type SwapChain = SupportedRoute['source_chain'];
+export type SwapToken = SupportedRoute['source_token'];
+export type SwapEnvironment = InstructionsResponse['environment'];
+/** Durable session lifecycle (from the spec). */
+export type SwapSessionStatus = BroadcastResponse['status'];
+/** A prepared (not yet broadcast) swap, or a session status (from the spec). */
+export type SwapFlowStatus = StatusResponse['status'];
 export const SWAP_TERMINAL_STATUSES: ReadonlySet<SwapFlowStatus> = new Set<SwapFlowStatus>(['complete', 'failed', 'expired']);
+/** Error codes the swap API documents (from the spec). */
+export type SwapApiErrorCode = ErrorEnvelope['code'];
 
-/** Error codes the API documents, plus the client's own. */
+/**
+ * `SwapApiErrorCode` plus the client's own codes. Kept open (`string`) so a code newer than this
+ * SDK passes through untouched.
+ */
 export type SwapErrorCode =
-  | 'INVALID_REQUEST'
-  | 'NOT_FOUND'
-  | 'METHOD_NOT_ALLOWED'
-  | 'UNSUPPORTED_CHAIN'
-  | 'UNSUPPORTED_TOKEN'
-  | 'UNSUPPORTED_ROUTE'
-  | 'INVALID_AMOUNT'
-  | 'INVALID_SIGNATURE'
-  | 'SIGNATURE_EXPIRED'
-  | 'IDEMPOTENCY_KEY_ALREADY_USED'
-  | 'ACTIVE_PREPARED_TX_EXISTS'
-  | 'INVALID_SIGNED_TX'
-  | 'TX_RECIPIENT_MISMATCH'
-  | 'TX_TOKEN_MISMATCH'
-  | 'TX_AMOUNT_MISMATCH'
-  | 'INSUFFICIENT_SOURCE_TOKEN'
-  | 'INSUFFICIENT_GAS'
-  | 'SOURCE_PREFLIGHT_FAILED'
-  | 'UNAUTHORIZED'
-  | 'TOKEN_EXPIRED'
-  | 'ADDRESS_BLOCKED'
-  | 'TOKEN_SESSION_MISMATCH'
-  | 'PREPARED_TX_NOT_FOUND'
-  | 'PREPARED_TX_EXPIRED'
-  | 'SESSION_NOT_FOUND'
-  | 'SESSION_EXPIRED'
-  | 'SESSION_ALREADY_BROADCAST'
-  | 'SESSION_NOT_CANCELLABLE'
-  | 'RATE_LIMITED'
-  | 'INTERNAL_ERROR'
+  | SwapApiErrorCode
   /** Client-side: the API answered with something that is not the documented JSON. */
   | 'INVALID_RESPONSE'
   /** Client-side: the signer cannot do what the step needs (`signTypedData` / `signTransaction`). */
@@ -171,6 +174,7 @@ export interface PrepareSwapRequest {
   expires_at: number;
   signature: Hex;
 }
+type _PrepareRequestMatchesSpec = AssertAssignable<PrepareSwapRequest, PrepareRequestWire>;
 
 export const SWAP_INTENT_TYPES = {
   SwapIntent: [
@@ -264,6 +268,7 @@ export interface UnsignedSwapTransaction {
   gas: Hex;
   gasPrice: Hex;
 }
+type _UnsignedTxMatchesSpec = AssertAssignable<UnsignedSwapTransaction, SwapApiSchemas['UnsignedSwapTransaction']>;
 
 /** `UnsignedSwapTransaction` with the quantities decoded: what viem's `signTransaction` takes. */
 export interface SignableSwapTransaction {
@@ -354,7 +359,7 @@ export interface SwapSessionList {
   raw: unknown;
 }
 
-export interface ListSessionsQuery {
+export interface ListSessionsOptions {
   /** Durable sessions per page; default 25, max 100. */
   limit?: number;
   cursor?: string;
@@ -432,7 +437,7 @@ export interface SwapClient {
   /** Sign `SwapSessionListAccess` and `POST /sessions/token` for a wallet-scoped list token. */
   sessionListToken(signer: SwapSigner, options?: { expiresAt?: number | Date }): Promise<{ swapToken: string; swapTokenExpiresAt: Date; raw: unknown }>;
   /** `GET /sessions` under a list token. */
-  listSessions(swapToken: string, query?: ListSessionsQuery): Promise<SwapSessionList>;
+  listSessions(swapToken: string, query?: ListSessionsOptions): Promise<SwapSessionList>;
   /**
    * prepare → sign → broadcast, then (default) wait for a terminal status. Throws `SWAP_FAILED`
    * when the session ends `failed` or `expired`.
@@ -480,67 +485,79 @@ const randomKey = (): string => {
 
 function readUnsignedTx(v: unknown): UnsignedSwapTransaction | undefined {
   if (!isObject(v)) return undefined;
+  const w = v as Partial<SwapApiSchemas['UnsignedSwapTransaction']>;
   const to = addr(v, 'to');
-  const data = str(v, 'data');
-  const value = str(v, 'value');
-  const nonce = str(v, 'nonce');
-  const gas = str(v, 'gas');
-  const gasPrice = str(v, 'gasPrice');
-  const chainId = num(v, 'chainId');
-  if (!to || !data || !value || !nonce || !gas || !gasPrice || chainId === undefined || v.type !== 'legacy') return undefined;
+  const data = typeof w.data === 'string' ? w.data : undefined;
+  const value = typeof w.value === 'string' ? w.value : undefined;
+  const nonce = typeof w.nonce === 'string' ? w.nonce : undefined;
+  const gas = typeof w.gas === 'string' ? w.gas : undefined;
+  const gasPrice = typeof w.gasPrice === 'string' ? w.gasPrice : undefined;
+  const chainId = typeof w.chainId === 'number' && Number.isFinite(w.chainId) ? w.chainId : undefined;
+  if (!to || !data || !value || !nonce || !gas || !gasPrice || chainId === undefined || w.type !== 'legacy') return undefined;
   if (![data, value, nonce, gas, gasPrice].every((h) => HEX.test(h))) return undefined;
   return { to, data: data as Hex, value: value as Hex, chainId, type: 'legacy', nonce: nonce as Hex, gas: gas as Hex, gasPrice: gasPrice as Hex };
 }
 
+/** A key of the wire status whose value the spec types as a string. */
+type StatusStringKey = { [K in keyof StatusResponse]-?: StatusResponse[K] extends string | undefined ? K : never }[keyof StatusResponse];
+const STATUS_KEYS = {
+  sessionId: 'session_id', sourceChain: 'source_chain', sourceToken: 'source_token', sourceAddress: 'source_address', destinationAddress: 'destination_address',
+  destinationChain: 'destination_chain', destinationToken: 'destination_token', depositAddress: 'deposit_address', depositTokenAddress: 'deposit_token_address',
+  payoutTokenAddress: 'payout_token_address', amount: 'amount', preparedTxExpiresAt: 'prepared_tx_expires_at', swapToken: 'swap_token', swapTokenExpiresAt: 'swap_token_expires_at',
+  txHash: 'tx_hash', payoutTx: 'payout_tx', createdAt: 'created_at', updatedAt: 'updated_at', completedAt: 'completed_at',
+} as const satisfies Record<string, StatusStringKey>;
+
 function readStatus(o: JsonObject): SwapStatus {
-  const kind = o.kind === 'prepared' || o.kind === 'session' ? o.kind : undefined;
-  const status = str(o, 'status') as SwapFlowStatus | undefined;
+  const w = o as Partial<StatusResponse>;
+  const kind = w.kind === 'prepared' || w.kind === 'session' ? w.kind : undefined;
+  const status = typeof w.status === 'string' ? w.status : undefined;
   if (!kind || !status) throw new SwapError('INVALID_RESPONSE', 'Swap status is missing kind/status', { details: o });
   const out: SwapStatus = { kind, status, raw: o };
   const set = <K extends keyof SwapStatus>(k: K, v: SwapStatus[K] | undefined) => {
     if (v !== undefined) out[k] = v;
   };
-  set('sessionId', str(o, 'session_id'));
-  set('sourceChain', str(o, 'source_chain'));
-  set('sourceToken', str(o, 'source_token'));
-  set('sourceAddress', addr(o, 'source_address'));
-  set('destinationAddress', addr(o, 'destination_address'));
-  set('destinationChain', str(o, 'destination_chain'));
-  set('destinationToken', str(o, 'destination_token'));
-  set('depositAddress', addr(o, 'deposit_address'));
-  set('depositTokenAddress', addr(o, 'deposit_token_address'));
-  set('payoutTokenAddress', addr(o, 'payout_token_address'));
-  set('amount', str(o, 'amount'));
-  set('unsignedTx', readUnsignedTx(o.unsigned_tx));
-  set('preparedTxExpiresAt', date(o, 'prepared_tx_expires_at'));
-  set('swapToken', str(o, 'swap_token'));
-  set('swapTokenExpiresAt', date(o, 'swap_token_expires_at'));
-  set('txHash', hash(o, 'tx_hash'));
-  set('payoutTx', hash(o, 'payout_tx'));
-  set('createdAt', date(o, 'created_at'));
-  set('updatedAt', date(o, 'updated_at'));
-  set('completedAt', date(o, 'completed_at'));
-  if (isObject(o.error)) {
-    const e = o.error;
-    const code = str(e, 'code');
-    if (code) out.error = { code, message: str(e, 'message') ?? '', requestId: str(e, 'request_id') };
+  const K = STATUS_KEYS;
+  set('sessionId', str(o, K.sessionId));
+  set('sourceChain', str(o, K.sourceChain) as SwapChain | undefined);
+  set('sourceToken', str(o, K.sourceToken) as SwapToken | undefined);
+  set('sourceAddress', addr(o, K.sourceAddress));
+  set('destinationAddress', addr(o, K.destinationAddress));
+  set('destinationChain', str(o, K.destinationChain) as SwapChain | undefined);
+  set('destinationToken', str(o, K.destinationToken) as SwapToken | undefined);
+  set('depositAddress', addr(o, K.depositAddress));
+  set('depositTokenAddress', addr(o, K.depositTokenAddress));
+  set('payoutTokenAddress', addr(o, K.payoutTokenAddress));
+  set('amount', str(o, K.amount));
+  set('unsignedTx', readUnsignedTx(w.unsigned_tx));
+  set('preparedTxExpiresAt', date(o, K.preparedTxExpiresAt));
+  set('swapToken', str(o, K.swapToken));
+  set('swapTokenExpiresAt', date(o, K.swapTokenExpiresAt));
+  set('txHash', hash(o, K.txHash));
+  set('payoutTx', hash(o, K.payoutTx));
+  set('createdAt', date(o, K.createdAt));
+  set('updatedAt', date(o, K.updatedAt));
+  set('completedAt', date(o, K.completedAt));
+  if (isObject(w.error)) {
+    const e = w.error as Partial<ErrorEnvelope>;
+    if (typeof e.code === 'string') out.error = { code: e.code, message: typeof e.message === 'string' ? e.message : '', requestId: typeof e.request_id === 'string' ? e.request_id : undefined };
   }
   return out;
 }
 
 function readRoute(v: unknown): SwapRoute | undefined {
   if (!isObject(v)) return undefined;
+  const w = v as Partial<SupportedRoute>;
   const r = {
-    sourceChain: str(v, 'source_chain'),
-    sourceToken: str(v, 'source_token'),
-    destinationChain: str(v, 'destination_chain'),
-    destinationToken: str(v, 'destination_token'),
-    sourceChainId: num(v, 'source_chain_id'),
+    sourceChain: typeof w.source_chain === 'string' ? w.source_chain : undefined,
+    sourceToken: typeof w.source_token === 'string' ? w.source_token : undefined,
+    destinationChain: typeof w.destination_chain === 'string' ? w.destination_chain : undefined,
+    destinationToken: typeof w.destination_token === 'string' ? w.destination_token : undefined,
+    sourceChainId: typeof w.source_chain_id === 'number' ? w.source_chain_id : undefined,
     sourceTokenContract: addr(v, 'source_token_contract'),
-    sourceTokenDecimals: num(v, 'source_token_decimals'),
-    destinationChainId: num(v, 'destination_chain_id'),
+    sourceTokenDecimals: typeof w.source_token_decimals === 'number' ? w.source_token_decimals : undefined,
+    destinationChainId: typeof w.destination_chain_id === 'number' ? w.destination_chain_id : undefined,
     destinationTokenContract: addr(v, 'destination_token_contract'),
-    destinationTokenDecimals: num(v, 'destination_token_decimals'),
+    destinationTokenDecimals: typeof w.destination_token_decimals === 'number' ? w.destination_token_decimals : undefined,
   };
   return Object.values(r).every((x) => x !== undefined) ? (r as SwapRoute) : undefined;
 }
@@ -573,11 +590,11 @@ export function createSwapClient(options: SwapClientOptions = {}): SwapClient {
     }
     // Only the HTTP status decides: a 200 status response legitimately carries `error` (why a session failed).
     if (!res.ok) {
-      const err = isObject(body) && isObject(body.error) ? body.error : {};
-      const code = str(err, 'code') ?? (res.status === 429 ? 'RATE_LIMITED' : res.status === 404 ? 'NOT_FOUND' : res.status >= 500 ? 'INTERNAL_ERROR' : 'INVALID_RESPONSE');
-      const message = str(err, 'message');
-      const requestId = str(err, 'request_id') ?? res.headers.get('x-request-id') ?? undefined;
-      let retryAfterMs = num(err, 'retry_after_ms');
+      const err = (isObject(body) && isObject(body.error) ? body.error : {}) as Partial<ErrorEnvelope>;
+      const code: SwapErrorCode = typeof err.code === 'string' ? err.code : res.status === 429 ? 'RATE_LIMITED' : res.status === 404 ? 'NOT_FOUND' : res.status >= 500 ? 'INTERNAL_ERROR' : 'INVALID_RESPONSE';
+      const message = typeof err.message === 'string' ? err.message : undefined;
+      const requestId = (typeof err.request_id === 'string' ? err.request_id : undefined) ?? res.headers.get('x-request-id') ?? undefined;
+      let retryAfterMs = typeof err.retry_after_ms === 'number' && Number.isFinite(err.retry_after_ms) ? err.retry_after_ms : undefined;
       if (retryAfterMs === undefined) {
         const h = Number(res.headers.get('retry-after'));
         if (Number.isFinite(h) && h > 0) retryAfterMs = h * 1000;
@@ -596,18 +613,19 @@ export function createSwapClient(options: SwapClientOptions = {}): SwapClient {
     if (instructionsCache) return instructionsCache;
     const pending: Promise<SwapInstructions> = call('/instructions')
       .then((raw): SwapInstructions => {
-        const environment = raw.environment;
+        const w = raw as Partial<InstructionsResponse>;
+        const environment = w.environment;
         if (environment !== 'testnet' && environment !== 'mainnet') throw new SwapError('INVALID_RESPONSE', 'Swap instructions name no environment', { details: raw });
-        const routes = Array.isArray(raw.supported_routes) ? raw.supported_routes.map(readRoute).filter((r): r is SwapRoute => r !== undefined) : [];
-        const codes = Array.isArray(raw.error_codes) ? raw.error_codes.filter(isObject) : [];
+        const routes = Array.isArray(w.supported_routes) ? w.supported_routes.map(readRoute).filter((r): r is SwapRoute => r !== undefined) : [];
+        const codes = Array.isArray(w.error_codes) ? (w.error_codes as unknown[]).filter(isObject) : [];
         return {
-          version: str(raw, 'version') ?? '',
+          version: typeof w.version === 'string' ? w.version : '',
           environment,
-          overview: str(raw, 'overview') ?? '',
+          overview: typeof w.overview === 'string' ? w.overview : '',
           routes,
-          steps: Array.isArray(raw.steps) ? raw.steps : [],
-          importantRules: Array.isArray(raw.important_rules) ? raw.important_rules.filter((r): r is string => typeof r === 'string') : [],
-          errorCodes: codes.map((c) => ({ code: str(c, 'code') ?? '', description: str(c, 'description') ?? '', callerAction: str(c, 'caller_action') ?? '' })),
+          steps: Array.isArray(w.steps) ? w.steps : [],
+          importantRules: Array.isArray(w.important_rules) ? (w.important_rules as unknown[]).filter((r): r is string => typeof r === 'string') : [],
+          errorCodes: codes.map((c) => ({ code: (str(c, 'code') ?? '') as SwapErrorCode, description: str(c, 'description') ?? '', callerAction: str(c, 'caller_action') ?? '' })),
           raw,
         };
       })
@@ -634,26 +652,31 @@ export function createSwapClient(options: SwapClientOptions = {}): SwapClient {
   };
 
   const readPrepared = (raw: JsonObject): PreparedSwap => {
-    const unsignedTx = readUnsignedTx(raw.unsigned_tx);
-    const swapToken = str(raw, 'swap_token');
-    const swapTokenExpiresAt = date(raw, 'swap_token_expires_at');
-    const preparedTxExpiresAt = date(raw, 'prepared_tx_expires_at');
-    const depositAddress = addr(raw, 'deposit_address');
-    if (!unsignedTx || !swapToken || !swapTokenExpiresAt || !preparedTxExpiresAt || !depositAddress) {
-      throw new SwapError('INVALID_RESPONSE', 'Prepare response is missing swap_token, expiry or unsigned_tx', { details: raw });
+    const w = raw as Partial<PrepareResponse>;
+    const unsignedTx = readUnsignedTx(w.unsigned_tx);
+    const swapToken = typeof w.swap_token === 'string' ? w.swap_token : undefined;
+    const swapTokenExpiresAt = date(raw, 'swap_token_expires_at' satisfies keyof PrepareResponse);
+    const preparedTxExpiresAt = date(raw, 'prepared_tx_expires_at' satisfies keyof PrepareResponse);
+    const depositAddress = addr(raw, 'deposit_address' satisfies keyof PrepareResponse);
+    const depositChain = typeof w.deposit_chain === 'string' ? w.deposit_chain : undefined;
+    const depositToken = typeof w.deposit_token === 'string' ? w.deposit_token : undefined;
+    const destinationChain = typeof w.destination_chain === 'string' ? w.destination_chain : undefined;
+    const destinationToken = typeof w.destination_token === 'string' ? w.destination_token : undefined;
+    if (!unsignedTx || !swapToken || !swapTokenExpiresAt || !preparedTxExpiresAt || !depositAddress || !depositChain || !depositToken || !destinationChain || !destinationToken) {
+      throw new SwapError('INVALID_RESPONSE', 'Prepare response is missing swap_token, expiry, route or unsigned_tx', { details: raw });
     }
     return {
       swapToken,
       swapTokenExpiresAt,
       preparedTxExpiresAt,
       depositAddress,
-      depositTokenAddress: addr(raw, 'deposit_token_address') ?? unsignedTx.to,
-      depositChain: str(raw, 'deposit_chain') ?? '',
-      depositToken: str(raw, 'deposit_token') ?? '',
-      destinationChain: str(raw, 'destination_chain') ?? '',
-      destinationToken: str(raw, 'destination_token') ?? '',
-      payoutTokenAddress: addr(raw, 'payout_token_address') ?? ('0x0000000000000000000000000000000000000000' as Address),
-      amount: str(raw, 'amount') ?? '',
+      depositTokenAddress: addr(raw, 'deposit_token_address' satisfies keyof PrepareResponse) ?? unsignedTx.to,
+      depositChain,
+      depositToken,
+      destinationChain,
+      destinationToken,
+      payoutTokenAddress: addr(raw, 'payout_token_address' satisfies keyof PrepareResponse) ?? ('0x0000000000000000000000000000000000000000' as Address),
+      amount: typeof w.amount === 'string' ? w.amount : '',
       unsignedTx,
       raw,
     };
@@ -694,12 +717,14 @@ export function createSwapClient(options: SwapClientOptions = {}): SwapClient {
 
   const broadcast = async (swapToken: string, signedTx: Hex): Promise<SwapBroadcast> => {
     if (!HEX.test(signedTx)) throw new SwapError('INVALID_SIGNED_TX', 'signedTx must be 0x-prefixed hex');
-    const raw = await call('/broadcast', { method: 'POST', token: swapToken, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ signed_tx: signedTx }) });
-    const sessionId = str(raw, 'session_id');
-    const token = str(raw, 'swap_token');
-    const expires = date(raw, 'swap_token_expires_at');
-    const txHash = hash(raw, 'tx_hash');
-    const status = str(raw, 'status') as SwapSessionStatus | undefined;
+    const body: BroadcastRequestWire = { signed_tx: signedTx };
+    const raw = await call('/broadcast', { method: 'POST', token: swapToken, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const w = raw as Partial<BroadcastResponse>;
+    const sessionId = typeof w.session_id === 'string' ? w.session_id : undefined;
+    const token = typeof w.swap_token === 'string' ? w.swap_token : undefined;
+    const expires = date(raw, 'swap_token_expires_at' satisfies keyof BroadcastResponse);
+    const txHash = hash(raw, 'tx_hash' satisfies keyof BroadcastResponse);
+    const status = typeof w.status === 'string' ? w.status : undefined;
     if (!sessionId || !token || !expires || !txHash || !status) throw new SwapError('INVALID_RESPONSE', 'Broadcast response is missing session_id, swap_token, tx_hash or status', { details: raw });
     return { sessionId, swapToken: token, swapTokenExpiresAt: expires, txHash, status, raw };
   };
@@ -726,26 +751,29 @@ export function createSwapClient(options: SwapClientOptions = {}): SwapClient {
     const sourceAddress = requireAddress(signer.address, 'signer.address');
     const expiresAt = unix(opts.expiresAt, DEFAULT_INTENT_TTL_SECONDS);
     const signature = await signer.signTypedData(swapSessionListAccessTypedData(sourceAddress, expiresAt, await environment()));
-    const raw = await call('/sessions/token', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ source_address: sourceAddress, expires_at: expiresAt, signature }) });
-    const swapToken = str(raw, 'swap_token');
-    const swapTokenExpiresAt = date(raw, 'swap_token_expires_at');
+    const body: SessionListTokenRequestWire = { source_address: sourceAddress, expires_at: expiresAt, signature };
+    const raw = await call('/sessions/token', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const w = raw as Partial<SessionListTokenResponse>;
+    const swapToken = typeof w.swap_token === 'string' ? w.swap_token : undefined;
+    const swapTokenExpiresAt = date(raw, 'swap_token_expires_at' satisfies keyof SessionListTokenResponse);
     if (!swapToken || !swapTokenExpiresAt) throw new SwapError('INVALID_RESPONSE', 'Session list token response is missing swap_token', { details: raw });
     return { swapToken, swapTokenExpiresAt, raw };
   };
 
-  const listSessions = async (swapToken: string, query: ListSessionsQuery = {}): Promise<SwapSessionList> => {
-    const q = new URLSearchParams();
-    if (query.limit !== undefined) q.set('limit', String(query.limit));
-    if (query.cursor) q.set('cursor', query.cursor);
-    if (query.status) q.set('status', query.status);
-    if (query.sourceChain) q.set('source_chain', query.sourceChain);
-    if (query.txHash) q.set('tx_hash', query.txHash);
-    const qs = q.toString();
+  const listSessions = async (swapToken: string, query: ListSessionsOptions = {}): Promise<SwapSessionList> => {
+    // Typed against the operation's query parameters (all strings on the wire).
+    const wire: ListSessionsQuery = {};
+    if (query.limit !== undefined) wire.limit = String(query.limit);
+    if (query.cursor) wire.cursor = query.cursor;
+    if (query.status) wire.status = query.status;
+    if (query.sourceChain) wire.source_chain = query.sourceChain;
+    if (query.txHash) wire.tx_hash = query.txHash;
+    const qs = new URLSearchParams(Object.entries(wire).filter((e): e is [string, string] => typeof e[1] === 'string')).toString();
     const raw = await call(`/sessions${qs ? `?${qs}` : ''}`, { token: swapToken });
-    if (!Array.isArray(raw.items)) throw new SwapError('INVALID_RESPONSE', 'Session list has no items[]', { details: raw });
-    const out: SwapSessionList = { items: raw.items.filter(isObject).map(readStatus), raw };
-    const next = str(raw, 'next_cursor');
-    if (next) out.nextCursor = next;
+    const r = raw as Partial<ListSessionsResponse>;
+    if (!Array.isArray(r.items)) throw new SwapError('INVALID_RESPONSE', 'Session list has no items[]', { details: raw });
+    const out: SwapSessionList = { items: r.items.filter(isObject).map(readStatus), raw };
+    if (typeof r.next_cursor === 'string' && r.next_cursor) out.nextCursor = r.next_cursor;
     return out;
   };
 
