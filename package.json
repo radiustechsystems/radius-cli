@@ -12,7 +12,8 @@
   "scripts": {
     "build": "pnpm --filter './packages/*' run build",
     "test": "pnpm --filter './packages/*' run test",
-    "typecheck": "pnpm --filter './packages/*' run typecheck"
+    "typecheck": "pnpm --filter './packages/*' run typecheck",
+    "check:api": "pnpm --filter radius-sdk run check:api"
   },
   "packageManager": "pnpm@10.34.5",
   "pnpm": {

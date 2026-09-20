@@ -1,0 +1,135 @@
+# Regenerates the radius-sdk API clients from the OpenAPI documents in radiustechsystems/api-monorepo
+# and opens (or refreshes) a PR on the `bot/api-clients` branch.
+#
+# Triggers:
+#   - repository_dispatch `api-spec-updated`: sent by the monorepo's notify-api-clients workflow when a
+#     merge to its main changes apps/*/openapi/**. client_payload: { sha, ref, apps, compare }.
+#   - workflow_dispatch: run by hand, optionally against a monorepo ref.
+#   - schedule: weekly safety net in case a dispatch was missed.
+#
+# Secrets:
+#   API_MONOREPO_TOKEN  read access to radiustechsystems/api-monorepo (it is private). A fine-grained
+#                       token with `contents: read` on that repository, or a GitHub App token.
+#   GITHUB_TOKEN        (built in) opens the PR; the repository setting "Allow GitHub Actions to
+#                       create and approve pull requests" must be on. Note that PRs opened with the
+#                       built-in token do not trigger other workflows: CI runs here as part of this job
+#                       and its result is written into the PR body. Use a PAT as `token:` on the
+#                       create-pull-request step instead if you want the normal CI checks on the PR.
+name: Regenerate API clients
+
+on:
+  repository_dispatch:
+    types: [api-spec-updated]
+  workflow_dispatch:
+    inputs:
+      monorepo_ref:
+        description: radiustechsystems/api-monorepo ref (branch, tag or SHA) to take the specs from
+        required: false
+        default: main
+  schedule:
+    - cron: '17 6 * * 1'   # Mondays 06:17 UTC
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: regenerate-api-clients
+  cancel-in-progress: false
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve monorepo ref
+        id: source
+        run: |
+          REF="${{ github.event.client_payload.sha || inputs.monorepo_ref || 'main' }}"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "apps=${{ toJson(github.event.client_payload.apps) }}" >> "$GITHUB_OUTPUT"
+          echo "Taking specs from radiustechsystems/api-monorepo@$REF"
+
+      - name: Check out api-monorepo
+        uses: actions/checkout@v4
+        with:
+          repository: radiustechsystems/api-monorepo
+          ref: ${{ steps.source.outputs.ref }}
+          token: ${{ secrets.API_MONOREPO_TOKEN }}
+          path: .api-monorepo
+          sparse-checkout: |
+            apps/faucet-api/openapi
+            apps/swap-api/openapi
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Sync specs and regenerate
+        run: |
+          pnpm --filter radius-sdk sync:api-specs .api-monorepo
+          pnpm --filter radius-sdk generate:api
+          rm -rf .api-monorepo
+          git -C . status --short -- packages/sdk
+
+      - name: Anything changed?
+        id: diff
+        run: |
+          if git diff --quiet -- packages/sdk/specs packages/sdk/src/generated; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"; echo "Specs and generated types are unchanged."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            { echo 'files<<EOF'; git diff --stat -- packages/sdk/specs packages/sdk/src/generated; echo 'EOF'; } >> "$GITHUB_OUTPUT"
+          fi
+
+      # The hand-written clients compile against the generated types: this is where an incompatible
+      # spec change shows up. Results go into the PR body; the PR opens either way.
+      - name: Typecheck
+        id: typecheck
+        if: steps.diff.outputs.changed == 'true'
+        continue-on-error: true
+        run: pnpm typecheck
+      - name: Test
+        id: test
+        if: steps.diff.outputs.changed == 'true'
+        continue-on-error: true
+        run: pnpm test
+
+      - name: Open or update the PR
+        if: steps.diff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: bot/api-clients
+          base: main
+          add-paths: packages/sdk
+          commit-message: |
+            Regenerate API clients from api-monorepo@${{ steps.source.outputs.ref }}
+
+            Source: https://github.com/radiustechsystems/api-monorepo/commit/${{ steps.source.outputs.ref }}
+          title: 'Regenerate API clients from api-monorepo@${{ steps.source.outputs.ref }}'
+          labels: api-clients, automated
+          body: |
+            The OpenAPI documents in `radiustechsystems/api-monorepo` changed; this regenerates
+            `packages/sdk/specs/*.openapi.json` and `packages/sdk/src/generated/*.ts` from
+            [`api-monorepo@${{ steps.source.outputs.ref }}`](https://github.com/radiustechsystems/api-monorepo/commit/${{ steps.source.outputs.ref }})
+            (trigger: `${{ github.event_name }}`; apps reported changed: `${{ steps.source.outputs.apps }}`;
+            ${{ github.event.client_payload.compare && format('[monorepo compare]({0})', github.event.client_payload.compare) || 'no compare link' }}).
+
+            | Check | Result |
+            | --- | --- |
+            | `pnpm typecheck` | ${{ steps.typecheck.outcome == 'success' && '✅ passed' || '❌ failed — the spec changed in a way `src/faucet.ts` / `src/swap.ts` must follow' }} |
+            | `pnpm test` | ${{ steps.test.outcome == 'success' && '✅ passed' || '❌ failed — see the workflow run' }} |
+
+            ```
+            ${{ steps.diff.outputs.files }}
+            ```
+
+            Only the generated layer is touched. If a check failed, adapt the hand-written client on
+            this branch (see `packages/sdk/specs/README.md`), and consider a major version bump if the
+            change is breaking for SDK users.
+
+            Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

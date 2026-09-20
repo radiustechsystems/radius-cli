@@ -1,0 +1,445 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Radius Faucet API",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "components": {
+    "schemas": {
+      "StatusResponse": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          },
+          "rate_limited": {
+            "type": "boolean"
+          },
+          "retry_after_ms": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "remaining_requests": {
+            "type": "number"
+          },
+          "drip_amount": {
+            "type": "string"
+          },
+          "native_drip_amount": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RUSD dripped alongside the token, in whole units. Null when the native drip is disabled.",
+            "example": "0.001"
+          },
+          "unlimited": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "address",
+          "token",
+          "rate_limited",
+          "retry_after_ms",
+          "remaining_requests",
+          "drip_amount",
+          "native_drip_amount"
+        ]
+      },
+      "FaucetErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "invalid_request",
+                  "signature_required",
+                  "invalid_signature",
+                  "rate_limited",
+                  "faucet_empty",
+                  "sbc_not_configured",
+                  "faucet_not_configured",
+                  "transaction_reverted",
+                  "receipt_timeout",
+                  "native_drip_failed",
+                  "not_found",
+                  "method_not_allowed",
+                  "internal_error"
+                ],
+                "description": "Stable machine-readable error code."
+              },
+              "message": {
+                "type": "string",
+                "description": "Human-readable explanation of the failure."
+              },
+              "request_id": {
+                "type": "string",
+                "description": "Matches the X-Request-Id response header; include it when reporting issues.",
+                "example": "req_b7c2f9d4-3d62-4f1e-9c3a-8a2f6f1f4b21"
+              },
+              "retry_after_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Milliseconds to wait before retrying. Also exposed as the Retry-After header (seconds)."
+              },
+              "details": {
+                "type": "object",
+                "additionalProperties": {},
+                "description": "Structured, code-specific context (e.g. challenge, tx_hash)."
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "request_id"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "ChallengeResponse": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "The exact message to sign with personal_sign (EIP-191)."
+          },
+          "address": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          },
+          "instructions": {
+            "type": "string",
+            "description": "Human-readable instructions for completing the drip request."
+          }
+        },
+        "required": [
+          "message",
+          "address",
+          "token",
+          "instructions"
+        ]
+      },
+      "NativeDrip": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "enum": [
+              "RUSD"
+            ],
+            "example": "RUSD"
+          },
+          "amount": {
+            "type": "string",
+            "description": "Native RUSD sent, in whole units.",
+            "example": "0.001"
+          },
+          "tx_hash": {
+            "type": "string",
+            "description": "Hash of the native RUSD transfer — a separate transaction from the SBC transfer."
+          }
+        },
+        "required": [
+          "token",
+          "amount",
+          "tx_hash"
+        ],
+        "description": "The RUSD gas drip that accompanied the token transfer, so the address can afford to move its new balance. Absent when the native drip is disabled for this environment."
+      },
+      "DripSuccess": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "address": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "string"
+          },
+          "tx_hash": {
+            "type": "string"
+          },
+          "native": {
+            "$ref": "#/components/schemas/NativeDrip"
+          },
+          "next_drip_at": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "success",
+          "address",
+          "token",
+          "amount",
+          "tx_hash"
+        ]
+      },
+      "DripRequest": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "description": "Ethereum address (0x-prefixed, 40 hex chars)",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+          },
+          "token": {
+            "type": "string",
+            "enum": [
+              "SBC"
+            ],
+            "default": "SBC",
+            "example": "SBC"
+          },
+          "signature": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^0x[a-fA-F0-9]{130}$",
+            "description": "EIP-191 signature proving wallet ownership. Get the message to sign from GET /challenge/{address}?token=SBC, then sign it with personal_sign.",
+            "example": "0xabcd..."
+          }
+        },
+        "required": [
+          "address"
+        ]
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "/api/v1/faucet/status/{address}": {
+      "get": {
+        "tags": [
+          "Faucet"
+        ],
+        "summary": "Check rate-limit status for an address",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^0x[a-fA-F0-9]{40}$",
+              "description": "Ethereum address (0x-prefixed, 40 hex chars)",
+              "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+            },
+            "required": true,
+            "name": "address",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "SBC"
+              ],
+              "default": "SBC",
+              "example": "SBC"
+            },
+            "required": false,
+            "name": "token",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rate limit status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaucetErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaucetErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/faucet/challenge/{address}": {
+      "get": {
+        "tags": [
+          "Faucet"
+        ],
+        "summary": "Get the message to sign for authenticated drip requests",
+        "description": "Returns the exact message string that must be signed with personal_sign (EIP-191) and included as `signature` in POST /drip. This allows agents to request tokens without knowing the message format in advance.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^0x[a-fA-F0-9]{40}$",
+              "description": "Ethereum address (0x-prefixed, 40 hex chars)",
+              "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
+            },
+            "required": true,
+            "name": "address",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "SBC"
+              ],
+              "default": "SBC",
+              "example": "SBC"
+            },
+            "required": false,
+            "name": "token",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Challenge message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChallengeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaucetErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaucetErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/faucet/drip": {
+      "post": {
+        "tags": [
+          "Faucet"
+        ],
+        "summary": "Request testnet tokens for an address",
+        "description": "To include a signature proving wallet ownership:\n1. GET /challenge/{address}?token=SBC to get the message\n2. Sign the message with personal_sign (EIP-191)\n3. POST /drip with { address, token, signature }\n\nThe signature is optional — unsigned requests are still accepted.\n\nWhere enabled, a small amount of native RUSD is sent alongside the token as a separate transaction, so the address has gas to move its new balance. It is reported under `native` in the response.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DripRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Drip successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DripSuccess"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input, missing required signature, or invalid signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaucetErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaucetErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Transaction error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaucetErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Faucet unavailable, not configured, or low on funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FaucetErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {}
+}

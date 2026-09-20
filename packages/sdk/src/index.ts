@@ -28,7 +28,7 @@ export type { Price } from './amounts.js';
 export { RadiusPaymentError } from './errors.js';
 export type { RadiusPaymentErrorCode } from './errors.js';
 export { createFaucetClient, FaucetError } from './faucet.js';
-export type { FaucetClient, FaucetClientOptions, FaucetDrip, FaucetStatus, FaucetChallenge, FaucetSigner, FaucetFundOptions, FaucetErrorCode } from './faucet.js';
+export type { FaucetClient, FaucetClientOptions, FaucetDrip, FaucetStatus, FaucetChallenge, FaucetSigner, FaucetFundOptions, FaucetErrorCode, FaucetApiErrorCode, FaucetApiSchemas, FaucetToken } from './faucet.js';
 export { createSwapClient, SwapError, swapIntentTypedData, swapSessionListAccessTypedData, toSignableTransaction, SWAP_INTENT_TYPES, SWAP_SESSION_LIST_ACCESS_TYPES, SWAP_TYPED_DATA_DOMAIN, SWAP_TERMINAL_STATUSES } from './swap.js';
 export type {
   SwapClient,
@@ -52,7 +52,9 @@ export type {
   SwapBroadcast,
   SwapStatus,
   SwapSessionList,
-  ListSessionsQuery,
+  ListSessionsOptions,
+  SwapApiErrorCode,
+  SwapApiSchemas,
   SwapSigner,
   WaitForSwapOptions,
   SwapResult,
