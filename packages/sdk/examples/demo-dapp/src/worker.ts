@@ -40,13 +40,15 @@ app.get('/api/info', (c) => {
 // The Radius faucet API sends no CORS headers, so browsers cannot call it directly.
 // Same-origin proxy for the three faucet endpoints (GET /status/:address, GET /challenge/:address,
 // POST /drip): the page passes `faucetUrl: <origin>/faucet` and the SDK's faucet client works
-// unchanged. Errors use the faucet's own shape (`{ error, message }`) so the client maps them too.
+// unchanged. Errors use the Radius API envelope (`{ error: { code, message, request_id } }`) so the
+// client maps them too.
+const apiError = (code: string, message: string) => ({ error: { code, message, request_id: `req_${crypto.randomUUID()}` } });
 app.all('/faucet/*', async (c) => {
   const network = resolveNetwork(c.env.RADIUS_NETWORK ?? 'testnet');
-  if (!network.faucetUrl) return c.json({ error: 'no_faucet', message: `no faucet for ${network.name}` }, 404);
+  if (!network.faucetUrl) return c.json(apiError('no_faucet', `no faucet for ${network.name}`), 404);
   const path = c.req.path.slice('/faucet'.length);
   const allowed = (c.req.method === 'GET' && /^\/(status|challenge)\/0x[0-9a-fA-F]{40}$/.test(path)) || (c.req.method === 'POST' && path === '/drip');
-  if (!allowed) return c.json({ error: 'not_found', message: `unknown faucet endpoint ${c.req.method} ${path}` }, 404);
+  if (!allowed) return c.json(apiError('not_found', `unknown faucet endpoint ${c.req.method} ${path}`), 404);
   const upstream = network.faucetUrl + path + (new URL(c.req.url).search || '');
   const init: RequestInit = { method: c.req.method, headers: { accept: 'application/json' } };
   if (c.req.method === 'POST') { init.body = await c.req.text(); init.headers = { ...init.headers, 'content-type': 'application/json' }; }
