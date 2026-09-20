@@ -7,7 +7,7 @@
  * chain definitions and costs a CLI ~400 ms of startup. `radiusMainnetChain` /
  * `radiusTestnetChain` feed viem clients directly. A `RadiusNetwork` wraps one of
  * those chains with the Radius-specific pieces x402 needs (facilitator, faucet,
- * payment asset) and exposes a few fields derived from the chain for convenience.
+ * swap API, payment asset) and exposes a few fields derived from the chain for convenience.
  *
  * Values verified against docs.radiustech.xyz (network configuration, contract
  * addresses, x402 facilitator API) and the live facilitator `/supported`
@@ -49,6 +49,8 @@ export interface RadiusNetwork {
   explorerUrl?: string;
   /** Faucet API base URL (drips SBC; testnet ~0.5/request, mainnet ~0.01/day). */
   faucetUrl?: string;
+  /** Swap API base URL (cross-chain SBC/USDC swaps via Brale; see `radius-sdk/swap`). */
+  swapUrl?: string;
   /** Default payment asset (SBC unless overridden). */
   asset: RadiusAsset;
   /** `chain.testnet ?? false`. */
@@ -96,6 +98,7 @@ interface CustomNetworkBase {
   /** Label for messages; defaults to the chain name (or `radius-<chainId>`). */
   name?: string;
   faucetUrl?: string;
+  swapUrl?: string;
   /** Partial override; unspecified fields fall back to SBC. */
   asset?: Partial<RadiusAsset>;
 }
@@ -126,6 +129,7 @@ export interface NetworkOverrides {
   facilitatorUrl?: string;
   explorerUrl?: string;
   faucetUrl?: string;
+  swapUrl?: string;
   /** Override the payment asset (e.g. a different token on a custom instance). */
   asset?: Partial<RadiusAsset>;
 }
@@ -155,6 +159,7 @@ export function defineRadiusNetwork(config: CustomNetworkConfig): RadiusNetwork 
     name: config.name,
     facilitatorUrl: stripTrailingSlash(config.facilitatorUrl),
     faucetUrl: config.faucetUrl,
+    swapUrl: config.swapUrl,
     asset: { ...SBC, ...config.asset },
   });
 }
@@ -163,6 +168,7 @@ export const radiusMainnet: RadiusNetwork = fromChain(radiusMainnetChain, {
   name: 'mainnet',
   facilitatorUrl: 'https://facilitator.radiustech.xyz',
   faucetUrl: 'https://network.radiustech.xyz/api/v1/faucet',
+  swapUrl: 'https://network.radiustech.xyz/api/v1/swap',
   asset: SBC,
 });
 
@@ -170,6 +176,7 @@ export const radiusTestnet: RadiusNetwork = fromChain(radiusTestnetChain, {
   name: 'testnet',
   facilitatorUrl: 'https://facilitator.testnet.radiustech.xyz',
   faucetUrl: 'https://testnet.radiustech.xyz/api/v1/faucet',
+  swapUrl: 'https://testnet.radiustech.xyz/api/v1/swap',
   asset: SBC,
 });
 
@@ -198,6 +205,7 @@ export function resolveNetwork(input?: NetworkInput, overrides?: NetworkOverride
     name: base.name,
     facilitatorUrl: overrides?.facilitatorUrl ? stripTrailingSlash(overrides.facilitatorUrl) : base.facilitatorUrl,
     faucetUrl: overrides?.faucetUrl ?? base.faucetUrl,
+    swapUrl: overrides?.swapUrl ?? base.swapUrl,
     asset: overrides?.asset ? { ...base.asset, ...overrides.asset } : base.asset,
   });
 }
@@ -216,7 +224,7 @@ export function explorerTxUrl(network: RadiusNetwork, txHash: string): string | 
 }
 
 /** Assemble a RadiusNetwork whose convenience fields are derived from `chain`. */
-function fromChain(chain: Chain, radius: { name?: string; facilitatorUrl: string; faucetUrl?: string; asset: RadiusAsset }): RadiusNetwork {
+function fromChain(chain: Chain, radius: { name?: string; facilitatorUrl: string; faucetUrl?: string; swapUrl?: string; asset: RadiusAsset }): RadiusNetwork {
   return {
     name: radius.name ?? chain.name,
     chain,
@@ -226,6 +234,7 @@ function fromChain(chain: Chain, radius: { name?: string; facilitatorUrl: string
     facilitatorUrl: radius.facilitatorUrl,
     explorerUrl: explorerUrlOf(chain),
     faucetUrl: radius.faucetUrl,
+    swapUrl: radius.swapUrl,
     asset: radius.asset,
     testnet: chain.testnet ?? false,
   };

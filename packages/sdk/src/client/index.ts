@@ -6,6 +6,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { formatAmount, resolvePrice, type Price } from '../amounts.js';
 import { RadiusPaymentError } from '../errors.js';
 import { createFaucetClient, FaucetError, type FaucetClient, type FaucetDrip, type FaucetFundOptions, type FaucetSigner } from '../faucet.js';
+import { createSwapClient, type SwapClient } from '../swap.js';
 import { describeSupportedSchemes } from '../schemes.js';
 import { PERMIT2_ADDRESS, resolveNetwork, type Address, type NetworkInput, type NetworkOverrides, type RadiusNetwork } from '../networks.js';
 import { decodePaymentReceipt, parseUptoSettlementAmount, type PaymentReceipt } from '../receipt.js';
@@ -131,6 +132,12 @@ export interface RadiusFetch {
   fund(options?: Pick<FaucetFundOptions, 'signature'>): Promise<FaucetResult>;
   /** The network's faucet API (`status()`, `challenge()`, `drip()`); undefined when the network has no faucet. */
   readonly faucet?: FaucetClient;
+  /**
+   * The network's swap API (`radius-sdk/swap`), for moving SBC/USDC between Radius and Base or
+   * Ethereum; undefined when the network has none. Pass the same private key / local account as
+   * `signer` to `swap.swap(...)` (a WalletClient cannot sign the prepared transaction).
+   */
+  readonly swap?: SwapClient;
   /** Escape hatch to the underlying x402 client. */
   readonly client: x402Client;
 }
@@ -503,6 +510,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
   };
 
   const faucet = network.faucetUrl ? createFaucetClient({ network, fetch: baseFetch }) : undefined;
+  const swap = network.swapUrl ? createSwapClient({ network, fetch: baseFetch }) : undefined;
   const fund = async (opts: Pick<FaucetFundOptions, 'signature'> = {}): Promise<FaucetResult> => {
     if (!faucet) throw new FaucetError('no_faucet', `No faucet configured for network ${network.name}`);
     // Private keys, viem local accounts and the wrapped WalletClient can personal_sign; a bare
@@ -523,6 +531,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     getSettlement: (txHash: `0x${string}`) => getSettlement(network, txHash, publicClient),
     fund,
     faucet,
+    swap,
     client,
   });
 }
@@ -533,6 +542,8 @@ export { getPaymentReceipt, decodePaymentReceipt, parseUptoSettlementAmount } fr
 export type { PaymentReceipt } from '../receipt.js';
 export { RadiusPaymentError } from '../errors.js';
 export { createFaucetClient, FaucetError } from '../faucet.js';
+export { createSwapClient, SwapError } from '../swap.js';
+export type { SwapClient, SwapIntent, SwapResult, SwapStatus, PreparedSwap, SwapBroadcast, SwapSigner } from '../swap.js';
 export type { FaucetClient, FaucetClientOptions, FaucetDrip, FaucetStatus, FaucetChallenge, FaucetSigner, FaucetFundOptions, FaucetErrorCode } from '../faucet.js';
 export { radiusEnv } from '../env.js';
 export type { RadiusEnvConfig } from '../env.js';

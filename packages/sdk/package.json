@@ -27,6 +27,10 @@
     "./faucet": {
       "types": "./dist/faucet.d.ts",
       "default": "./dist/faucet.js"
+    },
+    "./swap": {
+      "types": "./dist/swap.d.ts",
+      "default": "./dist/swap.js"
     }
   },
   "scripts": {

@@ -29,6 +29,34 @@ export { RadiusPaymentError } from './errors.js';
 export type { RadiusPaymentErrorCode } from './errors.js';
 export { createFaucetClient, FaucetError } from './faucet.js';
 export type { FaucetClient, FaucetClientOptions, FaucetDrip, FaucetStatus, FaucetChallenge, FaucetSigner, FaucetFundOptions, FaucetErrorCode } from './faucet.js';
+export { createSwapClient, SwapError, swapIntentTypedData, swapSessionListAccessTypedData, toSignableTransaction, SWAP_INTENT_TYPES, SWAP_SESSION_LIST_ACCESS_TYPES, SWAP_TYPED_DATA_DOMAIN, SWAP_TERMINAL_STATUSES } from './swap.js';
+export type {
+  SwapClient,
+  SwapClientOptions,
+  SwapChain,
+  SwapToken,
+  SwapEnvironment,
+  SwapSessionStatus,
+  SwapFlowStatus,
+  SwapErrorCode,
+  SwapRoute,
+  SwapRouteSelector,
+  SwapInstructions,
+  SwapIntent,
+  PrepareSwapRequest,
+  SwapIntentTypedData,
+  SwapSessionListAccessTypedData,
+  UnsignedSwapTransaction,
+  SignableSwapTransaction,
+  PreparedSwap,
+  SwapBroadcast,
+  SwapStatus,
+  SwapSessionList,
+  ListSessionsQuery,
+  SwapSigner,
+  WaitForSwapOptions,
+  SwapResult,
+} from './swap.js';
 export { decodePaymentReceipt, getPaymentReceipt, parseUptoSettlementAmount, PAYMENT_RESPONSE_HEADER } from './receipt.js';
 export type { PaymentReceipt } from './receipt.js';
 export { radiusEnv } from './env.js';
