@@ -191,18 +191,22 @@ try { await faucet.fund(account.address, { signer: account }); }
 catch (e) { if (e instanceof FaucetError && e.faucetCode === 'rate_limited') console.log(`retry in ${e.retryAfterMs} ms`); }
 ```
 
-- `fund()` drips unsigned first and, if the faucet answers `signature_required`, fetches the EIP-191
-  challenge, signs it with `signer.signMessage` (any viem local account) and drips again; one retry
-  on `invalid_signature` with a fresh challenge. Testnet currently drips unsigned, mainnet is
+- `fund()` drips unsigned first and, if the faucet answers `signature_required`, signs the EIP-191
+  challenge (taken from the error's `details.challenge`, else `GET /challenge`) with
+  `signer.signMessage` (any viem local account) and drips again; one retry on `invalid_signature`
+  with a fresh challenge. Testnet currently drips unsigned, mainnet is
   expected to require signatures, and the switch can flip at any time, so the fallback is always
   on. `{ signature: 'always' }` skips the unsigned attempt, `'never'` disables the fallback; without
   a signer a signature demand throws `signer_required`. `status()`, `challenge()` and `drip()` are
   the raw endpoints.
-- Errors are `FaucetError` (a `RadiusPaymentError` with `code: 'faucet'`) carrying the API's own
-  `faucetCode` (`signature_required`, `invalid_signature`, `invalid_address`, `invalid_token`,
-  `rate_limited`, `faucet_empty`, `sbc_not_configured`, `internal_error`), the HTTP `status`,
-  `retryAfterMs` for rate limits, and the raw body in `details`. Response text is treated as data:
-  only the documented fields are read.
+- Errors are `FaucetError` (a `RadiusPaymentError` with `code: 'faucet'`) decoded from the Radius
+  API envelope `{ error: { code, message, request_id, retry_after_ms?, details? } }`: `faucetCode`
+  (`signature_required`, `invalid_signature`, `rate_limited`, `faucet_empty`, `transaction_reverted`,
+  `receipt_timeout`, `native_drip_failed`, `internal_error`, …), the HTTP `status`, `retryAfterMs`,
+  `requestId`, code-specific `errorDetails` (e.g. the `tx_hash` of a reverted drip) and the raw body
+  in `details`. Response text is treated as data: only the documented fields are read.
+- Where the faucet is configured to, a drip also sends a little native RUSD for gas as a second
+  transaction (`drip.native`, `status.nativeDripAmount`).
 - `createRadiusFetch(…).fund()` is this flow for the signer's address on the configured network
   (`faucetUrl` override for a same-origin proxy, as the demo dapp does for CORS), and
   `createRadiusFetch(…).faucet` is the client itself.

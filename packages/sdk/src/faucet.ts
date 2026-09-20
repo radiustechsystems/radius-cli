@@ -3,14 +3,20 @@
  * https://testnet.radiustech.xyz/api/v1/faucet/openapi.json).
  *
  * Endpoints:
- *   GET  /status/{address}?token=SBC     rate-limit state and drip amount
+ *   GET  /status/{address}?token=SBC     rate-limit state and drip amounts
  *   GET  /challenge/{address}?token=SBC  EIP-191 message to sign when signatures are enabled
  *   POST /drip { address, token, signature? }
  *
+ * Errors share the Radius API envelope `{ error: { code, message, request_id, retry_after_ms?,
+ * details? } }` (`Retry-After` header alongside `retry_after_ms`); `details` carries code-specific
+ * context such as the `challenge` to sign for `signature_required` or the `tx_hash` of a drip that
+ * reverted or timed out.
+ *
  * Signatures are a server-side switch: testnet currently drips unsigned, mainnet is expected to
  * require them, and either can change. `fund()` therefore tries an unsigned drip first and falls
- * back to challenge → sign → drip on `signature_required` (`signature: 'always'` skips the
- * unsigned attempt, `'never'` disables the fallback).
+ * back to sign → drip on `signature_required` (`signature: 'always'` skips the unsigned attempt,
+ * `'never'` disables the fallback). Where enabled the faucet also drips a little native RUSD for
+ * gas as a second transaction, reported under `native`.
  *
  * Everything the faucet returns is treated as data: only the documented fields are read, and
  * free-text fields (`message`, `instructions`) are surfaced but never interpreted.
@@ -21,13 +27,22 @@ import { resolveNetwork, type Address, type NetworkInput, type NetworkOverrides,
 
 /** Machine-readable error codes the faucet documents, plus the client's own for malformed answers. */
 export type FaucetErrorCode =
+  | 'invalid_request'
   | 'signature_required'
   | 'invalid_signature'
-  | 'invalid_address'
-  | 'invalid_token'
   | 'rate_limited'
+  /** Faucet wallet is low on SBC or RUSD; nothing was sent. */
   | 'faucet_empty'
   | 'sbc_not_configured'
+  | 'faucet_not_configured'
+  /** Drip mined but reverted (`errorDetails.tx_hash`); the quota was consumed. */
+  | 'transaction_reverted'
+  /** Drip broadcast but no receipt in time (`errorDetails.tx_hash`); it may still confirm. */
+  | 'receipt_timeout'
+  /** SBC arrived but the RUSD gas drip failed (`errorDetails.tx_hash` is the SBC transfer). */
+  | 'native_drip_failed'
+  | 'not_found'
+  | 'method_not_allowed'
   | 'internal_error'
   /** Client-side: the faucet answered with something that is not the documented JSON. */
   | 'invalid_response'
@@ -47,12 +62,22 @@ export class FaucetError extends RadiusPaymentError {
   readonly status: number;
   /** For `rate_limited`: how long to wait before retrying. */
   readonly retryAfterMs?: number;
-  constructor(faucetCode: FaucetErrorCode, message: string, opts: { status?: number; retryAfterMs?: number; details?: unknown } = {}) {
+  /** `error.request_id` (also the `X-Request-Id` header); quote it when reporting a problem. */
+  readonly requestId?: string;
+  /** `error.details`: code-specific context, e.g. `{ challenge }` or `{ tx_hash }`. */
+  readonly errorDetails?: Record<string, unknown>;
+  constructor(
+    faucetCode: FaucetErrorCode,
+    message: string,
+    opts: { status?: number; retryAfterMs?: number; requestId?: string; errorDetails?: Record<string, unknown>; details?: unknown } = {},
+  ) {
     super('faucet', message, opts.details);
     this.name = 'FaucetError';
     this.faucetCode = faucetCode;
     this.status = opts.status ?? 0;
     if (opts.retryAfterMs !== undefined) this.retryAfterMs = opts.retryAfterMs;
+    if (opts.requestId !== undefined) this.requestId = opts.requestId;
+    if (opts.errorDetails !== undefined) this.errorDetails = opts.errorDetails;
   }
 }
 
@@ -64,10 +89,14 @@ export interface FaucetStatus {
   rateLimited: boolean;
   /** Milliseconds until the next drip is allowed; only while `rateLimited`. */
   retryAfterMs?: number;
-  /** Requests left in the current window. */
+  /** Requests left in the current window (absent when the faucet reports no limit). */
   remainingRequests?: number;
   /** Display amount per drip, e.g. "0.5". */
   dripAmount?: string;
+  /** Native RUSD dripped alongside the token for gas, e.g. "0.001"; absent when disabled. */
+  nativeDripAmount?: string;
+  /** True when rate limiting is switched off for this faucet. */
+  unlimited?: boolean;
   raw: unknown;
 }
 
@@ -90,6 +119,10 @@ export interface FaucetDrip {
   txHash?: `0x${string}`;
   /** Explorer link for `txHash`, when the network declares an explorer. */
   explorerUrl?: string;
+  /** The RUSD gas drip that accompanied the token transfer (a separate transaction), where enabled. */
+  native?: { token: string; amount: string; txHash?: `0x${string}` };
+  /** Unix seconds when this address may drip again, when the faucet says. */
+  nextDripAt?: number;
   raw: unknown;
 }
 
@@ -126,7 +159,7 @@ export interface FaucetClient {
   readonly token: string;
   /** The network this faucet belongs to (for explorer links); undefined when built from a bare `url`. */
   readonly network?: RadiusNetwork;
-  /** Rate-limit state and drip amount for an address. */
+  /** Rate-limit state and drip amounts for an address. */
   status(address: Address): Promise<FaucetStatus>;
   /** The EIP-191 message the faucet wants signed for `address`. */
   challenge(address: Address): Promise<FaucetChallenge>;
@@ -155,23 +188,41 @@ function optionalNumber(o: JsonObject, key: string): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 }
 
-/** Error code and detail from an error body: `{ error: "code", message?, retry_after_ms? }` (also tolerates `{ error: { code, message } }`). */
-function readError(body: unknown, res: Response): { code: FaucetErrorCode; message?: string; retryAfterMs?: number } {
+interface ParsedError {
+  code: FaucetErrorCode;
+  message?: string;
+  retryAfterMs?: number;
+  requestId?: string;
+  errorDetails?: Record<string, unknown>;
+}
+
+/**
+ * Read the error envelope `{ error: { code, message, request_id, retry_after_ms?, details? } }`.
+ * A flat `{ error: "code", message?, retry_after_ms? }` (older proxies) is tolerated; the code is
+ * derived from the HTTP status when the body names none.
+ */
+function readError(body: unknown, res: Response): ParsedError {
   const o = isObject(body) ? body : {};
   const err = o.error;
+  const out: ParsedError = { code: 'invalid_response' };
   let code: string | undefined;
-  let message = optionalString(o, 'message');
-  if (typeof err === 'string') code = err;
-  else if (isObject(err)) {
+  if (isObject(err)) {
     code = optionalString(err, 'code');
-    message ??= optionalString(err, 'message');
+    out.message = optionalString(err, 'message');
+    out.requestId = optionalString(err, 'request_id');
+    out.retryAfterMs = optionalNumber(err, 'retry_after_ms');
+    if (isObject(err.details)) out.errorDetails = err.details;
+  } else if (typeof err === 'string') {
+    code = err;
+    out.message = optionalString(o, 'message');
+    out.retryAfterMs = optionalNumber(o, 'retry_after_ms');
   }
-  let retryAfterMs = optionalNumber(o, 'retry_after_ms') ?? (isObject(err) ? optionalNumber(err, 'retry_after_ms') : undefined);
-  if (retryAfterMs === undefined) {
+  if (out.retryAfterMs === undefined) {
     const header = Number(res.headers.get('retry-after'));
-    if (Number.isFinite(header) && header > 0) retryAfterMs = header * 1000;
+    if (Number.isFinite(header) && header > 0) out.retryAfterMs = header * 1000;
   }
-  return { code: code ?? (res.status === 429 ? 'rate_limited' : res.status >= 500 ? 'internal_error' : 'invalid_response'), message, retryAfterMs };
+  out.code = code ?? (res.status === 429 ? 'rate_limited' : res.status === 404 ? 'not_found' : res.status >= 500 ? 'internal_error' : 'invalid_response');
+  return out;
 }
 
 export function createFaucetClient(options: FaucetClientOptions = {}): FaucetClient {
@@ -207,10 +258,11 @@ export function createFaucetClient(options: FaucetClientOptions = {}): FaucetCli
     }
     const looksLikeError = isObject(body) && (body.error !== undefined || body.success === false);
     if (!res.ok || looksLikeError) {
-      const { code, message, retryAfterMs } = readError(body, res);
+      const { code, message, retryAfterMs, requestId, errorDetails } = readError(body, res);
       const detail = message ? `: ${message}` : body === undefined && text ? `: ${text.slice(0, 200)}` : '';
       const wait = retryAfterMs !== undefined ? ` (retry in ${Math.ceil(retryAfterMs / 1000)} s)` : '';
-      throw new FaucetError(code, `Faucet ${code} (HTTP ${res.status})${detail}${wait}`, { status: res.status, retryAfterMs, details: body ?? text });
+      const ref = requestId ? ` [${requestId}]` : '';
+      throw new FaucetError(code, `Faucet ${code} (HTTP ${res.status})${detail}${wait}${ref}`, { status: res.status, retryAfterMs, requestId, errorDetails, details: body ?? text });
     }
     if (!isObject(body)) throw new FaucetError('invalid_response', `Faucet returned non-JSON (HTTP ${res.status}) from ${path}`, { status: res.status, details: text });
     return body;
@@ -223,11 +275,15 @@ export function createFaucetClient(options: FaucetClientOptions = {}): FaucetCli
     const out: FaucetStatus = { address: optionalString(raw, 'address') ?? a.toLowerCase(), token: optionalString(raw, 'token') ?? token, rateLimited: raw.rate_limited, raw };
     const retry = optionalNumber(raw, 'retry_after_ms');
     if (retry !== undefined) out.retryAfterMs = retry;
+    // `remaining_requests` is null on the wire when the faucet has no limit (Infinity does not survive JSON).
     const remaining = optionalNumber(raw, 'remaining_requests');
     if (remaining !== undefined) out.remainingRequests = remaining;
     const drip = raw.drip_amount;
     if (typeof drip === 'string') out.dripAmount = drip;
     else if (typeof drip === 'number') out.dripAmount = String(drip);
+    const native = optionalString(raw, 'native_drip_amount');
+    if (native !== undefined) out.nativeDripAmount = native;
+    if (raw.unlimited === true) out.unlimited = true;
     return out;
   };
 
@@ -256,6 +312,14 @@ export function createFaucetClient(options: FaucetClientOptions = {}): FaucetCli
       const link = explorer(hash);
       if (link) out.explorerUrl = link;
     }
+    if (isObject(raw.native)) {
+      const n = raw.native;
+      const nativeHash = optionalString(n, 'tx_hash');
+      out.native = { token: optionalString(n, 'token') ?? 'RUSD', amount: optionalString(n, 'amount') ?? '' };
+      if (nativeHash && TX_HASH.test(nativeHash)) out.native.txHash = nativeHash as `0x${string}`;
+    }
+    const next = optionalNumber(raw, 'next_drip_at');
+    if (next !== undefined) out.nextDripAt = next;
     return out;
   };
 
@@ -263,14 +327,18 @@ export function createFaucetClient(options: FaucetClientOptions = {}): FaucetCli
     const a = requireAddress(address);
     const { signer } = options;
     const mode = options.signature ?? 'auto';
+    // The `signature_required` error carries the challenge in `details.challenge`; use it and skip GET /challenge.
+    let message: string | undefined;
     if (mode !== 'always') {
       try {
         return await drip(a);
       } catch (e) {
         if (!(e instanceof FaucetError) || e.faucetCode !== 'signature_required' || mode === 'never') throw e;
         if (!signer) {
-          throw new FaucetError('signer_required', `The ${token} faucet at ${url} requires a signature; fund() needs a signer with signMessage (EIP-191), e.g. a private key or viem local account`, { status: e.status, details: e.details });
+          throw new FaucetError('signer_required', `The ${token} faucet at ${url} requires a signature; fund() needs a signer with signMessage (EIP-191), e.g. a private key or viem local account`, { status: e.status, requestId: e.requestId, details: e.details });
         }
+        const offered = e.errorDetails?.challenge;
+        if (typeof offered === 'string' && offered) message = offered;
       }
     }
     if (!signer || typeof signer.signMessage !== 'function') {
@@ -278,12 +346,15 @@ export function createFaucetClient(options: FaucetClientOptions = {}): FaucetCli
     }
     // A stale challenge (rotated between fetch and drip) yields invalid_signature once; re-fetch and retry a single time.
     for (let attempt = 0; ; attempt++) {
-      const { message } = await challenge(a);
+      if (message === undefined) message = (await challenge(a)).message;
       const signature = await signer.signMessage({ message });
       try {
         return await drip(a, signature);
       } catch (e) {
-        if (attempt === 0 && e instanceof FaucetError && e.faucetCode === 'invalid_signature') continue;
+        if (attempt === 0 && e instanceof FaucetError && e.faucetCode === 'invalid_signature') {
+          message = undefined;
+          continue;
+        }
         throw e;
       }
     }
