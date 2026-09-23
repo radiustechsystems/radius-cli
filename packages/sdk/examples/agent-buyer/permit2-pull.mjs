@@ -7,7 +7,8 @@
 //   SBC via Turnstile). The collector pays gas for the pull, so it needs a little SBC too.
 import { createWalletClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { SBC, erc20Actions, formatTokenAmount, permit2Actions, radiusActions, radiusTestnet } from 'radius-sdk';
+import { erc20Actions, formatTokenAmount, permit2Actions, radiusActions } from 'radius-sdk/client';
+import { SBC, radiusTestnet } from 'radius-sdk';
 
 const amount = process.argv[2] ?? '0.001';
 const payer = createWalletClient({ account: privateKeyToAccount(process.env.RADIUS_PRIVATE_KEY), chain: radiusTestnet.chain, transport: http() })

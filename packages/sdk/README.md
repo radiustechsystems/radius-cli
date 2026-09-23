@@ -203,10 +203,10 @@ await transfer(wallet, { token: '0x…', to, amount: '3' });   // a bare address
 
 Actions for the canonical [Permit2](https://github.com/Uniswap/permit2) contract (`PERMIT2_ADDRESS`,
 the same on every Radius network), covering both of its flows. `permit2Actions()` is a client
-extension; each action is also exported on its own.
+extension; each action is also exported on its own. All of them come from `radius-sdk/client`.
 
 ```ts
-import { permit2Actions } from 'radius-sdk';
+import { permit2Actions } from 'radius-sdk/client';
 const owner = createWalletClient({ account, chain: radiusTestnet.chain, transport: http() }).extend(permit2Actions());
 const spender = createWalletClient({ account: spenderAccount, chain: radiusTestnet.chain, transport: http() }).extend(permit2Actions());
 
@@ -236,7 +236,7 @@ Nonces: SignatureTransfer nonces are random 256-bit values (`randomPermit2Nonce(
 AllowanceTransfer nonces are sequential per (owner, token, spender) and read from Permit2 when
 omitted. Deadlines default to 600 s, the same cap the x402 client applies. The EIP-712 domain,
 type sets (`PERMIT_TRANSFER_FROM_TYPES`, `PERMIT_SINGLE_TYPES`), `permit2WitnessTypeString` and
-`permit2WitnessHash` are exported for anyone assembling calls by hand; the witness type string is
+`permit2WitnessHash` are exported from `radius-sdk/client` for anyone assembling calls by hand; the witness type string is
 derived with EIP-712's ordering rule and checked against the x402 layout in the tests.
 
 ## Balances: native RUSD vs stablecoins
