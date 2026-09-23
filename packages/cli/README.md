@@ -49,8 +49,11 @@ radius-cli wallet verify "hello" 0xSig             # verify against own address
 radius-cli wallet verify "hello" 0xSig --address 0xOther
 radius-cli wallet send 0xTo 0.10 RUSD              # native value transfer
 radius-cli wallet send 0xTo 0.10 SBC               # ERC-20 transfer of SBC
+radius-cli wallet send 0xTo 0.10 0xToken           # ERC-20 transfer of any token (decimals read on-chain)
 radius-cli wallet send 0xToken "transfer(address,uint256)" 0xTo 100   # arbitrary call
 ```
+
+`wallet send` takes the token as its last argument: `RUSD` for a native transfer, `SBC`, or any ERC-20 contract address. Amounts are in display units (`1.5` means 1.5 tokens) and are parsed with the token's decimals — known for SBC, read on-chain for other tokens. ERC-20 sends and `wallet balance` run on the actions of [`radius-sdk/client`](../sdk) (`erc20Actions`, `radiusActions`), so a script and the CLI encode the same calls.
 
 `--private-key 0xHEX` overrides the keystore on any command.
 
@@ -110,10 +113,12 @@ $ radius-cli --json wallet balance 0x4F2D8a3b1c0E5d9b8e7a6c5d4e3f2a1b0c9d8e7f
 {
   "address": "0x4F2D8a3b1c0E5d9b8e7a6c5d4e3f2a1b0c9d8e7f",
   "totalUsd": 12.345678,
-  "sbc": "10.000000",
+  "sbc": "10",
   "rusd": "2.345678",
   "sbcWei": "10000000",
   "rusdWei": "2345678000000000000",
+  "aggregateWei": "12345678000000000000",
+  "rusdSource": "evm",
   "sbcError": null
 }
 
@@ -139,7 +144,7 @@ Per-command JSON shapes:
 | `wallet export` | `{address, privateKey}` |
 | `wallet sign` | `{address, signature}` |
 | `wallet verify` | `{address, valid}` (exit 1 when invalid) |
-| `wallet balance` | `{address, totalUsd, sbc, rusd, sbcWei, rusdWei, sbcError}` |
+| `wallet balance` | `{address, totalUsd, sbc, rusd, sbcWei, rusdWei, aggregateWei, rusdSource, sbcError}` |
 | `wallet send` | `{hash, receipt?}` (no `receipt` with `--no-wait`) |
 | `wallet x402` | `{status, headers, body, bodyEncoding, payment}` |
 | `call` | decoded return value (single value or array) |
@@ -166,6 +171,7 @@ SBC defaults to `0x33ad9e4BD16B69B5BFdED37D8B5D9fF9aba014Fb`, its address on bot
 
 - **RUSD** is the native gas token (18 decimals). `wallet send … RUSD` is a native value transfer.
 - **SBC** is an ERC-20 stablecoin (6 decimals). `wallet send … SBC` calls `transfer(address,uint256)` on the SBC contract.
+- `eth_getBalance` on Radius reports native RUSD **plus** SBC valued 1:1. `wallet balance` reads the two apart (`rusd` is native only, `rusdSource` says how) and `totalUsd` is the spendable total, so SBC is never counted twice.
 - Radius uses **fixed gas pricing**. All transactions will execute with the network gas price (n.b. they will fail if the requested gas price is too low).
 - If the account holds SBC but lacks RUSD, the network's Turnstile auto-converts SBC to RUSD inline for zero additional gas.
 
