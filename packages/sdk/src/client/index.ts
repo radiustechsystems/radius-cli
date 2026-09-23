@@ -571,8 +571,34 @@ export type {
   GetNativeBalanceParameters,
   GetTokenBalanceParameters,
 } from '../balances.js';
-export { erc20Actions, getTokenMetadata, getAllowance, approve, transfer, transferFrom, getTransfers, watchTransfers } from '../erc20.js';
-export type { Erc20Actions, TokenMetadata, TokenTransfer, TokenInput, TokenAmount } from '../erc20.js';
+export {
+  erc20Actions,
+  getTokenMetadata,
+  getAllowance,
+  approve,
+  transfer,
+  transferFrom,
+  getTransfers,
+  watchTransfers,
+  toTokenAtomic,
+  formatTokenAmount,
+} from '../erc20.js';
+export type {
+  Erc20Actions,
+  Erc20ActionsConfig,
+  TokenMetadata,
+  TokenTransfer,
+  TokenInput,
+  TokenAmount,
+  TokenWalletClient,
+  GetTokenMetadataParameters,
+  GetAllowanceParameters,
+  ApproveParameters,
+  TransferParameters,
+  TransferFromParameters,
+  GetTransfersParameters,
+  WatchTransfersParameters,
+} from '../erc20.js';
 export { getPaymentReceipt, decodePaymentReceipt, parseUptoSettlementAmount } from '../receipt.js';
 export type { PaymentReceipt } from '../receipt.js';
 export { RadiusPaymentError } from '../errors.js';

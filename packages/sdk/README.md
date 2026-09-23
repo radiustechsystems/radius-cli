@@ -133,12 +133,14 @@ const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transa
 Metadata, allowance, `approve`, `transfer`, `transferFrom` and `Transfer` events as viem actions,
 defaulting to SBC on Radius networks. Reads take any viem client; writes take a wallet client with
 an account and wait for the receipt (Radius finality is sub-second). Amounts are `bigint` atomic
-units or a display string such as `"1.5"`, parsed with the token's decimals.
+units or a display string such as `"1.5"`, parsed with the token's decimals. Like the other
+viem-backed actions, they are exported from `radius-sdk/client`.
 
 ```ts
 import { createWalletClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { radiusTestnet, erc20Actions, SBC } from 'radius-sdk';
+import { radiusTestnet, SBC } from 'radius-sdk';
+import { erc20Actions } from 'radius-sdk/client';
 
 const wallet = createWalletClient({ account: privateKeyToAccount(KEY), chain: radiusTestnet.chain, transport: http() })
   .extend(erc20Actions());                                  // erc20Actions({ token }) to default another token
@@ -152,7 +154,7 @@ await wallet.getTransfers({ to, fromBlock });                // decoded Transfer
 const unwatch = wallet.watchTransfers({ to, onTransfer: (t) => console.log(t.from, t.amount) });
 
 // Or call the actions directly, viem style, on any client:
-import { transfer, getAllowance } from 'radius-sdk';
+import { transfer, getAllowance } from 'radius-sdk/client';
 await transfer(wallet, { token: '0x…', to, amount: '3' });   // a bare address: decimals() is read on-chain
 ```
 
