@@ -23,7 +23,7 @@ export type {
   CustomNetworkFromChain,
   CustomNetworkFromChainId,
 } from './networks.js';
-export { getBalances, getNativeBalance, getAggregateBalance, getTokenBalance, radiusActions, defaultTokens, nativeBalanceBytecode } from './balances.js';
+// Balance actions load viem, so their runtime exports live on `radius-sdk/client`; only the types are re-exported here.
 export type {
   AccountBalances,
   NativeBalance,

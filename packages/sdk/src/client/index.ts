@@ -545,8 +545,19 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
 
 export { getSettlement } from '../settlement.js';
 export type { Settlement, SettlementTransfer } from '../settlement.js';
-export { getBalances, getNativeBalance, getAggregateBalance, getTokenBalance, radiusActions } from '../balances.js';
-export type { AccountBalances, NativeBalance, TokenBalance, BalanceToken, RadiusActions } from '../balances.js';
+export { getBalances, getNativeBalance, getAggregateBalance, getTokenBalance, radiusActions, defaultTokens, nativeBalanceBytecode } from '../balances.js';
+export type {
+  AccountBalances,
+  NativeBalance,
+  TokenBalance,
+  BalanceToken,
+  BalanceClient,
+  RadiusActions,
+  RadiusActionsConfig,
+  GetBalancesParameters,
+  GetNativeBalanceParameters,
+  GetTokenBalanceParameters,
+} from '../balances.js';
 export { getPaymentReceipt, decodePaymentReceipt, parseUptoSettlementAmount } from '../receipt.js';
 export type { PaymentReceipt } from '../receipt.js';
 export { RadiusPaymentError } from '../errors.js';

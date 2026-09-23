@@ -132,11 +132,14 @@ the Turnstile converts SBC into RUSD inline when a transaction needs it. Reading
 and an SBC `balanceOf` and adding them double-counts the SBC. The EVM itself is unchanged: the
 `BALANCE` opcode (Solidity's `address.balance`) sees only the native amount.
 
-The SDK reports each part on its own, as plain viem actions or as a client extension:
+The SDK reports each part on its own, as plain viem actions or as a client extension. They are
+exported from `radius-sdk/client` (the entry point that requires viem); the root entry point
+keeps only their types:
 
 ```ts
 import { createPublicClient, http } from 'viem';
-import { radiusTestnet, radiusActions, getBalances, getNativeBalance, getTokenBalance, SBC } from 'radius-sdk';
+import { radiusTestnet, SBC } from 'radius-sdk';
+import { radiusActions, getBalances, getNativeBalance, getTokenBalance } from 'radius-sdk/client';
 
 const client = createPublicClient({ chain: radiusTestnet.chain, transport: http() }).extend(radiusActions());
 

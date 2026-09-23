@@ -3,8 +3,8 @@
 // Usage: RADIUS_PRIVATE_KEY=<funded key> node fresh-wallet.mjs [url]
 import { createPublicClient, createWalletClient, http, parseAbi } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { createRadiusFetch, getPaymentReceipt } from 'radius-sdk/client';
-import { PERMIT2_ADDRESS, SBC, formatAmount, radiusActions, radiusTestnet } from 'radius-sdk';
+import { createRadiusFetch, getPaymentReceipt, radiusActions } from 'radius-sdk/client';
+import { PERMIT2_ADDRESS, SBC, formatAmount, radiusTestnet } from 'radius-sdk';
 
 const url = process.argv[2] ?? 'http://localhost:8787/api/lookup?ip=9.9.9.9';
 const funder = privateKeyToAccount(process.env.RADIUS_PRIVATE_KEY);
