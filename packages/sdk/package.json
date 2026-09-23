@@ -1,6 +1,6 @@
 {
   "name": "radius-sdk",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Accept and make Radius payments over x402 v2 \u2014 Hono / Cloudflare Workers first",
   "type": "module",
   "license": "MIT",
