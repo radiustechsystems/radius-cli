@@ -23,7 +23,7 @@ jobs:
       contents: read
     steps:
       - name: Check out repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # `changeset status --since` needs the history back to the base branch
           persist-credentials: false
@@ -54,7 +54,7 @@ jobs:
       pull-requests: write # to create and update the status comment (changesets/action/pr-comment)
     steps:
       - name: Check out repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
