@@ -1,0 +1,162 @@
+name: Release
+
+# Runs on every push to main and does one of two things:
+#   * changesets pending  -> opens or refreshes the "Version Packages" PR (branch `changeset-release/main`)
+#   * no changesets, and a package version is not on npm -> builds, packs and publishes it, then pushes
+#     the `<name>@<version>` git tag and creates a GitHub Release
+#
+# Publishing uses npm Trusted Publishing (OIDC): no NPM_TOKEN secret anywhere. Each package on npmjs.com
+# must list this repository + this workflow file (`release.yml`) as a trusted publisher; see README.md.
+# `id-token: write` is granted only to the publish job, which is why build/pack and publish are split
+# (https://changesets.dev/guide/automating#trusted-publishing).
+on:
+  push:
+    branches: [main]
+
+# recommended: reset permissions and explicitly specify for each job
+permissions: {}
+
+# recommended: avoid concurrent runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+env:
+  # Node 24 ships npm >= 11.5.1, which Trusted Publishing requires. pnpm 10 delegates `pnpm publish`
+  # to the npm CLI on PATH, so the Node version here is what actually authenticates against npm.
+  NODE_VERSION: 24
+
+jobs:
+  select-mode:
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.select-mode.outputs.mode }}
+      publish-plan-artifact-id: ${{ steps.select-mode.outputs.publish-plan-artifact-id }}
+    permissions:
+      contents: read # to check out repo (actions/checkout)
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false # recommended: do not persist git credentials on disk
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false # recommended: avoid cache poisoning
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Select Changesets mode
+        id: select-mode
+        uses: changesets/action/select-mode@v2
+
+  version:
+    if: needs.select-mode.outputs.mode == 'version'
+    needs: select-mode
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to commit version changes (changesets/action/version)
+      pull-requests: write # to create the pull request (changesets/action/version)
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false # recommended: do not persist git credentials on disk
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false # recommended: avoid cache poisoning
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Version packages
+        uses: changesets/action/version@v2
+        with:
+          # `changeset version` plus a lockfile refresh, so `pnpm install --frozen-lockfile` keeps passing
+          script: pnpm version-packages
+          commit-message: 'chore: version packages'
+          pr-title: Version Packages
+
+  pack:
+    if: needs.select-mode.outputs.mode == 'publish'
+    needs: select-mode
+    runs-on: ubuntu-latest
+    outputs:
+      pack-dir-artifact-id: ${{ steps.pack.outputs.pack-dir-artifact-id }}
+    permissions:
+      contents: read # to check out repo (actions/checkout)
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false # recommended: do not persist git credentials on disk
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false # recommended: avoid cache poisoning
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # `pnpm pack` does not run `prepublishOnly`, so build (and test) explicitly before packing.
+      - name: Build packages
+        run: pnpm build
+
+      - name: Test packages
+        run: pnpm test
+
+      - name: Pack packages
+        id: pack
+        uses: changesets/action/pack@v2
+        with:
+          publish-plan-artifact-id: ${{ needs.select-mode.outputs.publish-plan-artifact-id }}
+
+  publish:
+    needs: pack
+    runs-on: ubuntu-latest
+    # Optional: uncomment and create a `npm` environment with required reviewers so a maintainer must
+    # approve every publish. If you do, also set the environment name on the npm trusted publisher.
+    # environment: npm
+    permissions:
+      contents: write # to push git tags and create GitHub Releases (changesets/action/publish)
+      id-token: write # for npm Trusted Publishing (changesets/action/publish)
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false # recommended: do not persist git credentials on disk
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false # recommended: avoid cache poisoning
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Publish packages
+        uses: changesets/action/publish@v2
+        with:
+          pack-dir-artifact-id: ${{ needs.pack.outputs.pack-dir-artifact-id }}
+          create-github-releases: true
+          push-git-tags: true
