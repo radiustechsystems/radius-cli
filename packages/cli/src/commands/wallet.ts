@@ -1,47 +1,18 @@
 import { Command } from 'commander';
 import { confirm, password as promptPassword } from '@inquirer/prompts';
 import { readFileSync } from 'node:fs';
-import {
-  encodeFunctionData,
-  formatEther,
-  formatUnits,
-  isAddress,
-  parseEther,
-  parseUnits,
-  verifyMessage,
-  type Address,
-  type Hex,
-} from 'viem';
+import { encodeFunctionData, isAddress, parseEther, verifyMessage, type Address, type Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { resolveConfig, readPasswordless, writeCachedAddress, writePasswordless } from '../lib/config.js';
 import { keystoreExists, loadKeystorePrivateKey, saveKeystore } from '../lib/keystore.js';
 import { getOwnAddress, requireAccount } from '../lib/account.js';
 import { makePublicClient, makeWalletClient } from '../lib/client.js';
+import { parseAmountArg, parseTokenArg, readBalances } from '../lib/erc20.js';
 import { coerceArg, parseCastSignature } from '../lib/signature.js';
 import { formatUsd, formatUsdShort, jsonStringify } from '../lib/format.js';
 import { registerWalletX402 } from './walletX402.js';
 import type { GlobalOptions } from '../types.js';
-
-const SBC_DECIMALS = 6;
-const ERC20_TRANSFER_ABI = [
-  {
-    type: 'function',
-    name: 'transfer',
-    stateMutability: 'nonpayable',
-    inputs: [
-      { name: 'to', type: 'address' },
-      { name: 'amount', type: 'uint256' },
-    ],
-    outputs: [{ name: '', type: 'bool' }],
-  },
-  {
-    type: 'function',
-    name: 'balanceOf',
-    stateMutability: 'view',
-    inputs: [{ name: 'owner', type: 'address' }],
-    outputs: [{ name: '', type: 'uint256' }],
-  },
-] as const;
+import type { TokenInput } from 'radius-sdk/client';
 
 function readMessageArg(arg: string, raw: boolean): string | { raw: Hex } {
   const text = arg === '-' ? readFileSync(0, 'utf8') : arg;
@@ -243,46 +214,18 @@ export function registerWallet(program: Command): void {
       }
 
       const client = makePublicClient(cfg);
-      const rusdWei = await client.getBalance({ address });
-      const rusd = formatEther(rusdWei);
-
-      let sbc = '0';
-      let sbcRawWei = 0n;
-      let sbcError: string | null = null;
-      try {
-        sbcRawWei = await client.readContract({
-          address: cfg.sbcAddress!,
-          abi: ERC20_TRANSFER_ABI,
-          functionName: 'balanceOf',
-          args: [address],
-        });
-        sbc = formatUnits(sbcRawWei, SBC_DECIMALS);
-      } catch (e) {
-        sbcError = e instanceof Error ? e.message : String(e);
-      }
-
-      const total = Number(rusd) + Number(sbc);
+      const report = await readBalances(client, cfg, address);
 
       if (opts.json) {
-        console.log(
-          jsonStringify({
-            address,
-            totalUsd: total,
-            sbc,
-            rusd,
-            sbcWei: sbcRawWei.toString(),
-            rusdWei: rusdWei.toString(),
-            sbcError,
-          }),
-        );
+        console.log(jsonStringify(report));
         return;
       }
       console.log(`Address: ${address}`);
-      if (sbcError) {
-        console.log(`Balance: $${rusd} ($${formatUsd(rusd)} RUSD; SBC unavailable)`);
+      if (report.sbcError) {
+        console.log(`Balance: $${formatUsdShort(report.totalUsd)} ($${formatUsd(report.rusd)} RUSD; SBC unavailable: ${report.sbcError})`);
       } else {
         console.log(
-          `Balance: $${formatUsdShort(total)} ($${formatUsd(sbc)} SBC + $${formatUsd(rusd)} RUSD)`,
+          `Balance: $${formatUsdShort(report.totalUsd)} ($${formatUsd(report.sbc)} SBC + $${formatUsd(report.rusd)} RUSD)`,
         );
       }
     });
@@ -294,6 +237,7 @@ export function registerWallet(program: Command): void {
         'Send tokens. Forms:',
         '  radius-cli wallet send <to> <amount> RUSD       — native value transfer',
         '  radius-cli wallet send <to> <amount> SBC        — ERC-20 transfer of SBC',
+        '  radius-cli wallet send <to> <amount> 0xToken    — ERC-20 transfer of any token',
         '  radius-cli wallet send <token> "<sig>" [args…]  — call any function',
       ].join('\n  '),
     )
@@ -312,21 +256,15 @@ export function registerWallet(program: Command): void {
         return;
       }
 
-      // Form B: symbol form — exactly 3 args, last is RUSD or SBC.
+      // Form B: symbol form — exactly 3 args, last is RUSD, SBC or an ERC-20 address.
       if (args.length === 3) {
         const [to, amount, rawSymbol] = args;
-        const symbol = rawSymbol.toUpperCase();
-        if (symbol === 'RUSD') {
+        if (rawSymbol.toUpperCase() === 'RUSD') {
           await sendNative(cfg, to, amount, opts, wait, gas);
           return;
         }
-        if (symbol === 'SBC') {
-          if (!cfg.sbcAddress) {
-            throw new Error('SBC contract address is not configured. Set RADIUS_SBC_ADDRESS or pass --sbc.');
-          }
-          await sendErc20(cfg, cfg.sbcAddress, to, amount, SBC_DECIMALS, opts, wait, gas);
-          return;
-        }
+        await sendErc20(cfg, parseTokenArg(cfg, rawSymbol), to, amount, opts, wait, gas);
+        return;
       }
 
       const header = args.length === 0
@@ -339,6 +277,7 @@ export function registerWallet(program: Command): void {
           'Supported forms:',
           '  radius-cli wallet send <to> <amount> RUSD       — native value transfer',
           '  radius-cli wallet send <to> <amount> SBC        — ERC-20 transfer of SBC',
+          '  radius-cli wallet send <to> <amount> 0xToken    — ERC-20 transfer of any token',
           '  radius-cli wallet send <token> "<sig>" [args…]  — call any function',
         ].join('\n'),
       );
@@ -386,12 +325,16 @@ async function sendNative(
   await reportTx(publicClient, hash, opts, wait);
 }
 
+/**
+ * ERC-20 transfer through the SDK's `transfer` action: it parses the display amount with the token's
+ * decimals (read on-chain for a bare address) and encodes the call. The receipt is awaited here, not
+ * by the SDK, so `--no-wait` and the `{hash, receipt}` output stay the same as for a native send.
+ */
 async function sendErc20(
   cfg: ReturnType<typeof resolveConfig>,
-  token: Address,
+  token: TokenInput,
   to: string,
   amount: string,
-  decimals: number,
   opts: GlobalOptions,
   wait: boolean,
   gas: bigint | undefined,
@@ -400,22 +343,7 @@ async function sendErc20(
   const account = await requireAccount(cfg, opts.privateKey);
   const publicClient = makePublicClient(cfg);
   const walletClient = makeWalletClient(cfg, account);
-  const data = encodeFunctionData({
-    abi: ERC20_TRANSFER_ABI,
-    functionName: 'transfer',
-    args: [to as Address, parseUnits(amount, decimals)],
-  });
-  const gasPrice = await publicClient.getGasPrice();
-
-  const hash = await walletClient.sendTransaction({
-    account,
-    to: token,
-    data,
-    gasPrice,
-    gas,
-    type: 'legacy',
-    chain: cfg.chain,
-  });
+  const { hash } = await walletClient.transfer({ token, to: to as Address, amount: parseAmountArg(amount), gas, wait: false });
   await reportTx(publicClient, hash, opts, wait);
 }
 
