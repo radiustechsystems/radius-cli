@@ -147,7 +147,7 @@ const wallet = createWalletClient({ account: privateKeyToAccount(KEY), chain: ra
 
 await wallet.getTokenMetadata();                             // { name: 'Stable Coin', symbol: 'SBC', decimals: 6, totalSupply }
 await wallet.transfer({ to, amount: '1.50' });               // { hash, status: 'success', explorerUrl }
-await wallet.approve({ spender, amount: 2_000_000n });       // atomic units; wait: false returns after sending
+await wallet.approve({ spender, amount: 2_000_000n });       // atomic units; wait: false returns after sending, gas sets the limit
 await wallet.getAllowance({ owner: wallet.account.address, spender });
 await wallet.transferFrom({ from, to, amount: '0.10' });     // spend an allowance granted to this account
 await wallet.getTransfers({ to, fromBlock });                // decoded Transfer logs

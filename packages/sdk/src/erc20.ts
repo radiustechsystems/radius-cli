@@ -68,6 +68,8 @@ export interface ApproveParameters {
   token?: TokenInput;
   spender: Address;
   amount: TokenAmount;
+  /** Gas limit for the transaction; skips viem's `eth_estimateGas` when given. */
+  gas?: bigint;
   /** Return as soon as the transaction is sent (status reported as `success` unverified). Default: wait for the receipt. */
   wait?: boolean;
 }
@@ -76,6 +78,8 @@ export interface TransferParameters {
   token?: TokenInput;
   to: Address;
   amount: TokenAmount;
+  /** Gas limit for the transaction; skips viem's `eth_estimateGas` when given. */
+  gas?: bigint;
   wait?: boolean;
 }
 
@@ -84,6 +88,8 @@ export interface TransferFromParameters {
   from: Address;
   to: Address;
   amount: TokenAmount;
+  /** Gas limit for the transaction; skips viem's `eth_estimateGas` when given. */
+  gas?: bigint;
   wait?: boolean;
 }
 
@@ -178,7 +184,7 @@ export async function approve(client: TokenWalletClient, args: ApproveParameters
   const token = resolveToken(client, args.token);
   const amount = await toTokenAtomic(client, token, args.amount);
   return sendAndWait(client, args.wait, () =>
-    writeContract(client, { address: addressOf(token), abi: erc20Abi, functionName: 'approve', args: [args.spender, amount], account, chain: client.chain }),
+    writeContract(client, { address: addressOf(token), abi: erc20Abi, functionName: 'approve', args: [args.spender, amount], account, chain: client.chain, gas: args.gas }),
   );
 }
 
@@ -188,7 +194,7 @@ export async function transfer(client: TokenWalletClient, args: TransferParamete
   const token = resolveToken(client, args.token);
   const amount = await toTokenAtomic(client, token, args.amount);
   return sendAndWait(client, args.wait, () =>
-    writeContract(client, { address: addressOf(token), abi: erc20Abi, functionName: 'transfer', args: [args.to, amount], account, chain: client.chain }),
+    writeContract(client, { address: addressOf(token), abi: erc20Abi, functionName: 'transfer', args: [args.to, amount], account, chain: client.chain, gas: args.gas }),
   );
 }
 
@@ -198,7 +204,7 @@ export async function transferFrom(client: TokenWalletClient, args: TransferFrom
   const token = resolveToken(client, args.token);
   const amount = await toTokenAtomic(client, token, args.amount);
   return sendAndWait(client, args.wait, () =>
-    writeContract(client, { address: addressOf(token), abi: erc20Abi, functionName: 'transferFrom', args: [args.from, args.to, amount], account, chain: client.chain }),
+    writeContract(client, { address: addressOf(token), abi: erc20Abi, functionName: 'transferFrom', args: [args.from, args.to, amount], account, chain: client.chain, gas: args.gas }),
   );
 }
 

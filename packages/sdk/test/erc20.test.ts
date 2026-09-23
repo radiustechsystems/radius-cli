@@ -101,6 +101,14 @@ describe('writes', () => {
     expect(r.status).toBe('success');
     expect(node.methods()).not.toContain('eth_getTransactionReceipt');
   });
+  it('a gas limit is passed through and skips eth_estimateGas', async () => {
+    const { client, node } = walletClient();
+    await transfer(client, { to: OTHER, amount: 1n, gas: 90_000n, wait: false });
+    expect(node.methods()).not.toContain('eth_estimateGas');
+    node.calls.length = 0;
+    await approve(client, { spender: SPENDER, amount: 1n, wait: false });
+    expect(node.methods()).toContain('eth_estimateGas');
+  });
   it('reports a reverted receipt', async () => {
     const node = fakeNode({ chainId: radiusTestnet.chainId, status: 'reverted' });
     const client = createWalletClient({ account: OWNER, chain: radiusTestnet.chain, transport: node.transport });
