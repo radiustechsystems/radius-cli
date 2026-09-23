@@ -149,7 +149,7 @@ describe('getBalances', () => {
     expect(node.calls.filter((c) => c.method === 'eth_call')).toHaveLength(2);
   });
 
-  it('includes extra tokens in total but not in the convertible amount', async () => {
+  it('reports non-convertible tokens but leaves them out of total', async () => {
     const node = fakeNode({ native: WEI, sbc: 1_000_000n, usdx: 3n * WEI });
     const client = createPublicClient({ chain: radiusTestnet.chain, transport: node.transport });
     const b = await getBalances(client, { address: OWNER, tokens: [SBC, USDX] });
@@ -157,7 +157,13 @@ describe('getBalances', () => {
     expect(b.native.raw).toBe(WEI);
     expect(b.native.aggregate).toBe(2n * WEI);
     expect(b.native.convertible).toBe(WEI);
-    expect(b.total).toBe(5n * WEI);
+    // USDX is not valued 1:1 with RUSD: total is raw + SBC only, i.e. the aggregate.
+    expect(b.total).toBe(2n * WEI);
+    expect(b.totalFormatted).toBe('2');
+
+    // Opting a token in counts it.
+    const b2 = await getBalances(client, { address: OWNER, tokens: [SBC, { ...USDX, convertible: true }] });
+    expect(b2.total).toBe(5n * WEI);
   });
 
   it('falls back to subtracting convertible tokens when the node cannot run init code', async () => {

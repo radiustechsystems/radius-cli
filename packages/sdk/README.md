@@ -148,7 +148,7 @@ b.native.raw            // 2345678000000000000n  — native RUSD only (wei)
 b.native.aggregate      // 12345678000000000000n — what eth_getBalance / client.getBalance() returns
 b.native.convertible    // 10000000000000000000n — aggregate − raw: SBC value the Turnstile can convert
 b.tokens[0]             // { symbol: 'SBC', atomic: 10000000n, formatted: '10', decimals: 6, convertible: true, … }
-b.totalFormatted        // '12.345678' — raw + every token at 1:1, 18 decimals
+b.totalFormatted        // '12.345678' — raw + convertible tokens at 1:1, 18 decimals
 
 // Individually, or without the extension:
 await client.getNativeBalance({ address });                    // bigint, native RUSD only
@@ -167,7 +167,8 @@ contract and works on any node that executes standard EVM. `b.native.rawSource` 
 that succeeded. Should a node refuse the call, `getBalances` falls back to subtracting the
 `convertible` tokens from the aggregate (`rawSource: 'derived'`, with the error in `rawError`);
 `nativeBalance: 'evm' | 'derived' | 'auto'` selects the strategy explicitly. Mark extra tokens
-`convertible: true` only if the Turnstile counts them in `eth_getBalance` (today: SBC).
+`convertible: true` only if the Turnstile counts them in `eth_getBalance` (today: SBC); other
+tokens are reported in `tokens` but not valued 1:1 in `total`.
 
 ## Networks and currency
 

@@ -76,8 +76,10 @@ export interface AccountBalances {
   /** One entry per requested token, in the order requested. */
   tokens: TokenBalance[];
   /**
-   * `native.raw` plus every token valued 1:1, in 18 decimals. Assumes USD-pegged tokens.
-   * Equals `native.aggregate` when the requested tokens are exactly the convertible ones.
+   * `native.raw` plus the convertible tokens valued 1:1, in 18 decimals: what the account can
+   * spend through the Turnstile. Tokens not marked `convertible` are reported in `tokens` but
+   * left out, since nothing says they are worth 1:1 with RUSD. Equals `native.aggregate` when
+   * the requested tokens include every convertible one.
    */
   total: bigint;
   totalFormatted: string;
@@ -223,7 +225,7 @@ export async function getBalances(client: BalanceClient, args: GetBalancesParame
   }
   const convertible = aggregate > raw ? aggregate - raw : 0n;
   const fmt = (v: bigint) => formatUnits(v, nativeCurrency.decimals);
-  const total = tokenBalances.reduce((sum, t) => sum + toWei(t.atomic, t.decimals, nativeCurrency.decimals), raw);
+  const total = tokenBalances.filter((t) => t.convertible).reduce((sum, t) => sum + toWei(t.atomic, t.decimals, nativeCurrency.decimals), raw);
   return {
     address: args.address,
     native: {
