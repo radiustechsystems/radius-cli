@@ -13,6 +13,7 @@ export type RadiusPaymentErrorCode =
   | 'unsupported_transfer_method'
   | 'approval_required'
   | 'approval_failed'
+  /** A faucet call failed; thrown as `FaucetError` (see `radius-sdk/faucet`) with the API's own `faucetCode`. */
   | 'faucet'
   | 'config';
 
