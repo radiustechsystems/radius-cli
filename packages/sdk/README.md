@@ -1,15 +1,19 @@
-# radius-sdk (PoC)
+# radius-sdk
 
 Accept and make [Radius](https://radiustech.xyz) payments over standard [x402 v2](https://x402.org).
 Hono and Cloudflare Workers first. SBC is the default currency, mainnet the default network.
 
-Status: not yet published to npm.
+Pre-1.0: minor versions may change the API. Release notes are in [CHANGELOG.md](./CHANGELOG.md).
 
-## Installation dependencies
+| Entry point | What | Needs |
+| --- | --- | --- |
+| `radius-sdk` | networks, amounts, receipts, errors, `radiusEnv` (no viem at runtime) | — |
+| `radius-sdk/hono` | `radiusPayments()` seller middleware | `hono` |
+| `radius-sdk/client` | `createRadiusFetch()` paying fetch, balance and settlement actions | `viem` |
 
-For this unpublished preview, use the workspace examples (`pnpm install` at the repository
-root, then `pnpm --filter radius-sdk build`). Once published, install the dependencies for
-the entry point you use:
+## Install
+
+Install the peer dependencies for the entry point you use:
 
 ```sh
 # Hono seller
@@ -69,7 +73,8 @@ What you get, on the wire, with no Radius-specific client knowledge required:
 - No I/O at module scope (Workers-safe): the facilitator's `/supported` is fetched lazily on the
   first paid request after each cold start. Server bundle is ~65 KiB gzipped, no viem.
 
-Verified with stock `radius-cli wallet x402` 0.1.5 paying a local `wrangler dev` worker on testnet.
+Any x402 v2 client can pay it: verified with the pre-SDK `radius-cli wallet x402` 0.1.5 as well as
+`createRadiusFetch` (which `radius-cli` uses from 0.2.0) paying a local `wrangler dev` worker on testnet.
 
 ## Make payments (buyer / agent)
 
@@ -207,8 +212,8 @@ self-hosted facilitator with your own auth or routing.
 
 | Path | What |
 | --- | --- |
-| `src/` | `networks`, `balances`, `amounts`, `receipt`, `errors`; `hono/` (server); `client/` (buyer) |
-| `examples/worker-seller` | Hono worker: free `/`, paid `/api/lookup` and `/api/query` (`pnpm dev`) |
+| `src/` | `networks`, `balances`, `amounts`, `receipt`, `settlement`, `schemes`, `env`, `errors`; `hono/` (server); `client/` (buyer) |
+| `examples/worker-seller` | Hono worker: free `/`, paid `/api/lookup` and `/api/query` (`pnpm --filter radius-worker-seller dev`) |
 | `examples/agent-buyer` | `buy.mjs` (pay a URL), `fresh-wallet.mjs` (gasless proof from a new wallet) |
 | `examples/demo-dapp` | Test-dapp style page exercising both sides in the browser (burner wallet or MetaMask) |
 | `test/` | unit tests (facilitator and RPC mocked; `client-parity.test.ts` pins the wire format against radius-cli's; `balances.test.ts` runs the native-balance init code in a real EVM); `test/e2e` real settlement and a live balance reconciliation on testnet or mainnet (`RADIUS_E2E=1 RADIUS_PRIVATE_KEY=… [RADIUS_NETWORK=mainnet] pnpm test:e2e`) |
