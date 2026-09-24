@@ -160,7 +160,7 @@ In priority order (highest first):
 3. **`~/.radius/config.json`** — fields: `network`, `rpcUrl`, `sbcAddress`, `rusdAddress`
 4. **Built-in defaults** — mainnet
 
-The SBC contract address must be configured for `wallet balance` and `wallet send … SBC` to work — there is no public default.
+SBC defaults to `0x33ad9e4BD16B69B5BFdED37D8B5D9fF9aba014Fb`, its address on both mainnet and testnet (taken from `radius-sdk`); set `--sbc` / `RADIUS_SBC_ADDRESS` / `sbcAddress` only for another deployment.
 
 ## Notes on the Radius network
 

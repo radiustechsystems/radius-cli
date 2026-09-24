@@ -14,12 +14,9 @@ a page of buttons, each exercising one thing, with the raw result next to it.
 ## Run locally
 
 ```bash
-# from the repo root, once
+# from the repo root
 pnpm install && pnpm --filter radius-sdk build
-
-cd examples/demo-dapp
-pnpm install
-pnpm dev          # builds web/app.ts → public/app.js, then wrangler dev
+pnpm --filter radius-demo-dapp dev   # builds web/app.ts → public/app.js, then wrangler dev
 ```
 
 Open http://localhost:8787. Defaults: testnet, payments go to `PAY_TO` in `wrangler.toml`

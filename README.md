@@ -4,8 +4,16 @@ Tools for the [Radius Network](https://radiustech.xyz), managed as one pnpm work
 
 | Package | What |
 | --- | --- |
-| [`packages/cli`](./packages/cli) | `radius-cli` — CLI wallet for Radius, modeled on Foundry's `cast` |
-| [`packages/sdk`](./packages/sdk) | `radius-sdk` — accept and make Radius payments over x402 v2 (Hono / Cloudflare Workers first) |
+| [`packages/cli`](./packages/cli) | [`radius-cli`](https://www.npmjs.com/package/radius-cli) — CLI wallet for Radius, modeled on Foundry's `cast`; `wallet x402` pays through `radius-sdk` |
+| [`packages/sdk`](./packages/sdk) | [`radius-sdk`](https://www.npmjs.com/package/radius-sdk) — accept and make Radius payments over x402 v2 (Hono / Cloudflare Workers first), plus balance and settlement helpers |
+
+```bash
+npx radius-cli wallet balance     # the CLI
+pnpm add radius-sdk hono          # SDK, seller side
+pnpm add radius-sdk viem          # SDK, buyer / agent side
+```
+
+Runnable SDK examples (seller worker, agent buyer, browser demo dapp) are in [`packages/sdk/examples`](./packages/sdk/examples).
 
 ## Development
 
@@ -25,7 +33,7 @@ Every PR that changes `packages/cli` or `packages/sdk` adds a [changeset](.chang
 
 Releases are automated with [changesets/action](https://github.com/changesets/action) (`.github/workflows/release.yml`):
 
-1. Merging PRs that carry changesets to `main` opens or refreshes a **Version Packages** PR (branch `changeset-release/main`). It applies the pending changesets: version bumps and `CHANGELOG.md` entries, with `radius-cli` bumped whenever `radius-sdk` moves, since its `workspace:^` range pins the exact 0.0.x version. Review it like any other PR; it keeps updating as more changesets land.
+1. Merging PRs that carry changesets to `main` opens or refreshes a **Version Packages** PR (branch `changeset-release/main`). It applies the pending changesets: version bumps and `CHANGELOG.md` entries, with `radius-cli` given at least a patch bump whenever `radius-sdk` moves (`updateInternalDependencies: "patch"`), so every SDK release ships a CLI built against it. Review it like any other PR; it keeps updating as more changesets land.
 2. Merging the Version Packages PR builds, tests and packs the bumped packages, publishes them to npm in dependency order (SDK before CLI), pushes a `<name>@<version>` git tag for each, and creates a GitHub Release from the changelog.
 
 Publishing uses [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers): the `publish` job authenticates with a short-lived GitHub OIDC token, no `NPM_TOKEN` secret exists, and npm attaches provenance attestations automatically. Only that job has `id-token: write`.
