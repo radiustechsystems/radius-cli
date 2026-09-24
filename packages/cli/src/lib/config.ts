@@ -14,6 +14,7 @@ interface FileConfig {
   rpcUrl?: string;
   sbcAddress?: string;
   rusdAddress?: string;
+  faucetUrl?: string;
   cachedAddress?: string;
   passwordless?: boolean;
 }
@@ -53,10 +54,12 @@ export function resolveConfig(opts: GlobalOptions): ResolvedConfig {
     'RUSD address',
   );
 
+  const faucetUrl = process.env.RADIUS_FAUCET_URL ?? file.faucetUrl;
+
   const keystorePath = process.env.RADIUS_KEYSTORE_PATH ?? DEFAULT_KEYSTORE_PATH;
   const password = process.env.RADIUS_PASSWORD;
 
-  return { network, chain, rpcUrl, sbcAddress, rusdAddress, keystorePath, password };
+  return { network, chain, rpcUrl, sbcAddress, rusdAddress, faucetUrl, keystorePath, password };
 }
 
 export function configPath(): string {

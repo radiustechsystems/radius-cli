@@ -9,6 +9,7 @@ export default defineConfig({
     alias: [
       { find: /^radius-sdk\/client$/, replacement: sdk('client/index.ts') },
       { find: /^radius-sdk\/hono$/, replacement: sdk('hono/index.ts') },
+      { find: /^radius-sdk\/faucet$/, replacement: sdk('faucet.ts') },
       { find: /^radius-sdk$/, replacement: sdk('index.ts') },
     ],
   },

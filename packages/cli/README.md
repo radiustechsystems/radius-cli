@@ -50,9 +50,26 @@ radius-cli wallet verify "hello" 0xSig --address 0xOther
 radius-cli wallet send 0xTo 0.10 RUSD              # native value transfer
 radius-cli wallet send 0xTo 0.10 SBC               # ERC-20 transfer of SBC
 radius-cli wallet send 0xToken "transfer(address,uint256)" 0xTo 100   # arbitrary call
+radius-cli --network testnet wallet faucet         # drip test funds into the local wallet
+radius-cli --network testnet wallet faucet status  # faucet rate-limit state for the local wallet
 ```
 
 `--private-key 0xHEX` overrides the keystore on any command.
+
+### Faucet (test funds)
+
+`wallet faucet` requests a drip from the Radius faucet for the configured network (testnet: ~0.5 SBC per request; mainnet: a small daily SBC amount) through [`radius-sdk/faucet`](../sdk#faucet-test-funds). Where the faucet also drips a little RUSD for gas it is reported alongside.
+
+```bash
+radius-cli --network testnet wallet faucet                 # drip into the local wallet (alias: wallet faucet fund)
+radius-cli --network testnet wallet faucet 0xOther         # drip into another address
+radius-cli --network testnet wallet faucet status [0xAddr] # rate-limit state, requests left, drip amounts
+radius-cli --network testnet wallet faucet --json          # {faucetUrl, address, token, amount, txHash, explorerUrl, native, nextDripAt}
+```
+
+Whether a faucet demands a signed request is a server-side switch (testnet currently does not, mainnet is expected to). The CLI drips unsigned first and, only if the faucet answers `signature_required`, signs its EIP-191 challenge with the local wallet and drips again, so the keystore is unlocked only when actually needed. `--signature always` skips the unsigned attempt; `--signature never` disables the fallback. Dripping into another address can therefore only work while that faucet accepts unsigned requests (it exits 2 with `signer_required` otherwise; pass that address's key with `--private-key` to sign for it). `--token <symbol>` requests a token other than SBC.
+
+`--faucet-url <url>`, `RADIUS_FAUCET_URL` or `faucetUrl` in `~/.radius/config.json` point at another faucet (a same-origin proxy, a local instance). Faucet errors are printed to stderr as `faucet: <code> …` with the faucet's `request_id`; exit code 2 means the faucet declined for now (`rate_limited` with the wait, `faucet_empty`, a signature we cannot provide), 1 anything else.
 
 ## x402 HTTP payments
 
@@ -142,6 +159,8 @@ Per-command JSON shapes:
 | `wallet balance` | `{address, totalUsd, sbc, rusd, sbcWei, rusdWei, sbcError}` |
 | `wallet send` | `{hash, receipt?}` (no `receipt` with `--no-wait`) |
 | `wallet x402` | `{status, headers, body, bodyEncoding, payment}` |
+| `wallet faucet` / `wallet faucet drip` | `{faucetUrl, address, token, amount, txHash, explorerUrl, native, nextDripAt}` |
+| `wallet faucet status` | `{faucetUrl, address, token, rateLimited, retryAfterMs, remainingRequests, dripAmount, nativeDripAmount, unlimited}` |
 | `call` | decoded return value (single value or array) |
 | `tx` | the full transaction object |
 | `receipt` | the full receipt object |
@@ -156,8 +175,8 @@ Errors continue to go to stderr as `error: <message>` with a non-zero exit code;
 In priority order (highest first):
 
 1. **CLI flag** — `--network`, `--rpc-url`, `--private-key`, `--sbc`, `--rusd`, `--json`
-2. **Environment** — `RADIUS_NETWORK`, `RADIUS_RPC_URL`, `RADIUS_SBC_ADDRESS`, `RADIUS_RUSD_ADDRESS`, `RADIUS_PASSWORD`, `RADIUS_KEYSTORE_PATH`, `RADIUS_HOME`
-3. **`~/.radius/config.json`** — fields: `network`, `rpcUrl`, `sbcAddress`, `rusdAddress`
+2. **Environment** — `RADIUS_NETWORK`, `RADIUS_RPC_URL`, `RADIUS_SBC_ADDRESS`, `RADIUS_RUSD_ADDRESS`, `RADIUS_FAUCET_URL`, `RADIUS_PASSWORD`, `RADIUS_KEYSTORE_PATH`, `RADIUS_HOME`
+3. **`~/.radius/config.json`** — fields: `network`, `rpcUrl`, `sbcAddress`, `rusdAddress`, `faucetUrl`
 4. **Built-in defaults** — mainnet
 
 The SBC contract address must be configured for `wallet balance` and `wallet send … SBC` to work — there is no public default.

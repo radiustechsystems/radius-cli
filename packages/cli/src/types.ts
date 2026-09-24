@@ -8,6 +8,8 @@ export interface ResolvedConfig {
   rpcUrl: string;
   sbcAddress?: Address;
   rusdAddress?: Address;
+  /** Faucet base URL override (RADIUS_FAUCET_URL or config.json `faucetUrl`); the network's when unset. */
+  faucetUrl?: string;
   keystorePath: string;
   password?: string;
 }
