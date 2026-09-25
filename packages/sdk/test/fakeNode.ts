@@ -26,6 +26,8 @@ export interface FakeNodeOptions {
   blockNumber?: bigint;
   /** Advance the block number on every `eth_blockNumber` (so block watchers fire). */
   advanceBlocks?: boolean;
+  /** Widest `toBlock - fromBlock` accepted by `eth_getLogs`, like a Radius node (default 1_000_000). */
+  maxLogRange?: bigint;
 }
 
 export function fakeNode(opts: FakeNodeOptions) {
@@ -58,8 +60,14 @@ export function fakeNode(opts: FakeNodeOptions) {
             if (!opts.onCall) throw new Error('eth_call not stubbed');
             return opts.onCall(p[0], p[1]);
           }
-          case 'eth_getLogs':
-            return opts.onLogs ? opts.onLogs(p[0]) : [];
+          case 'eth_getLogs': {
+            const f = p[0] as { fromBlock?: unknown; toBlock?: unknown };
+            const bound = (v: unknown) => (typeof v === 'string' && v.startsWith('0x') ? BigInt(v) : blockNumber);
+            if (bound(f.toBlock) - bound(f.fromBlock) > (opts.maxLogRange ?? 1_000_000n)) {
+              throw Object.assign(new Error('Block parameter could not be parsed as numeric or is not supported: block range is too wide'), { code: -33002 });
+            }
+            return opts.onLogs ? opts.onLogs(p[0] as Record<string, unknown>) : [];
+          }
           case 'eth_sendRawTransaction': {
             const raw = p[0] as Hex;
             const tx = parseTransaction(raw);
@@ -95,5 +103,5 @@ export function fakeNode(opts: FakeNodeOptions) {
     },
     { retryCount: 0 },
   );
-  return { transport, calls, sent, methods: () => calls.map((c) => c.method) };
+  return { transport, calls, sent, methods: () => calls.map((c) => c.method), setBlockNumber: (n: bigint) => { blockNumber = n; }, blockNumber: () => blockNumber };
 }

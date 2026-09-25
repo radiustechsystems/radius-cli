@@ -606,6 +606,9 @@ export {
   transferFrom,
   getTransfers,
   watchTransfers,
+  transferKey,
+  MAX_LOG_RANGE,
+  MAX_LOG_CHUNKS,
   toTokenAtomic,
   formatTokenAmount,
 } from '../erc20.js';

@@ -1,7 +1,7 @@
 import { createPublicClient, createWalletClient, decodeFunctionData, encodeAbiParameters, encodeEventTopics, erc20Abi, maxUint256, numberToHex, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { describe, expect, it } from 'vitest';
-import { approve, erc20Actions, formatTokenAmount, getAllowance, getTokenMetadata, getTransfers, toTokenAtomic, transfer, transferFrom, watchTransfers } from '../src/erc20.js';
+import { describe, expect, it, vi } from 'vitest';
+import { approve, erc20Actions, formatTokenAmount, getAllowance, getTokenMetadata, getTransfers, MAX_LOG_RANGE, toTokenAtomic, transfer, transferFrom, transferKey, watchTransfers, type TokenTransfer } from '../src/erc20.js';
 import { createRadiusFetch, type ApprovalRequest } from '../src/client/index.js';
 import { defineRadiusNetwork, PERMIT2_ADDRESS, radiusMainnet, radiusTestnet, SBC } from '../src/networks.js';
 import { RadiusPaymentError } from '../src/errors.js';
@@ -124,7 +124,7 @@ describe('writes', () => {
 
 describe('Transfer events', () => {
   const TRANSFER = erc20Abi.find((i) => i.type === 'event' && i.name === 'Transfer')!;
-  const log = (from: Address, to: Address, value: bigint, block: bigint) => ({
+  const log = (from: Address, to: Address, value: bigint, block: bigint, logIndex = 2) => ({
     address: SBC.address,
     topics: encodeEventTopics({ abi: [TRANSFER], eventName: 'Transfer', args: { from, to } }),
     data: word(value),
@@ -132,16 +132,25 @@ describe('Transfer events', () => {
     transactionHash: numberToHex(block, { size: 32 }),
     transactionIndex: '0x0',
     blockHash: numberToHex(block, { size: 32 }),
-    logIndex: '0x2',
+    logIndex: numberToHex(logIndex),
     removed: false,
   });
+  const HEAD = 1_700_000_000_000n;
+  const hex = (n: bigint) => numberToHex(n);
+  /** `[fromBlock, toBlock]` of every eth_getLogs call, as bigints. */
+  const ranges = (node: ReturnType<typeof fakeNode>) =>
+    node.calls.filter((c) => c.method === 'eth_getLogs').map((c) => { const f = c.params[0] as { fromBlock: Hex; toBlock: Hex }; return [BigInt(f.fromBlock), BigInt(f.toBlock)]; });
+  const eventsNode = (onLogs?: (f: Record<string, unknown>) => unknown[]) => {
+    const node = fakeNode({ chainId: radiusTestnet.chainId, blockNumber: HEAD, onLogs: onLogs ?? (() => []) });
+    return { node, client: createPublicClient({ chain: radiusTestnet.chain, transport: node.transport, pollingInterval: 5 }) };
+  };
 
   it('getTransfers decodes logs and forwards the filter', async () => {
     let filter: Record<string, unknown> = {};
-    const node = fakeNode({ chainId: radiusTestnet.chainId, onLogs: (f) => { filter = f; return [log(OWNER.address, OTHER, 1_000n, 5n)]; } });
-    const client = createPublicClient({ chain: radiusTestnet.chain, transport: node.transport });
+    const { client } = eventsNode((f) => { filter = f; return [log(OWNER.address, OTHER, 1_000n, 5n)]; });
     const transfers = await getTransfers(client, { to: OTHER, fromBlock: 1n, toBlock: 10n });
     expect(transfers).toEqual([{ token: SBC.address, from: OWNER.address, to: OTHER, amount: 1_000n, transactionHash: numberToHex(5n, { size: 32 }), blockNumber: 5n, logIndex: 2 }]);
+    expect(transferKey(transfers[0])).toBe(`${numberToHex(5n, { size: 32 })}:2`);
     expect((filter.address as string).toLowerCase()).toBe(SBC.address.toLowerCase());
     expect(filter.fromBlock).toBe('0x1');
     expect(filter.toBlock).toBe('0xa');
@@ -151,18 +160,118 @@ describe('Transfer events', () => {
     expect((topics[2] as string).toLowerCase()).toBe(`0x${'0'.repeat(24)}${OTHER.slice(2)}`.toLowerCase());
   });
 
-  it('watchTransfers polls and delivers decoded transfers until unwatched', async () => {
+  it('defaults to the last MAX_LOG_RANGE blocks before the head', async () => {
+    const { client, node } = eventsNode();
+    await getTransfers(client, { to: OTHER });
+    expect(node.methods()).toEqual(['eth_blockNumber', 'eth_getLogs']);
+    expect(ranges(node)).toEqual([[HEAD - MAX_LOG_RANGE, HEAD]]);
+    expect(MAX_LOG_RANGE).toBe(1_000_000n);
+    node.calls.length = 0;
+    await getTransfers(client, { toBlock: 5n });
+    expect(ranges(node)).toEqual([[0n, 5n]]);
+  });
+
+  it('fetches wider ranges in sequential chunks the node accepts, in order', async () => {
+    const seen: bigint[] = [];
+    const { client, node } = eventsNode((f) => { const from = BigInt(f.fromBlock as Hex); seen.push(from); return [log(OWNER.address, OTHER, 1n, from + 1n)]; });
+    const transfers = await getTransfers(client, { fromBlock: HEAD - 2_500_000n, toBlock: HEAD });
+    expect(ranges(node)).toEqual([
+      [HEAD - 2_500_000n, HEAD - 1_500_000n],
+      [HEAD - 1_500_000n + 1n, HEAD - 500_000n + 1n],
+      [HEAD - 500_000n + 2n, HEAD],
+    ]);
+    expect(transfers.map((t) => t.blockNumber)).toEqual(seen.map((b) => b + 1n));
+    node.calls.length = 0;
+    await getTransfers(client, { fromBlock: 100n, toBlock: 125n, maxBlockRange: 10n });
+    expect(ranges(node)).toEqual([[100n, 110n], [111n, 121n], [122n, 125n]]);
+  });
+
+  it('sorts each chunk by (blockNumber, logIndex)', async () => {
+    const { client } = eventsNode(() => [log(OWNER.address, OTHER, 1n, 7n, 3), log(OWNER.address, OTHER, 2n, 6n, 1), log(OWNER.address, OTHER, 3n, 7n, 0)]);
+    const transfers = await getTransfers(client, { fromBlock: 1n, toBlock: 10n });
+    expect(transfers.map((t) => [t.blockNumber, t.logIndex])).toEqual([[6n, 1], [7n, 0], [7n, 3]]);
+  });
+
+  it('refuses empty, negative and absurdly wide ranges before calling the node', async () => {
+    const { client, node } = eventsNode();
+    await expect(getTransfers(client, { fromBlock: 10n, toBlock: 5n })).rejects.toMatchObject({ code: 'config' });
+    await expect(getTransfers(client, { fromBlock: 0n, toBlock: HEAD })).rejects.toThrow(/eth_getLogs calls of 1000000 \(max 1000\)/);
+    await expect(getTransfers(client, { fromBlock: 1n, toBlock: 2n, maxBlockRange: 0n })).rejects.toThrow(/maxBlockRange must be positive/);
+    expect(node.methods()).not.toContain('eth_getLogs');
+  });
+
+  it('the fake node rejects spans over the cap like a Radius node, and getLogs alone would hit it', async () => {
+    const { client } = eventsNode();
+    await expect(client.getLogs({ fromBlock: HEAD - 1_000_001n, toBlock: HEAD })).rejects.toThrow(/block range is too wide/);
+    await expect(client.getLogs({ fromBlock: HEAD - 1_000_000n, toBlock: HEAD })).resolves.toEqual([]);
+  });
+
+  it('watchTransfers delivers new transfers only by default, in order, and checkpoints each range', async () => {
     let pending: unknown[] = [];
-    const node = fakeNode({ chainId: radiusTestnet.chainId, advanceBlocks: true, onLogs: () => { const out = pending; pending = []; return out; } });
-    const client = createPublicClient({ chain: radiusTestnet.chain, transport: node.transport, pollingInterval: 5 });
-    const seen: unknown[] = [];
-    const unwatch = watchTransfers(client, { from: OWNER.address, onTransfer: (t) => seen.push(t), pollingInterval: 5 });
-    pending = [log(OWNER.address, OTHER, 9n, 7n)];
-    await new Promise((r) => setTimeout(r, 60));
+    const { client, node } = eventsNode(() => { const out = pending; pending = []; return out; });
+    const seen: TokenTransfer[] = [];
+    const checkpoints: bigint[] = [];
+    const unwatch = watchTransfers(client, { from: OWNER.address, onTransfer: (t) => { seen.push(t); }, onCheckpoint: (b) => checkpoints.push(b), pollingInterval: 5 });
+    await vi.waitFor(() => expect(node.methods().filter((m) => m === 'eth_blockNumber').length).toBeGreaterThan(1));
+    expect(node.methods()).not.toContain('eth_getLogs');
+    expect(node.methods()).not.toContain('eth_newFilter');
+
+    pending = [log(OWNER.address, OTHER, 9n, HEAD + 2n, 1), log(OWNER.address, OTHER, 8n, HEAD + 1n, 0)];
+    node.setBlockNumber(HEAD + 3n);
+    await vi.waitFor(() => expect(seen).toHaveLength(2));
+    expect(seen.map((t) => [t.blockNumber, t.amount])).toEqual([[HEAD + 1n, 8n], [HEAD + 2n, 9n]]);
+    expect(ranges(node)).toEqual([[HEAD + 1n, HEAD + 3n]]);
+    expect(checkpoints).toEqual([HEAD + 3n]);
+
+    node.setBlockNumber(HEAD + 4n);
+    await vi.waitFor(() => expect(ranges(node)).toHaveLength(2));
+    expect(ranges(node)[1]).toEqual([HEAD + 4n, HEAD + 4n]);
     unwatch();
-    expect(seen).toEqual([expect.objectContaining({ from: OWNER.address, to: OTHER, amount: 9n, blockNumber: 7n })]);
-    const filterCalls = node.calls.filter((c) => c.method === 'eth_getLogs' || c.method === 'eth_newFilter');
-    expect(filterCalls.length).toBeGreaterThan(0);
+    const polls = node.methods().filter((m) => m === 'eth_blockNumber').length;
+    await new Promise((r) => setTimeout(r, 30));
+    expect(node.methods().filter((m) => m === 'eth_blockNumber').length).toBe(polls);
+  });
+
+  it('watchTransfers resumes from fromBlock and chunks the backlog, checkpointing per chunk', async () => {
+    const { client, node } = eventsNode();
+    const checkpoints: bigint[] = [];
+    const unwatch = watchTransfers(client, { fromBlock: HEAD - 2_500_000n, onTransfer: () => {}, onCheckpoint: (b) => checkpoints.push(b), pollingInterval: 5 });
+    await vi.waitFor(() => expect(checkpoints).toHaveLength(3));
+    unwatch();
+    expect(ranges(node)).toEqual([
+      [HEAD - 2_500_000n, HEAD - 1_500_000n],
+      [HEAD - 1_500_000n + 1n, HEAD - 500_000n + 1n],
+      [HEAD - 500_000n + 2n, HEAD],
+    ]);
+    expect(checkpoints).toEqual([HEAD - 1_500_000n, HEAD - 500_000n + 1n, HEAD]);
+  });
+
+  it('watchTransfers retries a failed range without skipping it', async () => {
+    let fail = true;
+    const { client, node } = eventsNode(() => { if (fail) { fail = false; throw new Error('boom'); } return [log(OWNER.address, OTHER, 1n, HEAD - 1n)]; });
+    const errors: string[] = [];
+    const checkpoints: bigint[] = [];
+    const seen: TokenTransfer[] = [];
+    const unwatch = watchTransfers(client, { fromBlock: HEAD - 5n, onTransfer: (t) => { seen.push(t); }, onCheckpoint: (b) => checkpoints.push(b), onError: (e) => errors.push(e.message), pollingInterval: 5 });
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    unwatch();
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/boom/); // viem wraps the RPC failure
+    expect(ranges(node)).toEqual([[HEAD - 5n, HEAD], [HEAD - 5n, HEAD]]);
+    expect(checkpoints).toEqual([HEAD]);
+  });
+
+  it('watchTransfers treats a throwing onTransfer as a failed range', async () => {
+    const { client, node } = eventsNode(() => [log(OWNER.address, OTHER, 1n, HEAD)]);
+    let calls = 0;
+    const errors: string[] = [];
+    const checkpoints: bigint[] = [];
+    const unwatch = watchTransfers(client, { fromBlock: HEAD, onTransfer: () => { if (++calls === 1) throw new Error('handler'); }, onCheckpoint: (b) => checkpoints.push(b), onError: (e) => errors.push(e.message), pollingInterval: 5 });
+    await vi.waitFor(() => expect(checkpoints).toEqual([HEAD]));
+    unwatch();
+    expect(errors).toEqual(['handler']);
+    expect(calls).toBe(2);
+    expect(ranges(node).slice(0, 2)).toEqual([[HEAD, HEAD], [HEAD, HEAD]]);
   });
 });
 

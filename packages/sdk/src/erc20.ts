@@ -14,10 +14,17 @@
  *
  * Amounts are either `bigint` atomic units or a decimal string in display units, parsed with
  * the token's `decimals` (fetched on-chain when the token is given as a bare address).
+ *
+ * Transfer events. Radius block numbers are unix milliseconds and a node answers `eth_getLogs`
+ * only for spans of at most `MAX_LOG_RANGE` (1e6 blocks, about 16.7 minutes), so `getTransfers`
+ * defaults to that window before `toBlock` and fetches wider ranges in sequential chunks.
+ * `watchTransfers` is the SDK's own poller (the node has no `eth_newFilter`): ordered,
+ * at-least-once delivery from a resumable `fromBlock`, with `onCheckpoint` after every fully
+ * delivered range. Dedupe on `transferKey(t)` (`transactionHash:logIndex`) when resuming.
  */
 
 import { erc20Abi, formatUnits, parseUnits, type Account, type Address, type Chain, type Client, type Hex, type Transport } from 'viem';
-import { getLogs, readContract, waitForTransactionReceipt, watchContractEvent, writeContract } from 'viem/actions';
+import { getBlockNumber, getLogs, readContract, waitForTransactionReceipt, writeContract } from 'viem/actions';
 import type { BalanceClient, BalanceToken } from './balances.js';
 import { RadiusPaymentError } from './errors.js';
 import { radiusNetworkForChainId, resolveNetwork, type NetworkInput } from './networks.js';
@@ -97,24 +104,45 @@ export interface TransferFromParameters extends WaitOption {
   gas?: bigint;
 }
 
+/** Widest `toBlock - fromBlock` a Radius node accepts for `eth_getLogs` (error -33002 beyond). Blocks are unix ms: 1e6 ≈ 16.7 min. */
+export const MAX_LOG_RANGE = 1_000_000n;
+/** Most `eth_getLogs` calls one `getTransfers` makes before refusing (≈ 11.5 days at MAX_LOG_RANGE); page wider ranges yourself. */
+export const MAX_LOG_CHUNKS = 1_000;
+
 export interface GetTransfersParameters {
   token?: TokenInput;
   /** Filter by sender (indexed). */
   from?: Address;
   /** Filter by recipient (indexed). */
   to?: Address;
+  /** First block, inclusive. Default: `toBlock - MAX_LOG_RANGE` (clamped at 0). */
   fromBlock?: bigint;
+  /** Last block, inclusive. Default: the current head. */
   toBlock?: bigint;
+  /** Span per `eth_getLogs` call (default `MAX_LOG_RANGE`); wider ranges are fetched in sequential chunks. */
+  maxBlockRange?: bigint;
 }
 
 export interface WatchTransfersParameters {
   token?: TokenInput;
   from?: Address;
   to?: Address;
-  onTransfer: (transfer: TokenTransfer) => void;
+  /**
+   * First block to deliver, inclusive. Default: the head at the first poll plus one, i.e. new
+   * transfers only. To resume, pass the last checkpoint + 1n: everything from there is delivered
+   * again (at-least-once), so dedupe on `transferKey` if part of it may have been processed.
+   */
+  fromBlock?: bigint;
+  /** Called for each transfer in (blockNumber, logIndex) order and awaited, so a slow handler slows polling rather than reordering. */
+  onTransfer: (transfer: TokenTransfer) => void | Promise<void>;
+  /** Called with the last block of each fully delivered range: persist it as the cursor to resume from. */
+  onCheckpoint?: (blockNumber: bigint) => void;
+  /** Poll and delivery failures (including a throwing `onTransfer`). The range is retried on the next poll; nothing is skipped. */
   onError?: (error: Error) => void;
-  /** Poll interval in ms (Radius blocks are timestamps; polling is the transport). */
+  /** Milliseconds between polls (default: the client's `pollingInterval`). Blocks are ms on Radius, so this is only latency. */
   pollingInterval?: number;
+  /** Span per `eth_getLogs` call (default `MAX_LOG_RANGE`). */
+  maxBlockRange?: bigint;
 }
 
 function addressOf(token: TokenInput): Address {
@@ -242,6 +270,8 @@ export async function transferFrom(client: TokenWalletClient, args: TransferFrom
 
 type TransferLog = { address: Address; args: { from?: Address; to?: Address; value?: bigint }; transactionHash: Hex | null; blockNumber: bigint | null; logIndex: number | null };
 
+const TRANSFER_EVENT = erc20Abi.find((i) => i.type === 'event' && i.name === 'Transfer')!;
+
 function toTransfer(log: TransferLog): TokenTransfer {
   return {
     token: log.address,
@@ -254,35 +284,102 @@ function toTransfer(log: TransferLog): TokenTransfer {
   };
 }
 
-/** Past `Transfer` events of a token, optionally filtered by `from` / `to` and a block range. */
-export async function getTransfers(client: BalanceClient, args: GetTransfersParameters = {}): Promise<TokenTransfer[]> {
-  const address = addressOf(resolveToken(client, args.token, 'getTransfers'));
-  const logs = await getLogs(client, {
-    address,
-    event: erc20Abi.find((i) => i.type === 'event' && i.name === 'Transfer')!,
-    args: { from: args.from, to: args.to },
-    fromBlock: args.fromBlock,
-    toBlock: args.toBlock,
-    strict: true,
-  } as Parameters<typeof getLogs>[1]);
-  return (logs as unknown as TransferLog[]).map(toTransfer);
+/** Stable identity of a transfer across re-deliveries: `transactionHash:logIndex`. */
+export function transferKey(t: Pick<TokenTransfer, 'transactionHash' | 'logIndex'>): string {
+  return `${t.transactionHash}:${t.logIndex}`;
 }
 
-/** Subscribe to `Transfer` events of a token. Returns the unwatch function. */
+const byPosition = (a: TokenTransfer, b: TokenTransfer): number =>
+  a.blockNumber === b.blockNumber ? a.logIndex - b.logIndex : a.blockNumber < b.blockNumber ? -1 : 1;
+
+interface ChunkArgs {
+  from?: Address;
+  to?: Address;
+  fromBlock: bigint;
+  toBlock: bigint;
+  maxBlockRange?: bigint;
+}
+
+/** Sequential `eth_getLogs` calls of at most `maxBlockRange` blocks each, ascending; each chunk sorted by (blockNumber, logIndex). */
+async function* transferChunks(client: BalanceClient, address: Address, args: ChunkArgs): AsyncGenerator<{ fromBlock: bigint; toBlock: bigint; transfers: TokenTransfer[] }> {
+  const range = args.maxBlockRange ?? MAX_LOG_RANGE;
+  if (range <= 0n) throw new RadiusPaymentError('config', `maxBlockRange must be positive (got ${range})`);
+  if (args.fromBlock < 0n || args.fromBlock > args.toBlock) throw new RadiusPaymentError('config', `Block range ${args.fromBlock}..${args.toBlock} is empty or negative`);
+  for (let start = args.fromBlock; start <= args.toBlock; ) {
+    const end = start + range < args.toBlock ? start + range : args.toBlock; // end - start <= range, which the node accepts
+    const logs = await getLogs(client, {
+      address,
+      event: TRANSFER_EVENT,
+      args: { from: args.from, to: args.to },
+      fromBlock: start,
+      toBlock: end,
+      strict: true,
+    } as Parameters<typeof getLogs>[1]);
+    yield { fromBlock: start, toBlock: end, transfers: (logs as unknown as TransferLog[]).map(toTransfer).sort(byPosition) };
+    start = end + 1n;
+  }
+}
+
+/**
+ * Past `Transfer` events of a token, filtered by `from` / `to`, in (blockNumber, logIndex) order.
+ * Defaults to the last `MAX_LOG_RANGE` blocks before `toBlock` (the head unless given); a wider
+ * `fromBlock..toBlock` is fetched in sequential chunks, up to `MAX_LOG_CHUNKS` calls.
+ */
+export async function getTransfers(client: BalanceClient, args: GetTransfersParameters = {}): Promise<TokenTransfer[]> {
+  const address = addressOf(resolveToken(client, args.token, 'getTransfers'));
+  const toBlock = args.toBlock ?? (await getBlockNumber(client, { cacheTime: 0 }));
+  const fromBlock = args.fromBlock ?? (toBlock > MAX_LOG_RANGE ? toBlock - MAX_LOG_RANGE : 0n);
+  const range = args.maxBlockRange ?? MAX_LOG_RANGE;
+  if (range > 0n && fromBlock <= toBlock) {
+    const chunks = (toBlock - fromBlock) / (range + 1n) + 1n;
+    if (chunks > BigInt(MAX_LOG_CHUNKS)) {
+      throw new RadiusPaymentError('config', `getTransfers: ${fromBlock}..${toBlock} spans ${toBlock - fromBlock} blocks, ${chunks} eth_getLogs calls of ${range} (max ${MAX_LOG_CHUNKS}); narrow the range or page it yourself`);
+    }
+  }
+  const out: TokenTransfer[] = [];
+  for await (const chunk of transferChunks(client, address, { from: args.from, to: args.to, fromBlock, toBlock, maxBlockRange: args.maxBlockRange })) out.push(...chunk.transfers);
+  return out;
+}
+
+/**
+ * Subscribe to `Transfer` events of a token by polling the node. Delivery is ordered and
+ * at-least-once: each poll fetches `next..head` (chunked), delivers every transfer, then advances
+ * `next` and calls `onCheckpoint`; an error anywhere in a range leaves `next` where it was, so the
+ * range is retried on the next poll and nothing is skipped. Polls never overlap. Radius has
+ * sub-second, single-block finality and no reorgs, so there is no confirmation lag. Returns the
+ * unwatch function.
+ */
 export function watchTransfers(client: BalanceClient, args: WatchTransfersParameters): () => void {
   const address = addressOf(resolveToken(client, args.token, 'watchTransfers'));
-  return watchContractEvent(client, {
-    address,
-    abi: erc20Abi,
-    eventName: 'Transfer',
-    args: { from: args.from, to: args.to },
-    strict: true,
-    pollingInterval: args.pollingInterval,
-    onLogs: (logs) => {
-      for (const log of logs as unknown as TransferLog[]) args.onTransfer(toTransfer(log));
-    },
-    onError: args.onError,
-  } as Parameters<typeof watchContractEvent>[1]);
+  const interval = args.pollingInterval ?? client.pollingInterval;
+  let next = args.fromBlock; // undefined until the first head is seen
+  let active = true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const tick = async (): Promise<void> => {
+    try {
+      const head = await getBlockNumber(client, { cacheTime: 0 });
+      if (next === undefined) next = head + 1n;
+      if (head >= next) {
+        for await (const chunk of transferChunks(client, address, { from: args.from, to: args.to, fromBlock: next, toBlock: head, maxBlockRange: args.maxBlockRange })) {
+          for (const t of chunk.transfers) {
+            if (!active) return;
+            await args.onTransfer(t);
+          }
+          if (!active) return;
+          next = chunk.toBlock + 1n; // only after the whole chunk is delivered
+          args.onCheckpoint?.(chunk.toBlock);
+        }
+      }
+    } catch (e) {
+      if (active) args.onError?.(e as Error); // `next` untouched: retried next poll
+    }
+    if (active) timer = setTimeout(tick, interval);
+  };
+  void tick();
+  return () => {
+    active = false;
+    if (timer) clearTimeout(timer);
+  };
 }
 
 /** Display helper: atomic → "1.5 SBC" for a known token. */
