@@ -199,6 +199,46 @@ await transfer(wallet, { token: '0x…', to, amount: '3' });   // a bare address
   veto, every allowance the payment client grants. The plain `erc20Actions().approve` on your own
   wallet client has no hook: it is you signing, not the SDK.
 
+## Permit2
+
+Actions for the canonical [Permit2](https://github.com/Uniswap/permit2) contract (`PERMIT2_ADDRESS`,
+the same on every Radius network), covering both of its flows. `permit2Actions()` is a client
+extension; each action is also exported on its own. All of them come from `radius-sdk/client`.
+
+```ts
+import { permit2Actions } from 'radius-sdk/client';
+const owner = createWalletClient({ account, chain: radiusTestnet.chain, transport: http() }).extend(permit2Actions());
+const spender = createWalletClient({ account: spenderAccount, chain: radiusTestnet.chain, transport: http() }).extend(permit2Actions());
+
+// Once per token: let Permit2 move the owner's SBC (unlimited by default, the x402 one-time approval).
+await owner.getPermit2Approval({ owner: owner.account.address });     // ERC-20 allowance granted to Permit2
+await owner.approvePermit2();                                          // approvePermit2({ amount: '5' }) to cap it
+
+// SignatureTransfer (what x402 uses): one-off permit signed off-chain, submitted by the spender.
+const signed = await owner.signPermit2Transfer({ amount: '0.01', spender: spender.account.address });
+//   { permit: { permitted: { token, amount }, nonce, deadline }, spender, owner, signature, chainId }
+await spender.permit2TransferFrom({ signed, to: spender.account.address });   // amount: pull less than permitted
+await spender.isPermit2NonceUsed({ owner: signed.owner, nonce: signed.permit.nonce });   // true afterwards
+
+// With a witness (extra data the signature is bound to, e.g. x402's `Witness(address to,uint256 validAfter)`):
+const witness = { typeName: 'Witness', types: { Witness: [{ name: 'to', type: 'address' }, { name: 'validAfter', type: 'uint256' }] }, value: { to, validAfter: 0n } };
+const w = await owner.signPermit2Transfer({ amount: '0.01', spender: proxy, witness });
+await spender.permit2TransferFrom({ signed: w, to });                  // calls permitWitnessTransferFrom with the hash + type string
+
+// AllowanceTransfer (Uniswap-style): a signed allowance the spender can draw on until it expires.
+const allowance = await owner.signPermit2Allowance({ amount: '5', spender: spender.account.address, expiration: now + 86_400 });
+await spender.permit2Permit({ signed: allowance });                    // records it in Permit2
+await spender.permit2AllowanceTransferFrom({ from: owner.account.address, to, amount: '1' });   // repeatable
+await spender.getPermit2Allowance({ owner: owner.account.address, spender: spender.account.address });   // { amount, expiration, nonce }
+```
+
+Nonces: SignatureTransfer nonces are random 256-bit values (`randomPermit2Nonce()`, the default);
+AllowanceTransfer nonces are sequential per (owner, token, spender) and read from Permit2 when
+omitted. Deadlines default to 600 s, the same cap the x402 client applies. The EIP-712 domain,
+type sets (`PERMIT_TRANSFER_FROM_TYPES`, `PERMIT_SINGLE_TYPES`), `permit2WitnessTypeString` and
+`permit2WitnessHash` are exported from `radius-sdk/client` for anyone assembling calls by hand; the witness type string is
+derived with EIP-712's ordering rule and checked against the x402 layout in the tests.
+
 ## Balances: native RUSD vs stablecoins
 
 Radius differs from other EVM chains here. `eth_getBalance` (viem's `getBalance`, MetaMask's
@@ -283,9 +323,9 @@ self-hosted facilitator with your own auth or routing.
 
 | Path | What |
 | --- | --- |
-| `src/` | `networks`, `balances`, `erc20`, `amounts`, `receipt`, `settlement`, `schemes`, `env`, `errors`; `hono/` (server); `client/` (buyer) |
+| `src/` | `networks`, `balances`, `erc20`, `permit2`, `amounts`, `receipt`, `settlement`, `schemes`, `env`, `errors`; `hono/` (server); `client/` (buyer) |
 | `examples/worker-seller` | Hono worker: free `/`, paid `/api/lookup` and `/api/query` (`pnpm --filter radius-worker-seller dev`) |
-| `examples/agent-buyer` | `buy.mjs` (pay a URL), `fresh-wallet.mjs` (gasless proof from a new wallet) |
+| `examples/agent-buyer` | `buy.mjs` (pay a URL), `fresh-wallet.mjs` (gasless proof from a new wallet), `permit2-pull.mjs` (sign a Permit2 transfer off-chain, pull it from another account) |
 | `examples/demo-dapp` | Test-dapp style page exercising both sides in the browser (burner wallet or MetaMask) |
 | `test/` | unit tests (facilitator and RPC mocked; `client-parity.test.ts` pins the wire format against radius-cli's; `balances.test.ts` runs the native-balance init code in a real EVM; `erc20.semantics.test.ts` runs the ERC-20 actions against `evmNode.ts`, a JSON-RPC node backed by @ethereumjs/evm executing the forge-compiled `fixtures/TestToken` (rebuild with `fixtures/build.sh` after editing the .sol; the artifact is committed because CI has no forge)); `test/e2e` real settlement, balance reconciliation and ERC-20 round trips on testnet or mainnet (`RADIUS_E2E=1 RADIUS_PRIVATE_KEY=… [RADIUS_NETWORK=mainnet] pnpm test:e2e`) |
 

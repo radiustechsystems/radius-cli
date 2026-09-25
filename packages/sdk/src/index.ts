@@ -54,6 +54,26 @@ export type {
   GetTransfersParameters,
   WatchTransfersParameters,
 } from './erc20.js';
+// Permit2 actions and EIP-712 helpers load viem too; their runtime exports live on `radius-sdk/client`.
+export type {
+  Permit2Actions,
+  Permit2ActionsConfig,
+  Permit2Witness,
+  PermitTransferFrom,
+  PermitSingle,
+  SignedPermit2Transfer,
+  SignedPermit2Allowance,
+  Permit2Allowance,
+  GetPermit2ApprovalParameters,
+  GetPermit2AllowanceParameters,
+  IsPermit2NonceUsedParameters,
+  ApprovePermit2Parameters,
+  SignPermit2TransferParameters,
+  SignPermit2AllowanceParameters,
+  Permit2TransferFromParameters,
+  Permit2PermitParameters,
+  Permit2AllowanceTransferFromParameters,
+} from './permit2.js';
 export { toAtomic, formatAmount, resolvePrice } from './amounts.js';
 export type { Price } from './amounts.js';
 export { RadiusPaymentError } from './errors.js';
