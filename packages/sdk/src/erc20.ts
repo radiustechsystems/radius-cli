@@ -1,6 +1,7 @@
 /**
  * Common ERC-20 interactions as viem actions: metadata, allowance, approve, transfer,
- * transferFrom, and Transfer-event queries. SBC is the default token on Radius networks.
+ * transferFrom, and Transfer-event queries. On the Radius presets the default token is the
+ * network's payment asset (SBC); on any other chain pass `token`, or `erc20Actions({ network })`.
  *
  * Reads take any viem `Client`; writes take a viem WalletClient (a client with an `account`)
  * and, like `createRadiusFetch().send()`, wait for the receipt: Radius finality is sub-second,
@@ -17,8 +18,9 @@
 
 import { erc20Abi, formatUnits, parseUnits, type Account, type Address, type Chain, type Client, type Hex, type Transport } from 'viem';
 import { getLogs, readContract, waitForTransactionReceipt, watchContractEvent, writeContract } from 'viem/actions';
-import { defaultTokens, type BalanceClient, type BalanceToken } from './balances.js';
+import type { BalanceClient, BalanceToken } from './balances.js';
 import { RadiusPaymentError } from './errors.js';
+import { radiusNetworkForChainId, resolveNetwork, type NetworkInput } from './networks.js';
 
 /** A viem client that can send transactions: `createWalletClient({ account, chain, transport })`. */
 export type TokenWalletClient = Client<Transport, Chain | undefined, Account | undefined>;
@@ -119,9 +121,33 @@ function addressOf(token: TokenInput): Address {
   return typeof token === 'string' ? token : token.address;
 }
 
-/** Resolve the token to use: the argument, else the network's payment asset (SBC). */
-function resolveToken(client: BalanceClient, token: TokenInput | undefined, fallback?: TokenInput): TokenInput {
-  return token ?? fallback ?? defaultTokens(client)[0];
+/**
+ * The token an action works on: the argument, else the payment asset of the client's chain when
+ * that chain is a Radius preset. Any other chain has no default: a custom `RadiusNetwork`'s asset
+ * is not visible from `client.chain`, and silently using SBC's address would send `approve` /
+ * `transfer` to the wrong contract. `what` names the action for the error message.
+ */
+export function resolveToken(client: BalanceClient, token: TokenInput | undefined, what: string): TokenInput {
+  if (token) return token;
+  const preset = radiusNetworkForChainId(client.chain?.id);
+  if (preset) return preset.asset;
+  const chain = client.chain ? `chain ${client.chain.id}` : 'a client with no chain';
+  throw new RadiusPaymentError('config', `${what}: no token given and ${chain} is not a Radius preset, so there is no default token. Pass { token }, or extend the client with erc20Actions({ network }) or erc20Actions({ token: network.asset }).`);
+}
+
+/**
+ * Default token from an actions config: `token`, else `network`'s payment asset (after checking
+ * that `network` is the chain the client is on). `undefined` leaves the per-call resolution to
+ * `resolveToken`.
+ */
+export function configuredToken(client: BalanceClient, config: { token?: TokenInput; network?: NetworkInput }, what: string): TokenInput | undefined {
+  if (config.token) return config.token;
+  if (config.network === undefined) return undefined;
+  const net = resolveNetwork(config.network);
+  if (client.chain && client.chain.id !== net.chainId) {
+    throw new RadiusPaymentError('config', `${what}: network ${net.name} is chain ${net.chainId} but the client is on chain ${client.chain.id}`);
+  }
+  return net.asset;
 }
 
 async function decimalsOf(client: BalanceClient, token: TokenInput): Promise<number> {
@@ -145,7 +171,7 @@ export async function toTokenAtomic(client: BalanceClient, token: TokenInput, am
 
 /** `name`, `symbol`, `decimals` and `totalSupply` of a token, read in parallel. */
 export async function getTokenMetadata(client: BalanceClient, args: GetTokenMetadataParameters = {}): Promise<TokenMetadata> {
-  const address = addressOf(resolveToken(client, args.token));
+  const address = addressOf(resolveToken(client, args.token, 'getTokenMetadata'));
   const read = <F extends 'name' | 'symbol' | 'decimals' | 'totalSupply'>(functionName: F) =>
     readContract(client, { address, abi: erc20Abi, functionName }) as Promise<F extends 'decimals' ? number : F extends 'totalSupply' ? bigint : string>;
   const [name, symbol, decimals, totalSupply] = await Promise.all([read('name'), read('symbol'), read('decimals'), read('totalSupply')]);
@@ -153,9 +179,9 @@ export async function getTokenMetadata(client: BalanceClient, args: GetTokenMeta
 }
 
 /** ERC-20 `allowance(owner, spender)`, in atomic units. */
-export function getAllowance(client: BalanceClient, args: GetAllowanceParameters): Promise<bigint> {
-  const address = addressOf(resolveToken(client, args.token));
-  return readContract(client, { address, abi: erc20Abi, functionName: 'allowance', args: [args.owner, args.spender] });
+export async function getAllowance(client: BalanceClient, args: GetAllowanceParameters): Promise<bigint> {
+  const address = addressOf(resolveToken(client, args.token, 'getAllowance'));
+  return await readContract(client, { address, abi: erc20Abi, functionName: 'allowance', args: [args.owner, args.spender] });
 }
 
 /** Require an account on the client, else a `config` error naming the action. */
@@ -187,7 +213,7 @@ export async function sendAndWait(client: TokenWalletClient, wait: boolean | und
 /** ERC-20 `approve(spender, amount)` from the client's account. */
 export async function approve(client: TokenWalletClient, args: ApproveParameters): Promise<TxResult> {
   const account = requireAccount(client, 'approve');
-  const token = resolveToken(client, args.token);
+  const token = resolveToken(client, args.token, 'approve');
   const amount = await toTokenAtomic(client, token, args.amount);
   return sendAndWait(client, args.wait, () =>
     writeContract(client, { address: addressOf(token), abi: erc20Abi, functionName: 'approve', args: [args.spender, amount], account, chain: client.chain, gas: args.gas }),
@@ -197,7 +223,7 @@ export async function approve(client: TokenWalletClient, args: ApproveParameters
 /** ERC-20 `transfer(to, amount)` from the client's account. */
 export async function transfer(client: TokenWalletClient, args: TransferParameters): Promise<TxResult> {
   const account = requireAccount(client, 'transfer');
-  const token = resolveToken(client, args.token);
+  const token = resolveToken(client, args.token, 'transfer');
   const amount = await toTokenAtomic(client, token, args.amount);
   return sendAndWait(client, args.wait, () =>
     writeContract(client, { address: addressOf(token), abi: erc20Abi, functionName: 'transfer', args: [args.to, amount], account, chain: client.chain, gas: args.gas }),
@@ -207,7 +233,7 @@ export async function transfer(client: TokenWalletClient, args: TransferParamete
 /** ERC-20 `transferFrom(from, to, amount)`: spend an allowance `from` granted to the client's account. */
 export async function transferFrom(client: TokenWalletClient, args: TransferFromParameters): Promise<TxResult> {
   const account = requireAccount(client, 'transferFrom');
-  const token = resolveToken(client, args.token);
+  const token = resolveToken(client, args.token, 'transferFrom');
   const amount = await toTokenAtomic(client, token, args.amount);
   return sendAndWait(client, args.wait, () =>
     writeContract(client, { address: addressOf(token), abi: erc20Abi, functionName: 'transferFrom', args: [args.from, args.to, amount], account, chain: client.chain, gas: args.gas }),
@@ -230,7 +256,7 @@ function toTransfer(log: TransferLog): TokenTransfer {
 
 /** Past `Transfer` events of a token, optionally filtered by `from` / `to` and a block range. */
 export async function getTransfers(client: BalanceClient, args: GetTransfersParameters = {}): Promise<TokenTransfer[]> {
-  const address = addressOf(resolveToken(client, args.token));
+  const address = addressOf(resolveToken(client, args.token, 'getTransfers'));
   const logs = await getLogs(client, {
     address,
     event: erc20Abi.find((i) => i.type === 'event' && i.name === 'Transfer')!,
@@ -244,7 +270,7 @@ export async function getTransfers(client: BalanceClient, args: GetTransfersPara
 
 /** Subscribe to `Transfer` events of a token. Returns the unwatch function. */
 export function watchTransfers(client: BalanceClient, args: WatchTransfersParameters): () => void {
-  const address = addressOf(resolveToken(client, args.token));
+  const address = addressOf(resolveToken(client, args.token, 'watchTransfers'));
   return watchContractEvent(client, {
     address,
     abi: erc20Abi,
@@ -276,8 +302,14 @@ export type Erc20Actions = {
 };
 
 export interface Erc20ActionsConfig {
-  /** Default token for every action (else the network's payment asset, SBC). */
+  /** Default token for every action. */
   token?: TokenInput;
+  /**
+   * Default token = this network's payment asset (like `radiusActions({ network })`); it must be
+   * the chain the client is on. Without `token` or `network`, only the Radius presets (mainnet,
+   * testnet) have a default; a custom chain throws a `config` error until one is given.
+   */
+  network?: NetworkInput;
 }
 
 /**
@@ -286,7 +318,8 @@ export interface Erc20ActionsConfig {
  */
 export function erc20Actions(config: Erc20ActionsConfig = {}) {
   return (client: TokenWalletClient): Erc20Actions => {
-    const withToken = <T extends { token?: TokenInput }>(args: T): T => ({ ...args, token: args.token ?? config.token });
+    const fallback = configuredToken(client, config, 'erc20Actions');
+    const withToken = <T extends { token?: TokenInput }>(args: T): T => ({ ...args, token: args.token ?? fallback });
     return {
       getTokenMetadata: (args = {}) => getTokenMetadata(client, withToken(args)),
       getAllowance: (args) => getAllowance(client, withToken(args)),

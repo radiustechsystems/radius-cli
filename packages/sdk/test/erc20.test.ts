@@ -3,7 +3,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { describe, expect, it } from 'vitest';
 import { approve, erc20Actions, formatTokenAmount, getAllowance, getTokenMetadata, getTransfers, toTokenAtomic, transfer, transferFrom, watchTransfers } from '../src/erc20.js';
 import { createRadiusFetch } from '../src/client/index.js';
-import { defineRadiusNetwork, radiusTestnet, SBC } from '../src/networks.js';
+import { defineRadiusNetwork, radiusMainnet, radiusTestnet, SBC } from '../src/networks.js';
 import { RadiusPaymentError } from '../src/errors.js';
 import { fakeNode } from './fakeNode.js';
 
@@ -178,11 +178,32 @@ describe('erc20Actions', () => {
     expect((await u.getTokenMetadata()).symbol).toBe('USDX');
     expect((await u.getTokenMetadata({ token: SBC })).symbol).toBe('SBC');
   });
-  it('picks the default token from the client chain', async () => {
+  it('defaults to the payment asset of a preset chain', async () => {
     const node = erc20Node();
-    const mainnet = createPublicClient({ chain: defineRadiusNetwork({ chainId: 4242, rpcUrl: 'http://rpc', facilitatorUrl: 'http://f' }).chain, transport: node.transport }).extend(erc20Actions());
-    // Unknown chain: SBC's deterministic address is still the default.
-    expect((await mainnet.getTokenMetadata()).address).toBe(SBC.address);
+    const mainnet = createPublicClient({ chain: radiusMainnet.chain, transport: node.transport }).extend(erc20Actions());
+    expect((await mainnet.getTokenMetadata()).address).toBe(radiusMainnet.asset.address);
+  });
+  it('has no default token on a custom chain: token or network must be given', async () => {
+    const node = erc20Node();
+    const custom = defineRadiusNetwork({ chainId: 4242, rpcUrl: 'http://rpc', facilitatorUrl: 'http://f', asset: { address: USDX, decimals: 18, symbol: 'USDX' } });
+    const bare = createPublicClient({ chain: custom.chain, transport: node.transport });
+    await expect(getTokenMetadata(bare)).rejects.toMatchObject({ code: 'config' });
+    await expect(getTokenMetadata(bare)).rejects.toThrow(/getTokenMetadata: no token given and chain 4242 is not a Radius preset/);
+    await expect(getAllowance(bare, { owner: OWNER.address, spender: SPENDER })).rejects.toThrow(/getAllowance:/);
+    await expect(transfer(createWalletClient({ account: OWNER, chain: custom.chain, transport: node.transport }), { to: OTHER, amount: 1n })).rejects.toThrow(/transfer:/);
+    expect(node.sent).toHaveLength(0);
+    // Explicit token, or the network's asset through the extension, or a bare token: all fine.
+    expect((await getTokenMetadata(bare, { token: USDX })).symbol).toBe('USDX');
+    expect((await bare.extend(erc20Actions({ network: custom })).getTokenMetadata()).symbol).toBe('USDX');
+    expect((await bare.extend(erc20Actions({ token: custom.asset })).getTokenMetadata()).symbol).toBe('USDX');
+  });
+  it('rejects a network that is not the chain the client is on, and a client with no chain', async () => {
+    const node = erc20Node();
+    const testnet = createPublicClient({ chain: radiusTestnet.chain, transport: node.transport });
+    expect(() => testnet.extend(erc20Actions({ network: 'mainnet' }))).toThrow(/network mainnet is chain 723487 but the client is on chain 72344/);
+    const chainless = createPublicClient({ transport: node.transport });
+    await expect(getTokenMetadata(chainless)).rejects.toThrow(/a client with no chain/);
+    expect((await getTokenMetadata(chainless, { token: SBC })).symbol).toBe('SBC');
   });
 });
 

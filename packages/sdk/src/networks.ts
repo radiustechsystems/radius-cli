@@ -205,6 +205,13 @@ export function resolveNetwork(input?: NetworkInput, overrides?: NetworkOverride
 }
 
 /** Parse a CAIP-2 `eip155:<id>` string to a chain id, or undefined. */
+/** The preset whose chain id matches (mainnet 723487, testnet 72344), if any. */
+export function radiusNetworkForChainId(chainId: number | undefined): RadiusNetwork | undefined {
+  if (chainId === radiusMainnet.chainId) return radiusMainnet;
+  if (chainId === radiusTestnet.chainId) return radiusTestnet;
+  return undefined;
+}
+
 export function chainIdFromCaip2(network: string): number | undefined {
   const m = /^eip155:(\d+)$/.exec(network);
   if (!m) return undefined;
