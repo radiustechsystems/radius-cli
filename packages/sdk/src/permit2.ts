@@ -23,10 +23,10 @@
 
 import { erc20Abi, hashStruct, maxUint160, maxUint256, maxUint48, type Address, type Hex, type TypedDataDomain, type TypedDataParameter } from 'viem';
 import { readContract, signTypedData, writeContract } from 'viem/actions';
-import { defaultTokens, type BalanceClient } from './balances.js';
+import type { BalanceClient } from './balances.js';
 import { RadiusPaymentError } from './errors.js';
-import { getAllowance, requireAccount, sendAndWait, toTokenAtomic, type TokenAmount, type TokenInput, type TokenWalletClient, type TxResult } from './erc20.js';
-import { PERMIT2_ADDRESS } from './networks.js';
+import { configuredToken, getAllowance, requireAccount, resolveToken, sendAndWait, toTokenAtomic, type TokenAmount, type TokenInput, type TokenWalletClient, type TxResult } from './erc20.js';
+import { PERMIT2_ADDRESS, type NetworkInput } from './networks.js';
 
 /** Default signing window for permits without an explicit deadline (matches the x402 client cap). */
 export const PERMIT2_DEFAULT_DEADLINE_SECONDS = 600;
@@ -218,6 +218,7 @@ export interface ApprovePermit2Parameters {
   token?: TokenInput;
   /** ERC-20 allowance to grant Permit2. Default: unlimited. */
   amount?: TokenAmount;
+  /** `false`: return `{ status: 'pending' }` right after sending instead of waiting for the receipt. */
   wait?: boolean;
 }
 export interface SignPermit2TransferParameters {
@@ -248,10 +249,12 @@ export interface Permit2TransferFromParameters {
   to: Address;
   /** Amount to pull, at most `signed.permit.permitted.amount` (the default). */
   amount?: bigint;
+  /** `false`: return `{ status: 'pending' }` right after sending instead of waiting for the receipt. */
   wait?: boolean;
 }
 export interface Permit2PermitParameters {
   signed: SignedPermit2Allowance;
+  /** `false`: return `{ status: 'pending' }` right after sending instead of waiting for the receipt. */
   wait?: boolean;
 }
 export interface Permit2AllowanceTransferFromParameters {
@@ -259,16 +262,18 @@ export interface Permit2AllowanceTransferFromParameters {
   from: Address;
   to: Address;
   amount: TokenAmount;
+  /** `false`: return `{ status: 'pending' }` right after sending instead of waiting for the receipt. */
   wait?: boolean;
 }
 
-function tokenAddress(client: BalanceClient, token: TokenInput | undefined): Address {
-  const t = token ?? defaultTokens(client)[0];
-  return typeof t === 'string' ? t : t.address;
+/** The token an action works on; like the ERC-20 actions, only the Radius presets have a default (see `resolveToken`). */
+function tokenFor(client: BalanceClient, token: TokenInput | undefined, what: string): TokenInput {
+  return resolveToken(client, token, what);
 }
 
-function tokenFor(client: BalanceClient, token: TokenInput | undefined): TokenInput {
-  return token ?? defaultTokens(client)[0];
+function tokenAddress(client: BalanceClient, token: TokenInput | undefined, what: string): Address {
+  const t = tokenFor(client, token, what);
+  return typeof t === 'string' ? t : t.address;
 }
 
 /** Chain id for EIP-712: the client's chain, else looked up from the node. */
@@ -349,8 +354,8 @@ export function permit2WitnessHash(witness: Permit2Witness): Hex {
 // -- reads ----------------------------------------------------------------------------------------
 
 /** ERC-20 allowance the owner has granted to Permit2 (the one-time approval), in atomic units. */
-export function getPermit2Approval(client: BalanceClient, args: GetPermit2ApprovalParameters): Promise<bigint> {
-  return getAllowance(client, { token: tokenFor(client, args.token), owner: args.owner, spender: PERMIT2_ADDRESS });
+export async function getPermit2Approval(client: BalanceClient, args: GetPermit2ApprovalParameters): Promise<bigint> {
+  return await getAllowance(client, { token: tokenFor(client, args.token, 'getPermit2Approval'), owner: args.owner, spender: PERMIT2_ADDRESS });
 }
 
 /** AllowanceTransfer state Permit2 holds for (owner, token, spender). */
@@ -359,7 +364,7 @@ export async function getPermit2Allowance(client: BalanceClient, args: GetPermit
     address: PERMIT2_ADDRESS,
     abi: PERMIT2_ABI,
     functionName: 'allowance',
-    args: [args.owner, tokenAddress(client, args.token), args.spender],
+    args: [args.owner, tokenAddress(client, args.token, 'getPermit2Allowance'), args.spender],
   });
   return { amount, expiration, nonce };
 }
@@ -377,7 +382,7 @@ export async function isPermit2NonceUsed(client: BalanceClient, args: IsPermit2N
 /** ERC-20 `approve(Permit2, amount)` from the client's account; unlimited by default. */
 export async function approvePermit2(client: TokenWalletClient, args: ApprovePermit2Parameters = {}): Promise<TxResult> {
   const account = requireAccount(client, 'approvePermit2');
-  const token = tokenFor(client, args.token);
+  const token = tokenFor(client, args.token, 'approvePermit2');
   const amount = args.amount === undefined ? maxUint256 : await toTokenAtomic(client, token, args.amount);
   return sendAndWait(client, args.wait, () =>
     writeContract(client, { address: typeof token === 'string' ? token : token.address, abi: erc20Abi, functionName: 'approve', args: [PERMIT2_ADDRESS, amount], account, chain: client.chain }),
@@ -390,7 +395,7 @@ export async function approvePermit2(client: TokenWalletClient, args: ApprovePer
  */
 export async function signPermit2Transfer(client: TokenWalletClient, args: SignPermit2TransferParameters): Promise<SignedPermit2Transfer> {
   const account = requireAccount(client, 'signPermit2Transfer');
-  const token = tokenFor(client, args.token);
+  const token = tokenFor(client, args.token, 'signPermit2Transfer');
   const [amount, chainId] = await Promise.all([toTokenAtomic(client, token, args.amount), chainIdOf(client)]);
   const permit: PermitTransferFrom = {
     permitted: { token: typeof token === 'string' ? token : token.address, amount },
@@ -420,7 +425,7 @@ export async function signPermit2Transfer(client: TokenWalletClient, args: SignP
 /** Sign an AllowanceTransfer `PermitSingle`. The nonce is read from Permit2 unless given. */
 export async function signPermit2Allowance(client: TokenWalletClient, args: SignPermit2AllowanceParameters): Promise<SignedPermit2Allowance> {
   const account = requireAccount(client, 'signPermit2Allowance');
-  const token = tokenFor(client, args.token);
+  const token = tokenFor(client, args.token, 'signPermit2Allowance');
   const address = typeof token === 'string' ? token : token.address;
   const [amount, chainId, nonce] = await Promise.all([
     toTokenAtomic(client, token, args.amount),
@@ -496,7 +501,7 @@ export async function permit2Permit(client: TokenWalletClient, args: Permit2Perm
 /** AllowanceTransfer `transferFrom`: move tokens within an allowance granted to the client's account. */
 export async function permit2AllowanceTransferFrom(client: TokenWalletClient, args: Permit2AllowanceTransferFromParameters): Promise<TxResult> {
   const account = requireAccount(client, 'permit2AllowanceTransferFrom');
-  const token = tokenFor(client, args.token);
+  const token = tokenFor(client, args.token, 'permit2AllowanceTransferFrom');
   const amount = await toTokenAtomic(client, token, args.amount);
   if (amount > maxUint160) throw new RadiusPaymentError('config', `Permit2 transfer amount ${amount} exceeds uint160`);
   return sendAndWait(client, args.wait, () =>
@@ -525,14 +530,17 @@ export type Permit2Actions = {
 };
 
 export interface Permit2ActionsConfig {
-  /** Default token (else the network's payment asset, SBC). */
+  /** Default token for every action. */
   token?: TokenInput;
+  /** Default token = this network's payment asset (must be the chain the client is on); see `erc20Actions`. */
+  network?: NetworkInput;
 }
 
 /** viem client extension for Permit2. Reads work on any client; the rest need an account. */
 export function permit2Actions(config: Permit2ActionsConfig = {}) {
   return (client: TokenWalletClient): Permit2Actions => {
-    const withToken = <T extends { token?: TokenInput }>(args: T): T => ({ ...args, token: args.token ?? config.token });
+    const fallback = configuredToken(client, config, 'permit2Actions');
+    const withToken = <T extends { token?: TokenInput }>(args: T): T => ({ ...args, token: args.token ?? fallback });
     return {
       getPermit2Approval: (args) => getPermit2Approval(client, withToken(args)),
       getPermit2Allowance: (args) => getPermit2Allowance(client, withToken(args)),

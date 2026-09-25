@@ -23,7 +23,7 @@ import {
   signPermit2Transfer,
   type Permit2Witness,
 } from '../src/permit2.js';
-import { PERMIT2_ADDRESS, radiusTestnet, SBC, X402_EXACT_PERMIT2_PROXY } from '../src/networks.js';
+import { defineRadiusNetwork, PERMIT2_ADDRESS, radiusTestnet, SBC, X402_EXACT_PERMIT2_PROXY } from '../src/networks.js';
 import { fakeNode } from './fakeNode.js';
 
 const OWNER_PK = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as Hex;
@@ -262,6 +262,22 @@ describe('spender side', () => {
     await permit2AllowanceTransferFrom(client, { from: OWNER.address, to: PAY_TO, amount: '1.25' });
     expect(decodeFunctionData({ abi: PERMIT2_ABI, data: n.sent[1].data! })).toEqual({ functionName: 'transferFrom', args: [OWNER.address, PAY_TO, 1_250_000n, SBC.address] });
     expect(n.sent.every((t) => t.to === PERMIT2_ADDRESS.toLowerCase())).toBe(true);
+  });
+});
+
+describe('default token', () => {
+  it('has none on a custom chain until token or network is given', async () => {
+    const n = node();
+    const custom = defineRadiusNetwork({ chainId: 4242, rpcUrl: 'http://rpc', facilitatorUrl: 'http://f', asset: { address: '0x2222222222222222222222222222222222222222', decimals: 6, symbol: 'USDX' } });
+    const client = createWalletClient({ account: OWNER, chain: custom.chain, transport: n.transport });
+    await expect(getPermit2Approval(client, { owner: OWNER.address })).rejects.toMatchObject({ code: 'config' });
+    await expect(approvePermit2(client)).rejects.toThrow(/approvePermit2: no token given and chain 4242 is not a Radius preset/);
+    await expect(signPermit2Transfer(client, { spender: SPENDER.address, amount: 1n })).rejects.toThrow(/signPermit2Transfer:/);
+    expect(n.sent).toHaveLength(0);
+    expect(() => client.extend(permit2Actions({ network: 'testnet' }))).toThrow(/network testnet is chain 72344 but the client is on chain 4242/);
+    // With the network (or an explicit token) the custom asset is used.
+    const signed = await client.extend(permit2Actions({ network: custom })).signPermit2Transfer({ spender: SPENDER.address, amount: 1n, nonce: 1n, deadline: BigInt(NOW + 60) });
+    expect(signed.permit.permitted.token).toBe(custom.asset.address);
   });
 });
 
