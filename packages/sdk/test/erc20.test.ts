@@ -2,8 +2,8 @@ import { createPublicClient, createWalletClient, decodeFunctionData, encodeAbiPa
 import { privateKeyToAccount } from 'viem/accounts';
 import { describe, expect, it } from 'vitest';
 import { approve, erc20Actions, formatTokenAmount, getAllowance, getTokenMetadata, getTransfers, toTokenAtomic, transfer, transferFrom, watchTransfers } from '../src/erc20.js';
-import { createRadiusFetch } from '../src/client/index.js';
-import { defineRadiusNetwork, radiusMainnet, radiusTestnet, SBC } from '../src/networks.js';
+import { createRadiusFetch, type ApprovalRequest } from '../src/client/index.js';
+import { defineRadiusNetwork, PERMIT2_ADDRESS, radiusMainnet, radiusTestnet, SBC } from '../src/networks.js';
 import { RadiusPaymentError } from '../src/errors.js';
 import { fakeNode } from './fakeNode.js';
 
@@ -208,10 +208,12 @@ describe('erc20Actions', () => {
 });
 
 describe('createRadiusFetch helpers', () => {
-  it('allowance() and approve() act on the payment asset for the signer', async () => {
+  it('allowance() and approve() act on the payment asset for the signer, through onApprovalRequired', async () => {
     const node = erc20Node();
     const network = defineRadiusNetwork({ chain: radiusTestnet.chain, facilitatorUrl: 'http://127.0.0.1:1' });
-    const payFetch = createRadiusFetch({ network, signer: PK, maxPerRequest: '$0.01' });
+    const requests: ApprovalRequest[] = [];
+    let allow = true;
+    const payFetch = createRadiusFetch({ network, signer: PK, maxPerRequest: '$0.01', onApprovalRequired: (r) => { requests.push(r); return allow; } });
     // Route the SDK's own http() transport to the fake node.
     const orig = globalThis.fetch;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -230,6 +232,18 @@ describe('createRadiusFetch helpers', () => {
       expect(decodeSent(node)).toEqual({ to: SBC.address.toLowerCase(), functionName: 'approve', args: [SPENDER, 1_000_000n] });
       expect((await payFetch.approve(OTHER, maxUint256)).status).toBe('success');
       expect(decodeSent(node, 1).args).toEqual([OTHER, maxUint256]);
+      expect(requests).toEqual([
+        { reason: 'approve', asset: SBC.address, spender: SPENDER, amount: 1_000_000n, currentAllowance: 42n },
+        { reason: 'approve', asset: SBC.address, spender: OTHER, amount: maxUint256, currentAllowance: 0n },
+      ]);
+      // approvePermit2() is gated the same way, and a veto sends nothing.
+      await payFetch.approvePermit2();
+      expect(requests[2]).toEqual({ reason: 'approvePermit2', asset: SBC.address, spender: PERMIT2_ADDRESS, amount: maxUint256, currentAllowance: 0n });
+      expect(decodeSent(node, 2).args).toEqual([PERMIT2_ADDRESS, maxUint256]);
+      allow = false;
+      await expect(payFetch.approve(SPENDER, '2')).rejects.toMatchObject({ code: 'declined', details: { reason: 'approve', spender: SPENDER, amount: 2_000_000n } });
+      await expect(payFetch.approvePermit2()).rejects.toMatchObject({ code: 'declined', details: { reason: 'approvePermit2' } });
+      expect(node.sent).toHaveLength(3);
     } finally {
       globalThis.fetch = orig;
     }

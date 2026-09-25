@@ -114,7 +114,9 @@ const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transa
 - Permit2 approval handled either way: when the server's facilitator sponsors it
   (`eip2612GasSponsoring`), a wallet holding only SBC pays without any on-chain transaction; when
   it does not, the SDK sends one unlimited approval from the signer (`permit2Approval: 'auto'`,
-  the default; `'never'` throws `approval_required`; `onApprovalRequired` can veto). Gas for that
+  the default; `'never'` throws `approval_required`). `onApprovalRequired` sees every allowance
+  change the client makes, with `request.reason` (`payment`, `approvePermit2`, `approve`), and
+  can veto it (`declined`, carrying the request). Gas for that
   one transaction comes from SBC via Turnstile, so keep ~0.01 SBC spare.
 - `maxPerRequest` is a per-request ceiling, **not** a cumulative budget. An agent that loops can
   exceed any total unless you enforce one around it.
@@ -159,7 +161,8 @@ await transfer(wallet, { token: '0x…', to, amount: '3' });   // a bare address
 ```
 
 `createRadiusFetch(...)` gains `allowance(spender)` and `approve(spender, amount)` for the payment
-asset next to `send`.
+asset next to `send`; `approve` passes through `onApprovalRequired` (`reason: 'approve'`) like the
+Permit2 approvals do, so one policy hook covers every allowance the payment client grants.
 
 ## Balances: native RUSD vs stablecoins
 
