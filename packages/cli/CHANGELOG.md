@@ -1,5 +1,14 @@
 # radius-cli
 
+## 0.2.1
+
+### Patch Changes
+
+- fd86bf6: README: SBC has a built-in default address (from `radius-sdk`); `--sbc` / `RADIUS_SBC_ADDRESS` are only needed for another deployment.
+- Updated dependencies [fd86bf6]
+- Updated dependencies [2dae8ec]
+  - radius-sdk@0.2.0
+
 ## 0.2.0
 
 ### Minor Changes
