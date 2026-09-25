@@ -46,7 +46,7 @@ function buyer(): RadiusFetch {
       return true;
     },
     onApprovalRequired: (r) => {
-      log(`Permit2 approval needed: allowance ${r.currentAllowance} < ${r.offer.amount}; sending unlimited approval`, 'warn');
+      log(`Permit2 approval needed (${r.reason}): allowance ${r.currentAllowance}${r.offer ? ` < ${r.offer.amount}` : ''}; sending unlimited approval`, 'warn');
       if ($<HTMLInputElement>('c-vetoApproval').checked) { log('vetoing approval (checkbox)', 'warn'); return false; }
       return true;
     },

@@ -5,6 +5,7 @@ import { createPublicClient, createWalletClient, http, isAddress, maxUint256, ty
 import { privateKeyToAccount } from 'viem/accounts';
 import { formatAmount, resolvePrice, type Price } from '../amounts.js';
 import { getBalances, type AccountBalances } from '../balances.js';
+import { toTokenAtomic, type TokenAmount, type TxResult } from '../erc20.js';
 import { RadiusPaymentError } from '../errors.js';
 import { describeSupportedSchemes } from '../schemes.js';
 import { PERMIT2_ADDRESS, resolveNetwork, type Address, type NetworkInput, type NetworkOverrides, type RadiusNetwork } from '../networks.js';
@@ -45,13 +46,23 @@ export interface PaymentOffer {
   gasSponsored: boolean;
 }
 
+/**
+ * An allowance change the client is about to make, handed to `onApprovalRequired` before anything
+ * is signed. Every path that changes an allowance goes through it: the automatic Permit2 approval
+ * during a payment (`reason: 'payment'`, with the `offer`), an explicit `approvePermit2()`
+ * (`'approvePermit2'`), and `approve(spender, amount)` (`'approve'`). The request is also the
+ * `details` of the `declined` error, so a policy layer has one auditable object either way.
+ */
 export interface ApprovalRequest {
+  /** Which call is asking. */
+  reason: 'payment' | 'approvePermit2' | 'approve';
   asset: Address;
   spender: Address;
-  /** Amount to approve (unlimited, one-time, matching the x402 "one-time gas approval" model). */
+  /** Amount to approve: unlimited for Permit2 (the x402 "one-time gas approval" model), the caller's amount for `approve`. */
   amount: bigint;
   currentAllowance: bigint;
-  offer: PaymentOffer;
+  /** The payment that needs the approval; only for `reason: 'payment'`. */
+  offer?: PaymentOffer;
 }
 
 /** `details` of a `payment_rejected` error: the server's second 402, unread. */
@@ -89,7 +100,11 @@ export interface RadiusFetchOptions extends NetworkOverrides {
    * needs ~0.01 SBC spare on Radius); 'never' throws `approval_required` instead.
    */
   permit2Approval?: 'auto' | 'never';
-  /** Approve or decline sending the approval transaction. Return false to decline. */
+  /**
+   * Approve or decline an allowance change before it is signed: the automatic Permit2 approval of
+   * a payment, `approvePermit2()` and `approve()` all pass through here (`request.reason` says
+   * which). Return false to decline (`declined` error carrying the request).
+   */
   onApprovalRequired?: (request: ApprovalRequest) => boolean | Promise<boolean>;
   /** Called with the decoded receipt after a paid response. */
   onPaid?: (receipt: PaymentReceipt, offer: PaymentOffer) => void | Promise<void>;
@@ -97,11 +112,7 @@ export interface RadiusFetchOptions extends NetworkOverrides {
   fetch?: typeof globalThis.fetch;
 }
 
-export interface TxResult {
-  hash: `0x${string}`;
-  status: 'success' | 'reverted';
-  explorerUrl?: string;
-}
+export type { TxResult } from '../erc20.js';
 
 export interface FaucetResult {
   success: boolean;
@@ -126,10 +137,17 @@ export interface RadiusFetch {
   balances(): Promise<AccountBalances>;
   /** Current ERC-20 allowance granted to Permit2 for the payment asset. */
   permit2Allowance(): Promise<bigint>;
-  /** Send an unlimited Permit2 approval now (rather than lazily on first unsponsored payment). */
+  /** Send an unlimited Permit2 approval now (rather than lazily on first unsponsored payment). Subject to `onApprovalRequired`. */
   approvePermit2(): Promise<TxResult>;
   /** Transfer the payment asset. Needs a transaction-capable signer (private key or viem local account). */
   send(to: Address, amount: Price): Promise<TxResult>;
+  /** Payment-asset allowance the signer has granted to `spender` (atomic units). */
+  allowance(spender: Address): Promise<bigint>;
+  /**
+   * Approve `spender` for `amount` of the payment asset (bigint atomic, or "1.5" in display units).
+   * Subject to `onApprovalRequired` (`reason: 'approve'`), like every allowance change this client makes.
+   */
+  approve(spender: Address, amount: TokenAmount): Promise<TxResult>;
   /** Reconcile a settlement transaction on-chain (undefined while unknown to the node). */
   getSettlement(txHash: `0x${string}`): Promise<Settlement | undefined>;
   /** Request a faucet drip for this wallet (testnet ~0.5 SBC; mainnet ~0.01 SBC/day). */
@@ -253,12 +271,34 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
   const permit2Allowance = () =>
     publicClient.readContract({ address: network.asset.address, abi: ERC20_ABI, functionName: 'allowance', args: [account.address, PERMIT2_ADDRESS] });
 
-  const approvePermit2 = async (): Promise<TxResult> => {
-    const r = await sendTx('Permit2 approval', (wc) =>
-      wc.writeContract({ address: network.asset.address, abi: ERC20_ABI, functionName: 'approve', args: [PERMIT2_ADDRESS, maxUint256], chain, account: wc.account! }),
+  const allowance = (spender: Address) =>
+    publicClient.readContract({ address: network.asset.address, abi: ERC20_ABI, functionName: 'allowance', args: [account.address, spender] });
+
+  /** The one policy gate for allowance changes: `onApprovalRequired` may veto, else proceed. */
+  const authorizeApproval = async (request: ApprovalRequest): Promise<void> => {
+    if (options.onApprovalRequired && !(await options.onApprovalRequired(request))) {
+      throw new RadiusPaymentError('declined', `${request.reason === 'payment' ? 'Permit2' : request.reason} approval declined`, request);
+    }
+  };
+
+  /** ERC-20 `approve` of the payment asset, after `authorizeApproval`. */
+  const sendApproval = async (request: ApprovalRequest, what: string): Promise<TxResult> => {
+    await authorizeApproval(request);
+    const r = await sendTx(what, (wc) =>
+      wc.writeContract({ address: network.asset.address, abi: ERC20_ABI, functionName: 'approve', args: [request.spender, request.amount], chain, account: wc.account! }),
     );
-    if (r.status !== 'success') throw new RadiusPaymentError('approval_failed', `Permit2 approval transaction ${r.hash} reverted`, r);
+    if (r.status !== 'success') throw new RadiusPaymentError('approval_failed', `${what} transaction ${r.hash} reverted`, r);
     return r;
+  };
+
+  const approvePermit2 = async (): Promise<TxResult> => {
+    const currentAllowance = await permit2Allowance();
+    return sendApproval({ reason: 'approvePermit2', asset: network.asset.address, spender: PERMIT2_ADDRESS, amount: maxUint256, currentAllowance }, 'Permit2 approval');
+  };
+
+  const approve = async (spender: Address, amount: TokenAmount): Promise<TxResult> => {
+    const [atomic, currentAllowance] = await Promise.all([toTokenAtomic(publicClient, network.asset, amount), allowance(spender)]);
+    return sendApproval({ reason: 'approve', asset: network.asset.address, spender, amount: atomic, currentAllowance }, 'approve');
   };
 
   const amountOf = (version: 1 | 2, a: AnyPaymentRequirements): bigint => {
@@ -365,14 +405,11 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     if (offer.transferMethod !== 'permit2' || offer.gasSponsored) return;
     const current = await permit2Allowance();
     if (current >= BigInt(offer.amount)) return;
-    const request: ApprovalRequest = { asset: network.asset.address, spender: PERMIT2_ADDRESS, amount: maxUint256, currentAllowance: current, offer };
+    const request: ApprovalRequest = { reason: 'payment', asset: network.asset.address, spender: PERMIT2_ADDRESS, amount: maxUint256, currentAllowance: current, offer };
     if ((options.permit2Approval ?? 'auto') === 'never') {
       throw new RadiusPaymentError('approval_required', `Permit2 allowance ${current} is below ${offer.amount} and the facilitator does not sponsor approvals; call approvePermit2() or set permit2Approval: 'auto'`, request);
     }
-    if (options.onApprovalRequired && !(await options.onApprovalRequired(request))) {
-      throw new RadiusPaymentError('declined', 'Permit2 approval declined', request);
-    }
-    await approvePermit2();
+    await sendApproval(request, 'Permit2 approval');
   };
 
   /**
@@ -537,6 +574,8 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     permit2Allowance,
     approvePermit2,
     send,
+    allowance,
+    approve,
     getSettlement: (txHash: `0x${string}`) => getSettlement(network, txHash, publicClient),
     fund,
     client,
@@ -558,6 +597,37 @@ export type {
   GetNativeBalanceParameters,
   GetTokenBalanceParameters,
 } from '../balances.js';
+export {
+  erc20Actions,
+  getTokenMetadata,
+  getAllowance,
+  approve,
+  transfer,
+  transferFrom,
+  getTransfers,
+  watchTransfers,
+  transferKey,
+  MAX_LOG_RANGE,
+  MAX_LOG_CHUNKS,
+  toTokenAtomic,
+  formatTokenAmount,
+} from '../erc20.js';
+export type {
+  Erc20Actions,
+  Erc20ActionsConfig,
+  TokenMetadata,
+  TokenTransfer,
+  TokenInput,
+  TokenAmount,
+  TokenWalletClient,
+  GetTokenMetadataParameters,
+  GetAllowanceParameters,
+  ApproveParameters,
+  TransferParameters,
+  TransferFromParameters,
+  GetTransfersParameters,
+  WatchTransfersParameters,
+} from '../erc20.js';
 export { getPaymentReceipt, decodePaymentReceipt, parseUptoSettlementAmount } from '../receipt.js';
 export type { PaymentReceipt } from '../receipt.js';
 export { RadiusPaymentError } from '../errors.js';

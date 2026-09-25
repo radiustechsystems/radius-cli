@@ -202,12 +202,14 @@ async function runX402(
     },
     onApprovalRequired: async (req: ApprovalRequest) => {
       if (subOpts.yes || subOpts.x402ApprovePermit2) return true;
-      const need = formatUnits(BigInt(req.offer.amount), decimals);
+      // `offer` is set when the SDK is approving for a payment; the CLI only calls approvePermit2()
+      // itself under the flags handled above, so the prompt below is always payment-driven.
+      const need = req.offer ? `${formatUnits(BigInt(req.offer.amount), decimals)} ${symbol}` : undefined;
       const have = formatUnits(req.currentAllowance, decimals);
       if (!process.stdin.isTTY) {
         refusal = { kind: 'approval-no-tty' };
         process.stderr.write(
-          `x402: this payment requires a Permit2 approval for ${symbol} (have ${have}, need ${need}) ` +
+          `x402: this payment requires a Permit2 approval for ${symbol} (have ${have}${need ? `, need ${need}` : ''}) ` +
             'and the server does not sponsor it. Re-run with --x402-approve-permit2 (or -y) to grant ' +
             'a one-time unlimited approval.\n',
         );
@@ -216,7 +218,7 @@ async function runX402(
       const proceed = await confirm({
         message:
           `Grant Permit2 (${req.spender}) an unlimited ${symbol} approval? ` +
-          `One-time setup; this payment needs ${need} ${symbol}, and every payment still ` +
+          `One-time setup; ${need ? `this payment needs ${need}, and ` : ''}every payment still ` +
           'requires its own signed authorization.',
         default: false,
       });

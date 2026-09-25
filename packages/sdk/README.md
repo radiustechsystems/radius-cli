@@ -114,7 +114,9 @@ const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transa
 - Permit2 approval handled either way: when the server's facilitator sponsors it
   (`eip2612GasSponsoring`), a wallet holding only SBC pays without any on-chain transaction; when
   it does not, the SDK sends one unlimited approval from the signer (`permit2Approval: 'auto'`,
-  the default; `'never'` throws `approval_required`; `onApprovalRequired` can veto). Gas for that
+  the default; `'never'` throws `approval_required`). `onApprovalRequired` sees every allowance
+  change the client makes, with `request.reason` (`payment`, `approvePermit2`, `approve`), and
+  can veto it (`declined`, carrying the request). Gas for that
   one transaction comes from SBC via Turnstile, so keep ~0.01 SBC spare.
 - `maxPerRequest` is a per-request ceiling, **not** a cumulative budget. An agent that loops can
   exceed any total unless you enforce one around it.
@@ -127,6 +129,75 @@ const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transa
   `createRadiusFetch({ ...radiusEnv(process.env), signer })` reads `RADIUS_NETWORK`,
   `RADIUS_RPC_URL`, `RADIUS_FACILITATOR_URL`, `RADIUS_ASSET_ADDRESS` (alias `RADIUS_SBC_ADDRESS`), `RADIUS_PRIVATE_KEY`,
   `RADIUS_MAX_PER_REQUEST`; on Workers pass `c.env`.
+
+## ERC-20 interactions
+
+Metadata, allowance, `approve`, `transfer`, `transferFrom` and `Transfer` events as viem actions.
+Reads take any viem client; writes take a wallet client with an account and wait for the receipt
+(Radius finality is sub-second). Amounts are `bigint` atomic units or a display string such as
+`"1.5"`, parsed with the token's decimals. Like the other viem-backed actions, they are exported
+from `radius-sdk/client`.
+
+```ts
+import { createWalletClient, http } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { radiusTestnet, SBC } from 'radius-sdk';
+import { erc20Actions, transferKey } from 'radius-sdk/client';
+
+const wallet = createWalletClient({ account: privateKeyToAccount(KEY), chain: radiusTestnet.chain, transport: http() })
+  .extend(erc20Actions());                                  // preset chain: SBC by default
+
+await wallet.getTokenMetadata();                             // { name: 'Stable Coin', symbol: 'SBC', decimals: 6, totalSupply }
+await wallet.transfer({ to, amount: '1.50' });               // { hash, status: 'success' | 'reverted', explorerUrl }
+await wallet.approve({ spender, amount: 2_000_000n });       // atomic units; wait: false returns { status: 'pending' } after sending; gas sets the limit
+await wallet.getAllowance({ owner: wallet.account.address, spender });
+await wallet.transferFrom({ from, to, amount: '0.10' });     // spend an allowance granted to this account
+await wallet.getTransfers({ to, fromBlock, toBlock });       // decoded Transfer logs, (blockNumber, logIndex) order
+const unwatch = wallet.watchTransfers({
+  to,
+  fromBlock: checkpoint + 1n,                                // omit for new transfers only
+  onTransfer: (t) => { if (!seen.has(transferKey(t))) handle(t); },
+  onCheckpoint: (block) => save(block),                      // persist: resume from here after a restart
+});
+
+// Or call the actions directly, viem style, on any client:
+import { transfer, getAllowance } from 'radius-sdk/client';
+await transfer(wallet, { token: '0x…', to, amount: '3' });   // a bare address: decimals() is read on-chain
+```
+
+- **Default token.** On the Radius presets (mainnet, testnet, recognised by chain id) every action
+  defaults to the network's payment asset, SBC. A client on any other chain has no default: a
+  custom `RadiusNetwork`'s `asset` is not visible from `client.chain`, and quietly using SBC's
+  address would send `approve` / `transfer` to the wrong contract, so the action throws a `config`
+  error until you pass `token`, or extend with `erc20Actions({ network })` (checked against the
+  client's chain) or `erc20Actions({ token: network.asset })`.
+- **Receipts.** Writes wait for the receipt and report `status: 'success' | 'reverted'`. With
+  `wait: false` they return right after sending with `status: 'pending'`, which says nothing about
+  the outcome; wait for the receipt yourself before treating it as done. A `gas` limit skips
+  `eth_estimateGas`, the only pre-send revert check.
+- **Block windows.** Radius block numbers are unix milliseconds, and a node answers `eth_getLogs`
+  only for spans of at most `MAX_LOG_RANGE` (1 000 000 blocks, about 16.7 minutes; wider spans
+  fail with `-33002 block range is too wide`). `getTransfers` therefore defaults `fromBlock` to
+  `toBlock - MAX_LOG_RANGE` (`toBlock` defaults to the head) and fetches a wider range in
+  sequential chunks of `maxBlockRange` (default `MAX_LOG_RANGE`), refusing more than
+  `MAX_LOG_CHUNKS` (1 000) calls in one go; page anything larger yourself.
+- **Watching.** `watchTransfers` is the SDK's own poller (Radius has no `eth_newFilter`). Each
+  poll fetches `next..head` in chunks, delivers every transfer in `(blockNumber, logIndex)` order
+  through `onTransfer` (awaited), then advances and calls `onCheckpoint(lastBlock)`. Any failure,
+  including a throwing `onTransfer`, goes to `onError` and leaves the cursor where it was, so the
+  range is retried on the next poll and nothing is skipped: delivery is at-least-once, never
+  at-most-once. Persist the checkpoint and resume with `fromBlock: checkpoint + 1n`; dedupe on
+  `transferKey(t)` (`transactionHash:logIndex`) for the range that may be redelivered. Without
+  `fromBlock` the watcher starts at the current head and delivers new transfers only. Backfill
+  and live delivery are one ordered stream, so there is no race between a history query and the
+  watcher. Radius has sub-second, single-block finality and no reorgs, so no confirmation lag is
+  applied. viem's `watchContractEvent` is not used: its polling fallback issues one `getLogs` for
+  the whole gap since the last poll, so any pause over `MAX_LOG_RANGE` wedges it for good.
+- **Approvals.** `createRadiusFetch(...)` gains `allowance(spender)` and `approve(spender, amount)`
+  for the payment asset next to `send`. `approve` passes through `onApprovalRequired`
+  (`reason: 'approve'`) exactly like the Permit2 approvals do, so one policy hook sees, and can
+  veto, every allowance the payment client grants. The plain `erc20Actions().approve` on your own
+  wallet client has no hook: it is you signing, not the SDK.
 
 ## Balances: native RUSD vs stablecoins
 
@@ -212,10 +283,10 @@ self-hosted facilitator with your own auth or routing.
 
 | Path | What |
 | --- | --- |
-| `src/` | `networks`, `balances`, `amounts`, `receipt`, `settlement`, `schemes`, `env`, `errors`; `hono/` (server); `client/` (buyer) |
+| `src/` | `networks`, `balances`, `erc20`, `amounts`, `receipt`, `settlement`, `schemes`, `env`, `errors`; `hono/` (server); `client/` (buyer) |
 | `examples/worker-seller` | Hono worker: free `/`, paid `/api/lookup` and `/api/query` (`pnpm --filter radius-worker-seller dev`) |
 | `examples/agent-buyer` | `buy.mjs` (pay a URL), `fresh-wallet.mjs` (gasless proof from a new wallet) |
 | `examples/demo-dapp` | Test-dapp style page exercising both sides in the browser (burner wallet or MetaMask) |
-| `test/` | unit tests (facilitator and RPC mocked; `client-parity.test.ts` pins the wire format against radius-cli's; `balances.test.ts` runs the native-balance init code in a real EVM); `test/e2e` real settlement and a live balance reconciliation on testnet or mainnet (`RADIUS_E2E=1 RADIUS_PRIVATE_KEY=… [RADIUS_NETWORK=mainnet] pnpm test:e2e`) |
+| `test/` | unit tests (facilitator and RPC mocked; `client-parity.test.ts` pins the wire format against radius-cli's; `balances.test.ts` runs the native-balance init code in a real EVM; `erc20.semantics.test.ts` runs the ERC-20 actions against `evmNode.ts`, a JSON-RPC node backed by @ethereumjs/evm executing the forge-compiled `fixtures/TestToken` (rebuild with `fixtures/build.sh` after editing the .sol; the artifact is committed because CI has no forge)); `test/e2e` real settlement, balance reconciliation and ERC-20 round trips on testnet or mainnet (`RADIUS_E2E=1 RADIUS_PRIVATE_KEY=… [RADIUS_NETWORK=mainnet] pnpm test:e2e`) |
 
 Built on `@x402/core` (server and client), `@x402/evm` (client signing only) and viem.

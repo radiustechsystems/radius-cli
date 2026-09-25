@@ -36,6 +36,24 @@ export type {
   GetNativeBalanceParameters,
   GetTokenBalanceParameters,
 } from './balances.js';
+// ERC-20 actions load viem too; their runtime exports live on `radius-sdk/client`.
+export type {
+  Erc20Actions,
+  Erc20ActionsConfig,
+  TokenMetadata,
+  TokenTransfer,
+  TokenInput,
+  TokenAmount,
+  TokenWalletClient,
+  TxResult,
+  GetTokenMetadataParameters,
+  GetAllowanceParameters,
+  ApproveParameters,
+  TransferParameters,
+  TransferFromParameters,
+  GetTransfersParameters,
+  WatchTransfersParameters,
+} from './erc20.js';
 export { toAtomic, formatAmount, resolvePrice } from './amounts.js';
 export type { Price } from './amounts.js';
 export { RadiusPaymentError } from './errors.js';

@@ -19,7 +19,7 @@
 
 import { formatUnits, hexToBigInt, isAddress, numberToHex, type Address, type BlockTag, type Chain, type Client, type Hex, type Transport } from 'viem';
 import { getBalance, readContract } from 'viem/actions';
-import { radiusMainnet, radiusTestnet, resolveNetwork, SBC, type NetworkInput, type RadiusAsset } from './networks.js';
+import { radiusMainnet, radiusNetworkForChainId, resolveNetwork, SBC, type NetworkInput, type RadiusAsset } from './networks.js';
 
 /** Any viem client (public, wallet, or bare) whose transport reaches a Radius node. */
 export type BalanceClient = Client<Transport, Chain | undefined>;
@@ -285,11 +285,7 @@ export function radiusActions(config: RadiusActionsConfig = {}) {
 
 /** Tokens `getBalances` reads by default: the network's payment asset, marked convertible. */
 export function defaultTokens(client: BalanceClient, network?: NetworkInput): BalanceToken[] {
-  let asset: RadiusAsset;
-  if (network !== undefined) asset = resolveNetwork(network).asset;
-  else if (client.chain?.id === radiusMainnet.chainId) asset = radiusMainnet.asset;
-  else if (client.chain?.id === radiusTestnet.chainId) asset = radiusTestnet.asset;
-  else asset = SBC;
+  const asset: RadiusAsset = network !== undefined ? resolveNetwork(network).asset : (radiusNetworkForChainId(client.chain?.id)?.asset ?? SBC);
   return [{ address: asset.address, symbol: asset.symbol, decimals: asset.decimals, convertible: true }];
 }
 
