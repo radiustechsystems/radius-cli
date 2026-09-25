@@ -23,7 +23,7 @@
  * delivered range. Dedupe on `transferKey(t)` (`transactionHash:logIndex`) when resuming.
  */
 
-import { erc20Abi, formatUnits, parseUnits, type Account, type Address, type Chain, type Client, type Hex, type Transport } from 'viem';
+import { erc20Abi, formatUnits, getAddress, parseUnits, type Account, type Address, type Chain, type Client, type Hex, type Transport } from 'viem';
 import { getBlockNumber, getLogs, readContract, waitForTransactionReceipt, writeContract } from 'viem/actions';
 import type { BalanceClient, BalanceToken } from './balances.js';
 import { RadiusPaymentError } from './errors.js';
@@ -274,7 +274,7 @@ const TRANSFER_EVENT = erc20Abi.find((i) => i.type === 'event' && i.name === 'Tr
 
 function toTransfer(log: TransferLog): TokenTransfer {
   return {
-    token: log.address,
+    token: getAddress(log.address), // nodes return it lowercase; `from` / `to` are checksummed by the decoder
     from: log.args.from as Address,
     to: log.args.to as Address,
     amount: log.args.value as bigint,
