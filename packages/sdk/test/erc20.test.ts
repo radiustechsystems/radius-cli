@@ -98,12 +98,13 @@ describe('writes', () => {
     node.calls.length = 0;
     const r = await transferFrom(client, { token: USDX, from: OTHER, to: SPENDER, amount: '1', wait: false });
     expect(decodeSent(node, 1)).toEqual({ to: USDX, functionName: 'transferFrom', args: [OTHER, SPENDER, 10n ** 18n] });
-    expect(r.status).toBe('success');
+    expect(r.status).toBe('pending');
+    expect(r.explorerUrl).toBe(`https://testnet.radiustech.xyz/tx/${r.hash}`);
     expect(node.methods()).not.toContain('eth_getTransactionReceipt');
   });
   it('a gas limit is passed through and skips eth_estimateGas', async () => {
     const { client, node } = walletClient();
-    await transfer(client, { to: OTHER, amount: 1n, gas: 90_000n, wait: false });
+    expect((await transfer(client, { to: OTHER, amount: 1n, gas: 90_000n, wait: false })).status).toBe('pending');
     expect(node.methods()).not.toContain('eth_estimateGas');
     node.calls.length = 0;
     await approve(client, { spender: SPENDER, amount: 1n, wait: false });

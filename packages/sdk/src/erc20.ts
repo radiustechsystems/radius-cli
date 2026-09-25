@@ -39,8 +39,14 @@ export interface TokenMetadata {
 
 export interface TxResult {
   hash: `0x${string}`;
-  status: 'success' | 'reverted';
+  /** `pending`: sent but not waited for (`wait: false`); `success` / `reverted`: from the receipt. */
+  status: 'pending' | 'success' | 'reverted';
   explorerUrl?: string;
+}
+
+export interface WaitOption {
+  /** `false`: return `{ status: 'pending' }` right after sending instead of waiting for the receipt. Default: wait. */
+  wait?: boolean;
 }
 
 export interface TokenTransfer {
@@ -64,33 +70,29 @@ export interface GetAllowanceParameters {
   spender: Address;
 }
 
-export interface ApproveParameters {
+export interface ApproveParameters extends WaitOption {
   token?: TokenInput;
   spender: Address;
   amount: TokenAmount;
   /** Gas limit for the transaction; skips viem's `eth_estimateGas` when given. */
   gas?: bigint;
-  /** Return as soon as the transaction is sent (status reported as `success` unverified). Default: wait for the receipt. */
-  wait?: boolean;
 }
 
-export interface TransferParameters {
+export interface TransferParameters extends WaitOption {
   token?: TokenInput;
   to: Address;
   amount: TokenAmount;
   /** Gas limit for the transaction; skips viem's `eth_estimateGas` when given. */
   gas?: bigint;
-  wait?: boolean;
 }
 
-export interface TransferFromParameters {
+export interface TransferFromParameters extends WaitOption {
   token?: TokenInput;
   from: Address;
   to: Address;
   amount: TokenAmount;
   /** Gas limit for the transaction; skips viem's `eth_estimateGas` when given. */
   gas?: bigint;
-  wait?: boolean;
 }
 
 export interface GetTransfersParameters {
@@ -170,12 +172,16 @@ export function explorerUrlFor(client: Client<Transport, Chain | undefined>, has
   return base ? `${base.replace(/\/+$/, '')}/tx/${hash}` : undefined;
 }
 
-/** Send a transaction through `send`, then (unless `wait: false`) wait for its receipt. */
+/**
+ * Send a transaction through `send`, then wait for its receipt. With `wait: false` the result is
+ * `{ status: 'pending' }`: nothing is known about the outcome yet, so never read it as success.
+ */
 export async function sendAndWait(client: TokenWalletClient, wait: boolean | undefined, send: () => Promise<Hex>): Promise<TxResult> {
   const hash = await send();
-  if (wait === false) return { hash, status: 'success', explorerUrl: explorerUrlFor(client, hash) };
+  const explorerUrl = explorerUrlFor(client, hash);
+  if (wait === false) return { hash, status: 'pending', explorerUrl };
   const receipt = await waitForTransactionReceipt(client, { hash });
-  return { hash, status: receipt.status === 'success' ? 'success' : 'reverted', explorerUrl: explorerUrlFor(client, hash) };
+  return { hash, status: receipt.status === 'success' ? 'success' : 'reverted', explorerUrl };
 }
 
 /** ERC-20 `approve(spender, amount)` from the client's account. */
