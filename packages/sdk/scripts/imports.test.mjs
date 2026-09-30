@@ -65,3 +65,23 @@ test('buyer initializes with the installed viem peer', () => {
     assert.equal(payFetch.maxPerRequest, 1000n);
   `);
 });
+
+test('multi-network buyer imports and runs with explicit viem chains', () => {
+  run(`
+    import assert from 'node:assert/strict';
+    import { base } from 'viem/chains';
+    import { privateKeyToAccount } from 'viem/accounts';
+    import { createEvmFetch } from 'radius-sdk/client';
+    const pay = createEvmFetch({
+      signer: privateKeyToAccount('0x' + '01'.repeat(32)),
+      networks: [{ chain: base, assets: [{
+        asset: { address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', symbol: 'USDC', decimals: 6, name: 'USD Coin', version: '2' },
+        maxPerRequest: '0.05',
+      }] }],
+      fetch: async () => new Response('free'),
+    });
+    assert.equal(pay.routes[0].network, 'eip155:8453');
+    assert.equal(pay.routes[0].maxPerRequest, 50000n);
+    assert.equal(await (await pay('https://example.com/free')).text(), 'free');
+  `);
+});

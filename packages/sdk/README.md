@@ -1,7 +1,7 @@
 # radius-sdk
 
-Accept and make [Radius](https://radiustech.xyz) payments over standard [x402 v2](https://x402.org).
-Hono and Cloudflare Workers first. SBC is the default currency, mainnet the default network.
+Accept [Radius](https://radiustech.xyz) payments and buy resources across EVM networks over standard [x402 v2](https://x402.org).
+Hono and Cloudflare Workers first. Radius APIs default to SBC on mainnet; the multi-network buyer requires explicit chains and assets.
 
 Pre-1.0: minor versions may change the API. Release notes are in [CHANGELOG.md](./CHANGELOG.md).
 
@@ -9,7 +9,7 @@ Pre-1.0: minor versions may change the API. Release notes are in [CHANGELOG.md](
 | --- | --- | --- |
 | `radius-sdk` | networks, amounts, receipts, errors, `radiusEnv` (no viem at runtime) | — |
 | `radius-sdk/hono` | `radiusPayments()` seller middleware | `hono` |
-| `radius-sdk/client` | `createRadiusFetch()` paying fetch, balance and settlement actions | `viem` |
+| `radius-sdk/client` | `createRadiusFetch()`, `createEvmFetch()`, balance and settlement actions | `viem` |
 
 ## Install
 
@@ -129,6 +129,87 @@ const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transa
   `createRadiusFetch({ ...radiusEnv(process.env), signer })` reads `RADIUS_NETWORK`,
   `RADIUS_RPC_URL`, `RADIUS_FACILITATOR_URL`, `RADIUS_ASSET_ADDRESS` (alias `RADIUS_SBC_ADDRESS`), `RADIUS_PRIVATE_KEY`,
   `RADIUS_MAX_PER_REQUEST`; on Workers pass `c.env`.
+
+## Buy across EVM networks
+
+`createEvmFetch` accepts any viem EVM `Chain`: Base, Arbitrum, Polygon, Monad, Arc,
+Radius, or a custom `defineChain(...)`. Configure the ERC-20 assets you allow on each
+chain with their complete token metadata and independent caps. There is no default
+chain, asset, facilitator, or assumption about how a chain pays gas.
+
+```ts
+import { base, arbitrum } from 'viem/chains';
+import { radiusMainnet, SBC } from 'radius-sdk';
+import { createEvmFetch } from 'radius-sdk/client';
+
+const payFetch = createEvmFetch({
+  signer, // viem local account, external typed-data signer, or private key from your key store
+  networks: [
+    { chain: radiusMainnet.chain, assets: [{ asset: SBC, maxPerRequest: '0.05' }] },
+    {
+      chain: base,
+      assets: [{
+        asset: { address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', symbol: 'USDC', decimals: 6, name: 'USD Coin', version: '2' },
+        maxPerRequest: '0.05',
+      }],
+    },
+    {
+      chain: arbitrum,
+      assets: [{
+        asset: { address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', symbol: 'USDC', decimals: 6, name: 'USD Coin', version: '2' },
+        maxPerRequest: { amount: '50000' },
+      }],
+    },
+  ],
+  onPaymentRequired: offer => allowedRecipients.has(offer.payTo.toLowerCase()),
+  onPaid: (receipt, offer) => recordPurchase(receipt, offer),
+});
+const response = await payFetch('https://provider.example/lookup');
+```
+
+The buyer scans the server's `accepts` in order and selects the first supported
+network/asset/scheme within that asset's cap. It skips unconfigured networks (including
+non-EVM offers), unconfigured tokens, unsupported schemes and offers above their cap.
+`exact` v2 supports EIP-3009 and Permit2; `upto` v2 supports Permit2. Legacy `exact`
+v1 is supported with CAIP-2 `eip155:<chainId>` identifiers; named v1 aliases such as
+`base` are not translated. A policy decline, signing failure, or paid rejection stops
+the request; the buyer never purchases an alternative after attempting payment.
+
+A string cap is in **that token's display units**, and `{ amount }` is in its atomic
+units. Caps do not compare exchange rates or accumulate across requests or networks.
+An `upto` offer must fit the cap at its full authorized maximum. Apply daily budgets
+and any account/provider policy in your payment service before allowing the signature.
+
+Each network accepts `rpcUrl`, an optional `signer` override, and `permit2Approval`.
+A `WalletClient` with a configured chain must match that network; supply separate
+clients for separate chains. A local or external typed-data signer can serve several
+chains. RPC reads, approvals and settlement reconciliation use the selected network;
+Radius's faucet and aggregate-balance helpers stay on `createRadiusFetch`.
+
+`permit2Approval` defaults to **`'never'`** here. Existing allowance and sponsored
+approvals still work. Explicitly setting `'auto'` allows an unlimited ERC-20 approval;
+`onApprovalRequired` can veto it and receives the selected offer. The wallet needs
+the chosen chain's gas currency for an unsponsored approval. For operator-managed
+approvals, use the exported ERC-20 actions on a viem wallet for that chain.
+
+`payFetch.routes` contains each network/asset pair's payer address, atomic cap and
+`getSettlement(txHash)`. Choose the route matching the offer to reconcile transfers
+of that asset on the correct chain. `onPaid` reports the decoded server receipt,
+including failed settlements; an HTTP success without a receipt does not call it.
+A receipt naming another network throws `invalid_receipt`. A decoded receipt is not
+independent proof of settlement. For `upto`, a reported amount is checked against
+the authorized maximum; when omitted, the existing buyer behavior records the maximum.
+
+The SDK does not discover funded chains or check facilitator availability. Confirm the
+provider's settlement support and deployed token/Permit2 contracts for each enabled
+chain. Arc configuration uses its ERC-20 token decimals, which can differ from its
+native gas representation. Consult [x402 network and token support](https://docs.x402.org/core-concepts/network-and-token-support),
+[Circle's USDC contracts](https://developers.circle.com/stablecoins/usdc-contract-addresses),
+and the chosen chain's docs for current metadata. The test suite covers wire payloads
+for all named chains, with local EVM execution for approval and reconciliation;
+it does not establish live facilitator support on those networks.
+
+Runnable Radius + Base example: [multi-network.mjs](./examples/agent-buyer/multi-network.mjs).
 
 ## ERC-20 interactions
 

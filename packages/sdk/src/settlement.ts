@@ -29,7 +29,7 @@ const TRANSFER = parseAbiItem('event Transfer(address indexed from, address inde
  * transaction is unknown to the node (not yet mined, or never existed).
  * Use it to reconcile a timed-out payment before authorising another charge.
  */
-export async function getSettlement(network: RadiusNetwork, txHash: `0x${string}`, client?: PublicClient): Promise<Settlement | undefined> {
+export async function getSettlement(network: Pick<RadiusNetwork, 'chain' | 'rpcUrl' | 'asset' | 'explorerUrl'>, txHash: `0x${string}`, client?: PublicClient): Promise<Settlement | undefined> {
   const pc = client ?? createPublicClient({ chain: network.chain, transport: http(network.rpcUrl) });
   let receipt;
   try {

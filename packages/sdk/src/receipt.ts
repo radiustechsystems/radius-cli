@@ -37,7 +37,7 @@ export function parseUptoSettlementAmount(amount: string, maximum: bigint): bigi
   return settled;
 }
 
-export function decodePaymentReceipt(headerValue: string, network?: RadiusNetwork, expected?: { amount: string }): PaymentReceipt {
+export function decodePaymentReceipt(headerValue: string, network?: Pick<RadiusNetwork, 'explorerUrl'>, expected?: { amount: string }): PaymentReceipt {
   const r = decodePaymentResponseHeader(headerValue) as Record<string, unknown>;
   if (r.amount !== undefined && (typeof r.amount !== 'string' || !ATOMIC_AMOUNT.test(r.amount))) {
     throw new Error("payment response: 'amount' must be a non-negative integer string");
@@ -56,7 +56,7 @@ export function decodePaymentReceipt(headerValue: string, network?: RadiusNetwor
 }
 
 /** Read the payment receipt from a Response (or Headers), if the server attached one. */
-export function getPaymentReceipt(source: Response | Headers, network?: RadiusNetwork): PaymentReceipt | undefined {
+export function getPaymentReceipt(source: Response | Headers, network?: Pick<RadiusNetwork, 'explorerUrl'>): PaymentReceipt | undefined {
   const headers = source instanceof Headers ? source : source.headers;
   const v = headers.get(PAYMENT_RESPONSE_HEADER) ?? headers.get('x-payment-response');
   if (!v) return undefined;

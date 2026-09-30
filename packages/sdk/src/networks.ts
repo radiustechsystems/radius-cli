@@ -220,7 +220,7 @@ export function chainIdFromCaip2(network: string): number | undefined {
 }
 
 /** Explorer link for a settlement transaction, e.g. https://testnet.radiustech.xyz/tx/0x… */
-export function explorerTxUrl(network: RadiusNetwork, txHash: string): string | undefined {
+export function explorerTxUrl(network: Pick<RadiusNetwork, 'explorerUrl'>, txHash: string): string | undefined {
   return network.explorerUrl ? `${network.explorerUrl}/tx/${txHash}` : undefined;
 }
 
