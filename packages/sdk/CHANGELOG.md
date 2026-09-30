@@ -1,5 +1,11 @@
 # radius-sdk
 
+## 0.3.0
+
+### Minor Changes
+
+- c504f65: Add Permit2 interactions covering both SignatureTransfer (with optional witness) and AllowanceTransfer: `approvePermit2`, `signPermit2Transfer`, `permit2TransferFrom`, `signPermit2Allowance`, `permit2Permit`, `permit2AllowanceTransferFrom`, the `permit2Actions()` client extension and the EIP-712 helpers, exported from `radius-sdk/client`.
+
 ## 0.2.0
 
 ### Minor Changes
