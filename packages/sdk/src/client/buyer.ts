@@ -1,6 +1,7 @@
 import { x402Client, x402HTTPClient } from '@x402/core/client';
-import type { PaymentPayloadResult, PaymentRequired, PaymentRequirements, PaymentRequirementsV1, SchemeNetworkClient } from '@x402/core/types';
+import type { PaymentPayload, PaymentPayloadResult, PaymentRequired, PaymentRequirements, PaymentRequirementsV1, SchemeNetworkClient } from '@x402/core/types';
 import { ExactEvmScheme, UptoEvmScheme, toClientEvmSigner, type ClientEvmSigner } from '@x402/evm';
+import { createPermit2ApprovalTx, getPermit2AllowanceReadParams } from '@x402/evm/exact/client';
 import { createPublicClient, createWalletClient, http, isAddress, maxUint256, type Account, type PublicClient, type WalletClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { formatAmount, resolvePrice, type Price } from '../amounts.js';
@@ -162,7 +163,9 @@ interface SingleNetworkBuyer extends Pick<RadiusFetch, 'address' | 'maxPerReques
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   chooseOffer(challenge: PaymentRequired, url: string): PaymentOffer;
   readChallenge(response: Response): Promise<PaymentRequired>;
-  pay(retry: Request, challenge: PaymentRequired, offer: PaymentOffer): Promise<Response>;
+  authorize(offer: PaymentOffer): Promise<void>;
+  forSigning(requirements: AnyPaymentRequirements): PaymentRequirements;
+  sendPaid(retry: Request, offer: PaymentOffer, payload: PaymentPayload): Promise<Response>;
   account: ClientEvmSigner;
   publicClient: PublicClient;
   network: BuyerNetwork;
@@ -207,7 +210,7 @@ function isTxAccount(v: unknown): v is Account {
  * Shared x402 buyer engine for one EVM network and asset.
  * The public factories attach either Radius wallet helpers or multi-network routing.
  */
-export function createSingleNetworkBuyer(options: BuyerOptions, network: BuyerNetwork): SingleNetworkBuyer {
+export function createSingleNetworkBuyer(options: BuyerOptions, network: BuyerNetwork, sharedClient?: x402Client): SingleNetworkBuyer {
   if (options.maxPerRequest === undefined || options.maxPerRequest === null) {
     throw new RadiusPaymentError('config', 'x402 buyer: maxPerRequest is required (e.g. "$0.05")');
   }
@@ -260,15 +263,15 @@ export function createSingleNetworkBuyer(options: BuyerOptions, network: BuyerNe
       return { x402Version, scheme: v1.scheme, network: v1.network, payload: result.payload } as PaymentPayloadResult;
     },
   };
-  const client = new x402Client()
+  const client = (sharedClient ?? new x402Client())
     .register(network.network, exactScheme)
     .register(network.network, new UptoEvmScheme(signer, { rpcUrl: network.rpcUrl }))
-    .registerV1(network.network, exactV1Scheme)
-    // Backstop; the primary checks live in `chooseOffer` so errors are typed.
-    .setSpendControls({
-      maxAmountPerPayment: false,
-      allowedAssets: [{ network: network.network, asset: network.asset.address, maxAmountPerPayment: cap.toString() }],
-    });
+    .registerV1(network.network, exactV1Scheme);
+  // Multi-network callers configure one set of upstream spend controls after registering all routes.
+  if (!sharedClient) client.setSpendControls({
+    maxAmountPerPayment: false,
+    allowedAssets: [{ network: network.network, asset: network.asset.address, maxAmountPerPayment: cap.toString() }],
+  });
   const httpClient = new x402HTTPClient(client);
   const baseFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
   const explorer = (hash: string) => (network.explorerUrl ? `${network.explorerUrl}/tx/${hash}` : undefined);
@@ -288,7 +291,7 @@ export function createSingleNetworkBuyer(options: BuyerOptions, network: BuyerNe
   };
 
   const permit2Allowance = () =>
-    publicClient.readContract({ address: network.asset.address, abi: ERC20_ABI, functionName: 'allowance', args: [account.address, PERMIT2_ADDRESS] });
+    publicClient.readContract(getPermit2AllowanceReadParams({ tokenAddress: network.asset.address, ownerAddress: account.address }));
 
   const allowance = (spender: Address) =>
     publicClient.readContract({ address: network.asset.address, abi: ERC20_ABI, functionName: 'allowance', args: [account.address, spender] });
@@ -303,8 +306,9 @@ export function createSingleNetworkBuyer(options: BuyerOptions, network: BuyerNe
   /** ERC-20 `approve` of the payment asset, after `authorizeApproval`. */
   const sendApproval = async (request: ApprovalRequest, what: string): Promise<TxResult> => {
     await authorizeApproval(request);
-    const r = await sendTx(what, (wc) =>
-      wc.writeContract({ address: network.asset.address, abi: ERC20_ABI, functionName: 'approve', args: [request.spender, request.amount], chain, account: wc.account! }),
+    const r = await sendTx(what, (wc) => request.reason === 'approve'
+      ? wc.writeContract({ address: network.asset.address, abi: ERC20_ABI, functionName: 'approve', args: [request.spender, request.amount], chain, account: wc.account! })
+      : wc.sendTransaction({ ...createPermit2ApprovalTx(network.asset.address), chain, account: wc.account! }),
     );
     if (r.status !== 'success') throw new RadiusPaymentError('approval_failed', `${what} transaction ${r.hash} reverted`, r);
     return r;
@@ -410,8 +414,7 @@ export function createSingleNetworkBuyer(options: BuyerOptions, network: BuyerNe
    * `extra.facilitator` alias radius-cli accepts for `facilitatorAddress`. Only the signer sees this;
    * the untouched requirement is what gets echoed back to the server.
    */
-  const forSigning = (offer: PaymentOffer): PaymentRequirements => {
-    const req = offer.requirements;
+  const forSigning = (req: AnyPaymentRequirements): PaymentRequirements => {
     const extra: Record<string, unknown> = { name: network.asset.name, version: network.asset.version, ...req.extra };
     if (extra.facilitatorAddress === undefined && typeof extra.facilitator === 'string') extra.facilitatorAddress = extra.facilitator;
     const t = req.maxTimeoutSeconds;
@@ -482,15 +485,22 @@ export function createSingleNetworkBuyer(options: BuyerOptions, network: BuyerNe
     return receipt;
   };
 
-  const pay = async (retry: Request, paymentRequired: PaymentRequired, offer: PaymentOffer): Promise<Response> => {
+  const authorize = async (offer: PaymentOffer): Promise<void> => {
     if (options.onPaymentRequired && !(await options.onPaymentRequired(offer))) {
       throw new RadiusPaymentError('declined', `Payment of ${offer.amountFormatted} to ${offer.payTo} declined`, offer);
     }
     await ensureAllowance(offer);
+  };
 
+  const pay = async (retry: Request, paymentRequired: PaymentRequired, offer: PaymentOffer): Promise<Response> => {
+    await authorize(offer);
     // Narrow the challenge to the chosen offer so the upstream selector cannot pick another.
-    const narrowed: PaymentRequired = { ...paymentRequired, accepts: [forSigning(offer)] };
+    const narrowed: PaymentRequired = { ...paymentRequired, accepts: [forSigning(offer.requirements)] };
     const payload = await client.createPaymentPayload(narrowed);
+    return sendPaid(retry, offer, payload);
+  };
+
+  const sendPaid = async (retry: Request, offer: PaymentOffer, payload: PaymentPayload): Promise<Response> => {
     // v2 servers match `accepted` against the requirement they sent (core fields equal, their `extra`
     // a subset of ours), so echo it untouched rather than the filled-in signing copy.
     if (payload.x402Version === 2) payload.accepted = offer.requirements as PaymentRequirements;
@@ -541,20 +551,8 @@ export function createSingleNetworkBuyer(options: BuyerOptions, network: BuyerNe
     return second;
   };
 
-  const paidFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const request = new Request(input, init);
-    if (request.headers.has('payment-signature') || request.headers.has('x-payment')) {
-      return baseFetch(request);
-    }
-    // The paid retry never follows redirects: a 3xx must not carry the payment header to another origin.
-    const retry = new Request(request.clone(), { redirect: 'manual' });
-    const first = await baseFetch(request);
-    if (first.status !== 402) return first;
-
-    const paymentRequired = await readChallenge(first);
-    const offer = chooseOffer(paymentRequired, request.url);
-    return pay(retry, paymentRequired, offer);
-  };
+  const paidFetch = createPaymentFetch(baseFetch, readChallenge, (retry, paymentRequired, url) =>
+    pay(retry, paymentRequired, chooseOffer(paymentRequired, url)));
 
   const balance = async () => {
     const atomic = await publicClient.readContract({ address: network.asset.address, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] });
@@ -573,7 +571,9 @@ export function createSingleNetworkBuyer(options: BuyerOptions, network: BuyerNe
     fetch: paidFetch,
     chooseOffer,
     readChallenge,
-    pay,
+    authorize,
+    forSigning,
+    sendPaid,
     account,
     publicClient,
     address: account.address,
@@ -587,6 +587,26 @@ export function createSingleNetworkBuyer(options: BuyerOptions, network: BuyerNe
     approve,
     getSettlement: (txHash: `0x${string}`) => getSettlement(network, txHash, publicClient),
     client,
+  };
+}
+
+/**
+ * Guarded transport around upstream x402HTTPClient parsing and header encoding.
+ * @x402/fetch 2.25.0 inherits redirect-following on paid retries and wraps policy
+ * errors in plain Error; this preserves the SDK's redirect and typed-error contract.
+ */
+export function createPaymentFetch(
+  baseFetch: typeof globalThis.fetch,
+  readChallenge: (response: Response) => Promise<PaymentRequired>,
+  pay: (retry: Request, challenge: PaymentRequired, url: string) => Promise<Response>,
+): typeof globalThis.fetch {
+  return async (input, init) => {
+    const request = new Request(input, init);
+    if (request.headers.has('payment-signature') || request.headers.has('x-payment')) return baseFetch(request);
+    const retry = new Request(request.clone(), { redirect: 'manual' });
+    const response = await baseFetch(request);
+    if (response.status !== 402) return response;
+    return pay(retry, await readChallenge(response), request.url);
   };
 }
 

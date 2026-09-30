@@ -167,8 +167,9 @@ const payFetch = createEvmFetch({
 const response = await payFetch('https://provider.example/lookup');
 ```
 
-The buyer scans the server's `accepts` in order and selects the first supported
-network/asset/scheme within that asset's cap. It skips unconfigured networks (including
+The upstream x402 client selects a supported network/asset/scheme within that asset's
+cap. It prefers authorization offers over upfront/escrow offers, then preserves server
+order among the remaining offers. It skips unconfigured networks (including
 non-EVM offers), unconfigured tokens, unsupported schemes and offers above their cap.
 `exact` v2 supports EIP-3009 and Permit2; `upto` v2 supports Permit2. Legacy `exact`
 v1 is supported with CAIP-2 `eip155:<chainId>` identifiers; named v1 aliases such as
@@ -208,6 +209,31 @@ native gas representation. Consult [x402 network and token support](https://docs
 and the chosen chain's docs for current metadata. The test suite covers wire payloads
 for all named chains, with local EVM execution for approval and reconciliation;
 it does not establish live facilitator support on those networks.
+
+### Upstream x402 packages
+
+The buyer uses the pinned `@x402/core` and `@x402/evm` 2.25.0 packages:
+
+| Responsibility | Implementation |
+| --- | --- |
+| Multi-network registration, scheme/flow selection and atomic caps | One `x402Client`, `setSpendControls` and `registerPolicy` |
+| Policy and approval before signing | Public `onBeforePaymentCreation` lifecycle hook |
+| EIP-3009, Permit2, upto and sponsored permit signatures | `ExactEvmScheme`, `UptoEvmScheme`, `toClientEvmSigner` |
+| Permit2 allowance reads and approval calldata | `getPermit2AllowanceReadParams`, `createPermit2ApprovalTx` |
+| Challenge and payment-header encoding/decoding | `x402HTTPClient` and core HTTP helpers |
+
+SDK code supplies explicit configuration, strict token allowlisting, approval policy,
+metadata/deadline normalization, typed errors, receipt checks and onchain reconciliation.
+The strict allowlist policy is necessary because upstream `allowedAssets` also admits
+recognized default tokens. Each request has its own hook context, so concurrent requests
+retain their selected chain, signer and original challenge.
+
+We retain one guarded HTTP retry wrapper: `@x402/fetch` 2.25.0 inherits the request's
+redirect-following mode on a paid retry, converts signing/policy failures to plain
+`Error`, and supports additional signing on recovery. The SDK contract requires a manual
+paid redirect, typed refusal errors and one payment attempt. The small v1 CAIP-2 adapter
+also remains because upstream's v1 EVM scheme expects named network aliases; signatures
+still come from the upstream EVM implementation.
 
 Runnable Radius + Base example: [multi-network.mjs](./examples/agent-buyer/multi-network.mjs).
 

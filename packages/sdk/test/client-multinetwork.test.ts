@@ -96,6 +96,43 @@ describe('EVM network routing', () => {
     expect(decode(server.requests[1]).accepted).toEqual(wanted);
   });
 
+  it('does not implicitly allow upstream default USDC when only a custom token is configured', async () => {
+    const signTypedData = vi.fn(account.signTypedData);
+    const server = seller(challenge([offer()]));
+    await expect(createEvmFetch({ signer: { address: account.address, signTypedData }, networks: [config(base, SBC)], fetch: server.fetch })(url)).rejects.toMatchObject({ code: 'asset_mismatch' });
+    expect(signTypedData).not.toHaveBeenCalled();
+    expect(server.requests).toHaveLength(1);
+  });
+
+  it('skips an unrecognized payment flow and pays a supported alternative through upstream policy', async () => {
+    const wanted = offer(arbitrum, chainAssets[2][1]);
+    const server = seller(challenge([{ ...offer(), extra: { paymentFlow: 'provider-specific-unknown' } }, wanted]));
+    await createEvmFetch({ signer: account, networks: configs, fetch: server.fetch })(url);
+    expect(decode(server.requests[1]).accepted).toEqual(wanted);
+  });
+
+  it('applies upstream preference for authorization when a seller also offers upfront payment', async () => {
+    const wanted = offer(arbitrum, chainAssets[2][1]);
+    const server = seller(challenge([{ ...offer(), extra: { paymentFlow: 'upfront' } }, wanted]));
+    await createEvmFetch({ signer: account, networks: configs, fetch: server.fetch })(url);
+    expect(decode(server.requests[1]).accepted).toEqual(wanted);
+  });
+
+  it('awaits the selected route policy before the upstream EVM signer is called', async () => {
+    const events: string[] = [];
+    const signer = { address: account.address, signTypedData: async (data: Parameters<typeof account.signTypedData>[0]) => {
+      events.push(`sign:${data.domain?.chainId}`);
+      return account.signTypedData(data);
+    } };
+    const server = seller(challenge([offer()]));
+    await createEvmFetch({ signer, networks: configs, fetch: server.fetch, onPaymentRequired: async selected => {
+      await Promise.resolve();
+      events.push(`approve:${selected.network}`);
+      return true;
+    } })(url);
+    expect(events).toEqual(['approve:eip155:8453', 'sign:8453']);
+  });
+
   it('uses independent token-unit caps for multiple assets on one chain', async () => {
     const token18 = { ...baseUsdc, address: recipient, symbol: 'CREDITS', decimals: 18, name: 'Credits', version: '1' };
     const server = seller(challenge([offer(base, token18, '50000000000000001'), offer()]));
@@ -118,10 +155,13 @@ describe('EVM network routing', () => {
     expect(server.requests).toHaveLength(1);
   });
 
-  it('makes a policy decline terminal, even when another chain is affordable', async () => {
-    const server = seller(challenge([offer(), offer(radiusMainnet.chain, SBC)]));
+  it.each([false, true])('makes policy decline terminal before signing (sponsored Permit2: %s)', async sponsored => {
+    const first = sponsored ? { ...offer(), extra: { assetTransferMethod: 'permit2' } } : offer();
+    const server = seller(challenge([first, offer(radiusMainnet.chain, SBC)], sponsored ? { extensions: { eip2612GasSponsoring: { version: '1' } } } : {}));
     const onPaymentRequired = vi.fn(() => false);
-    await expect(createEvmFetch({ signer: account, networks: configs, fetch: server.fetch, onPaymentRequired })(url)).rejects.toMatchObject({ code: 'declined' });
+    const signTypedData = vi.fn(account.signTypedData);
+    await expect(createEvmFetch({ signer: { address: account.address, signTypedData }, networks: configs, fetch: server.fetch, onPaymentRequired })(url)).rejects.toMatchObject({ code: 'declined' });
+    expect(signTypedData).not.toHaveBeenCalled();
     expect(onPaymentRequired).toHaveBeenCalledTimes(1);
     expect(server.requests).toHaveLength(1);
   });
