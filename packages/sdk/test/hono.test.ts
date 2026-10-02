@@ -212,3 +212,58 @@ describe('radiusPayments paid flow (facilitator mocked)', () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+describe('radiusPayments when the facilitator gives no answer', () => {
+  // A settle that fails without the facilitator's own answer may still have reached the chain,
+  // so the buyer must see 502 (outcome unknown), not 402 (rejected, nothing moved).
+  function mockFacilitator(respond: (path: 'verify' | 'settle') => Response | Promise<Response>) {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.endsWith('/verify')) return respond('verify');
+      if (url.endsWith('/settle')) return respond('settle');
+      throw new Error(`unexpected fetch ${url}`);
+    });
+  }
+  const gatewayTimeout = () => new Response('<html>504 Gateway Time-out</html>', { status: 504, headers: { 'content-type': 'text/html' } });
+  const verified = () => Response.json({ isValid: true, payer: '0xabc' });
+
+  async function pay(app: Hono<any>) {
+    const sig = await payloadFor(app);
+    return app.request('http://seller.test/api/lookup', { headers: { 'PAYMENT-SIGNATURE': sig } });
+  }
+
+  it('answers 502 when settle returns an error page', async () => {
+    mockFacilitator(gatewayTimeout);
+    const res = await pay(makeApp());
+    expect(res.status).toBe(502);
+    expect(await res.json()).toMatchObject({ error: 'facilitator_error' });
+  });
+
+  it('answers 502 when the settle connection fails', async () => {
+    mockFacilitator(() => {
+      throw new TypeError('fetch failed');
+    });
+    const res = await pay(makeApp());
+    expect(res.status).toBe(502);
+    expect(await res.text()).not.toContain('secret');
+  });
+
+  it('answers 502 when settle fails after the handler (settle: "after")', async () => {
+    mockFacilitator((path) => (path === 'verify' ? verified() : gatewayTimeout()));
+    const res = await pay(makeApp({ settle: 'after' }));
+    expect(res.status).toBe(502);
+    expect(await res.text()).not.toContain('secret');
+  });
+
+  it('answers 502 when verify returns an error page (settle: "after")', async () => {
+    mockFacilitator(gatewayTimeout);
+    const res = await pay(makeApp({ settle: 'after' }));
+    expect(res.status).toBe(502);
+  });
+
+  it("keeps 402 for the facilitator's own settle rejection", async () => {
+    mockFacilitator(() => Response.json({ success: false, errorReason: 'insufficient_funds', transaction: '', network: 'eip155:72344' }, { status: 400 }));
+    const res = await pay(makeApp());
+    expect(res.status).toBe(402);
+  });
+});
