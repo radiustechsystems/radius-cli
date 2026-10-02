@@ -18,7 +18,7 @@ import { resolveNetwork, type Address, type NetworkInput, type NetworkOverrides,
 import { resolvePrice, type Price } from '../amounts.js';
 import { explorerTxUrl } from '../networks.js';
 import type { PaymentReceipt } from '../receipt.js';
-import { RadiusFacilitatorClient, type FacilitatorOptions } from './facilitator.js';
+import { RadiusFacilitatorClient, withUnknownOutcomes, type FacilitatorOptions } from './facilitator.js';
 import { RadiusExactScheme, type GasSponsoringMode, type SettleMode } from './scheme.js';
 
 export { RadiusFacilitatorClient, staticSupported, type FacilitatorOptions } from './facilitator.js';
@@ -184,9 +184,9 @@ function internalErrorResponse<E extends Env>(c: Context<E>, error: unknown): Re
 export function radiusPayments<E extends Env = Env>(options: RadiusPaymentsOptions<E>): MiddlewareHandler<E> {
   const network = resolveNetwork(options.network, options);
   const settle: SettleMode = options.settle ?? 'before';
-  const facilitator = isFacilitatorClient(options.facilitator)
-    ? options.facilitator
-    : new RadiusFacilitatorClient(network, options.facilitator);
+  const facilitator = withUnknownOutcomes(
+    isFacilitatorClient(options.facilitator) ? options.facilitator : new RadiusFacilitatorClient(network, options.facilitator),
+  );
   const resourceServer = new x402ResourceServer(facilitator).register(network.network, new RadiusExactScheme(network, settle, options.gasSponsoring ?? 'auto'));
 
   const resolvePayTo = (spec: PayTo<E>) =>

@@ -1,5 +1,5 @@
-import { HTTPFacilitatorClient, type FacilitatorClient } from '@x402/core/server';
-import type { PaymentPayload, PaymentRequirements, SettleResponse, SupportedResponse, VerifyResponse } from '@x402/core/types';
+import { FacilitatorResponseError, HTTPFacilitatorClient, type FacilitatorClient } from '@x402/core/server';
+import { SettleError, VerifyError, type PaymentPayload, type PaymentRequirements, type SettleResponse, type SupportedResponse, type VerifyResponse } from '@x402/core/types';
 import type { RadiusNetwork } from '../networks.js';
 
 export interface FacilitatorOptions {
@@ -71,4 +71,28 @@ export class RadiusFacilitatorClient implements FacilitatorClient {
   getSupported(): Promise<SupportedResponse> {
     return this.live ? this.http.getSupported() : Promise.resolve(staticSupported(this.network));
   }
+}
+
+/**
+ * A facilitator call that fails without the facilitator's own answer (a network error, or an
+ * error status whose body is not an x402 response) leaves the outcome unknown: a settle may
+ * have reached the chain. @x402/core reports those as a `402`, which a buyer reads as "rejected,
+ * nothing moved", so this rethrows them as `FacilitatorResponseError`, which `radiusPayments`
+ * answers with `502`. The facilitator's own answers (`VerifyError`, `SettleError`) pass through.
+ */
+export function withUnknownOutcomes(facilitator: FacilitatorClient): FacilitatorClient {
+  const call = async <T>(operation: string, fn: () => Promise<T>): Promise<T> => {
+    try {
+      return await fn();
+    } catch (error) {
+      if (error instanceof FacilitatorResponseError || error instanceof VerifyError || error instanceof SettleError) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      throw Object.assign(new FacilitatorResponseError(`Facilitator ${operation} failed: ${message}`), { cause: error });
+    }
+  };
+  return {
+    verify: (payload, requirements) => call('verify', () => facilitator.verify(payload, requirements)),
+    settle: (payload, requirements) => call('settle', () => facilitator.settle(payload, requirements)),
+    getSupported: () => call('supported', () => facilitator.getSupported()),
+  };
 }
