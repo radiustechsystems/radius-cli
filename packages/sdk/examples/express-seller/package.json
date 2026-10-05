@@ -1,0 +1,19 @@
+{
+  "name": "radius-express-seller",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --experimental-strip-types src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@x402/express": "2.27.0",
+    "express": "^5.2.1",
+    "radius-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

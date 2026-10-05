@@ -53,6 +53,30 @@ test('root and Hono seller work with buyer dependency imports blocked', () => {
   `, true);
 });
 
+test('web-standard server handler works with buyer dependency imports blocked', () => {
+  run(`
+    import assert from 'node:assert/strict';
+    import { radiusPayments, createRadiusServer } from 'radius-sdk/server';
+
+    const pay = radiusPayments({
+      network: 'testnet',
+      payTo: '0x1111111111111111111111111111111111111111',
+      routes: { 'GET /paid': '0.001 SBC' },
+      facilitator: { live: false },
+    });
+    let called = false;
+    const response = await pay(new Request('http://localhost/paid'), () => { called = true; return new Response('paid'); });
+    assert.equal(response.status, 402);
+    assert.equal(called, false);
+    const challenge = JSON.parse(Buffer.from(response.headers.get('PAYMENT-REQUIRED'), 'base64'));
+    assert.equal(challenge.accepts[0].network, 'eip155:72344');
+    assert.equal(challenge.accepts[0].amount, '1000');
+    const radius = createRadiusServer({ network: 'testnet', facilitator: { live: false } });
+    assert.equal(typeof radius.server.initialize, 'function');
+    assert.ok('GET /paid' in radius.routes({ payTo: '0x1111111111111111111111111111111111111111', routes: { 'GET /paid': '$1' } }));
+  `, true);
+});
+
 test('buyer initializes with the installed viem peer', () => {
   run(`
     import assert from 'node:assert/strict';

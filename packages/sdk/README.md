@@ -1,14 +1,17 @@
 # radius-sdk
 
 Accept and make [Radius](https://radiustech.xyz) payments over standard [x402 v2](https://x402.org).
-Hono and Cloudflare Workers first. SBC is the default currency, mainnet the default network.
+Sellers run on any stack that speaks web-standard `Request`/`Response` (Cloudflare Workers, Bun,
+Deno, Node, Next.js and SvelteKit route handlers), on Hono, or on Express / Next.js through the
+upstream x402 adapters. SBC is the default currency, mainnet the default network.
 
 Pre-1.0: minor versions may change the API. Release notes are in [CHANGELOG.md](./CHANGELOG.md).
 
 | Entry point | What | Needs |
 | --- | --- | --- |
 | `radius-sdk` | networks, amounts, receipts, errors, `radiusEnv` (no viem at runtime) | — |
-| `radius-sdk/hono` | `radiusPayments()` seller middleware | `hono` |
+| `radius-sdk/server` | `radiusPayments()` web-standard seller handler; `createRadiusServer()` for the upstream `@x402/*` adapters | — |
+| `radius-sdk/hono` | `radiusPayments()` Hono middleware (wraps `radius-sdk/server`) | `hono` |
 | `radius-sdk/client` | `createRadiusFetch()` paying fetch, balance and settlement actions | `viem` |
 
 ## Install
@@ -16,16 +19,22 @@ Pre-1.0: minor versions may change the API. Release notes are in [CHANGELOG.md](
 Install the peer dependencies for the entry point you use:
 
 ```sh
-# Hono seller
+# Seller on Workers / Bun / Deno / Node / route handlers
+pnpm add radius-sdk
+
+# Seller on Hono
 pnpm add radius-sdk hono
+
+# Seller on Express (or Next.js with @x402/next)
+pnpm add radius-sdk @x402/express express
 
 # Buyer / agent (including applications that also accept payments)
 pnpm add radius-sdk viem
 ```
 
 Hono and viem are optional peer dependencies. The `radius-sdk/hono` entry point requires Hono;
-`radius-sdk/client` requires viem `^2.48.11`. Root and Hono entry points do not load viem at
-runtime. Network definitions remain compatible with viem's `Chain` type; TypeScript consumers
+`radius-sdk/client` requires viem `^2.48.11`. Root, server and Hono entry points do not load
+viem at runtime. Network definitions remain compatible with viem's `Chain` type; TypeScript consumers
 that resolve those declarations may also need viem installed for its types.
 
 Applications already using a compatible viem version can use that installation for the SDK's
@@ -39,6 +48,34 @@ across the full dependency tree depends on compatible ranges and the package man
 
 ## Accept payments (seller)
 
+The payment configuration is the same everywhere; only the wrapper changes.
+
+**Any web-standard runtime** (Cloudflare Workers without a framework, Bun, Deno, Node 18+,
+Next.js / SvelteKit / Remix route handlers): a handler that takes a `Request` and returns a
+`Response`. Paid handlers receive the settled receipt.
+
+```ts
+import { radiusPayments } from 'radius-sdk/server';
+
+const pay = radiusPayments({
+  network: 'testnet',                 // default 'mainnet'; or a custom instance, see below
+  payTo: '0xYourWallet',              // or (request) => …
+  routes: {
+    'GET /api/lookup': { price: '$0.001', description: 'One lookup' },
+    'POST /api/query': '$0.01',                 // shorthand
+    'GET /api/raw':    { price: { amount: '100' } },   // atomic units (6 decimals for SBC)
+  },
+});
+
+export default {
+  fetch: pay.wrap((request, payment) => Response.json({ ok: true, paidBy: payment?.payer })),
+};
+// or, with your own router: `pay(request, (request, payment) => router.handle(request))`
+```
+
+**Hono** (`pnpm add hono`): the same options as middleware; dynamic `payTo`/`price` and
+`onSettled` receive the Hono context and paid handlers read `c.get('radiusPayment')`.
+
 ```ts
 import { Hono } from 'hono';
 import { radiusPayments, type RadiusPaymentVariables } from 'radius-sdk/hono';
@@ -47,18 +84,36 @@ type Env = { Bindings: { PAY_TO: `0x${string}` }; Variables: RadiusPaymentVariab
 const app = new Hono<Env>();
 
 app.use('/api/*', radiusPayments<Env>({
-  network: 'testnet',                 // default 'mainnet'; or a custom instance, see below
-  payTo: (c) => c.env.PAY_TO,         // or a literal address
-  routes: {
-    'GET /api/lookup': { price: '$0.001', description: 'One lookup' },
-    'POST /api/query': '$0.01',                 // shorthand
-    'GET /api/raw':    { price: { amount: '100' } },   // atomic units (6 decimals for SBC)
-  },
+  network: 'testnet',
+  payTo: (c) => c.env.PAY_TO,
+  routes: { 'GET /api/lookup': { price: '$0.001', description: 'One lookup' } },
 }));
 
 app.get('/api/lookup', (c) => c.json({ ok: true, paidBy: c.get('radiusPayment')?.payer }));
 export default app;
 ```
+
+**Express, Next.js, or any other framework with an upstream x402 adapter**: the SDK provides
+the Radius resource server and routes, the adapter provides the middleware.
+
+```ts
+import express from 'express';
+import { paymentMiddleware } from '@x402/express';       // or `paymentProxy` from '@x402/next'
+import { createRadiusServer } from 'radius-sdk/server';
+
+const radius = createRadiusServer({ network: 'testnet' });
+const app = express();
+app.use(paymentMiddleware(
+  radius.routes({ payTo: '0xYourWallet', routes: { 'GET /api/lookup': '$0.001' } }),
+  radius.server,
+));
+app.get('/api/lookup', (_req, res) => res.json({ ok: true }));
+```
+
+`radius.routes()` accepts the same route specs; dynamic `payTo`/`price` receive the x402 request
+context. `radius.http(...)` returns an `x402HTTPResourceServer` for adapters' `…FromHTTPServer`
+variants, and `radius.server` can be used with any `HTTPAdapter` of your own for stacks nobody
+has an adapter for yet.
 
 What you get, on the wire, with no Radius-specific client knowledge required:
 
@@ -67,14 +122,21 @@ What you get, on the wire, with no Radius-specific client knowledge required:
 - Paid request (`PAYMENT-SIGNATURE`) → settled on Radius through the Radius facilitator
   **before** your handler runs (`settle: 'after'` switches to the x402 default flow), then a
   `PAYMENT-RESPONSE` header with the transaction hash.
-- `c.get('radiusPayment')` in the handler, and `onSettled(receipt, c)` for logging.
+- The receipt in the handler (second argument / `c.get('radiusPayment')`), and `onSettled` for
+  logging with every adapter: it receives the `Request` (web-standard handler), the Hono context,
+  or the x402 request context (`createRadiusServer`).
 - `eip2612GasSponsoring` is declared only when the facilitator's `/supported` lists it
   (`gasSponsoring: true | false` overrides), so clients never send a permit nobody will honour.
-- No I/O at module scope (Workers-safe): the facilitator's `/supported` is fetched lazily on the
-  first paid request after each cold start. Server bundle is ~65 KiB gzipped, no viem.
+- No I/O at module scope (Workers-safe): the SDK's handlers fetch the facilitator's `/supported`
+  lazily on the first paid request after each cold start. The upstream adapters fetch it at
+  construction by default (fine on Node; pass their `syncFacilitatorOnStart: false` and call
+  `radius.server.initialize()` yourself where module-scope I/O is forbidden). Server bundle is
+  ~65 KiB gzipped, no viem.
 
-Any x402 v2 client can pay it: verified with the pre-SDK `radius-cli wallet x402` 0.1.5 as well as
-`createRadiusFetch` (which `radius-cli` uses from 0.2.0) paying a local `wrangler dev` worker on testnet.
+Any x402 v2 client can pay it: verified with `radius-cli wallet x402` (which uses
+`createRadiusFetch` from 0.2.0, and paid the SDK's 402s with its hand-rolled client before that)
+against `examples/worker-plain` under `wrangler dev`, `examples/express-seller` on Node, and the
+Hono `examples/worker-seller`, all on testnet.
 
 ## Make payments (buyer / agent)
 
@@ -323,8 +385,10 @@ self-hosted facilitator with your own auth or routing.
 
 | Path | What |
 | --- | --- |
-| `src/` | `networks`, `balances`, `erc20`, `permit2`, `amounts`, `receipt`, `settlement`, `schemes`, `env`, `errors`; `hono/` (server); `client/` (buyer) |
-| `examples/worker-seller` | Hono worker: free `/`, paid `/api/lookup` and `/api/query` (`pnpm --filter radius-worker-seller dev`) |
+| `src/` | `networks`, `balances`, `erc20`, `permit2`, `amounts`, `receipt`, `settlement`, `schemes`, `env`, `errors`; `server/` (seller core: web-standard handler, x402 resource server, facilitator, scheme); `hono/` (Hono wrapper); `client/` (buyer) |
+| `examples/worker-plain` | Worker with no framework, the web-standard handler: free `/`, paid `/api/lookup` and `/api/query` (`pnpm --filter radius-worker-plain dev`, port 8788) |
+| `examples/worker-seller` | Same API on Hono (`pnpm --filter radius-worker-seller dev`) |
+| `examples/express-seller` | Same API on Express through `@x402/express` (`pnpm --filter radius-express-seller start`, port 8789) |
 | `examples/agent-buyer` | `buy.mjs` (pay a URL), `fresh-wallet.mjs` (gasless proof from a new wallet), `permit2-pull.mjs` (sign a Permit2 transfer off-chain, pull it from another account) |
 | `examples/demo-dapp` | Test-dapp style page exercising both sides in the browser (burner wallet or MetaMask) |
 | `test/` | unit tests (facilitator and RPC mocked; `client-parity.test.ts` pins the wire format against radius-cli's; `balances.test.ts` runs the native-balance init code in a real EVM; `erc20.semantics.test.ts` runs the ERC-20 actions against `evmNode.ts`, a JSON-RPC node backed by @ethereumjs/evm executing the forge-compiled `fixtures/TestToken` (rebuild with `fixtures/build.sh` after editing the .sol; the artifact is committed because CI has no forge)); `test/e2e` real settlement, balance reconciliation and ERC-20 round trips on testnet or mainnet (`RADIUS_E2E=1 RADIUS_PRIVATE_KEY=… [RADIUS_NETWORK=mainnet] pnpm test:e2e`) |

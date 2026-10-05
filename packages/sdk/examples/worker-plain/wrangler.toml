@@ -1,0 +1,8 @@
+name = "radius-worker-plain"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+
+[vars]
+RADIUS_NETWORK = "testnet"
+# Set PAY_TO to your wallet address (or put it in .dev.vars locally / `wrangler secret put` in prod).
+PAY_TO = "0x1eF420190c299D4d133fE9227F780D7d5cE91BeE"

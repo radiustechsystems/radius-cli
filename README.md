@@ -5,15 +5,15 @@ Tools for the [Radius Network](https://radiustech.xyz), managed as one pnpm work
 | Package | What |
 | --- | --- |
 | [`packages/cli`](./packages/cli) | [`radius-cli`](https://www.npmjs.com/package/radius-cli) — CLI wallet for Radius, modeled on Foundry's `cast`; `wallet x402` pays through `radius-sdk` |
-| [`packages/sdk`](./packages/sdk) | [`radius-sdk`](https://www.npmjs.com/package/radius-sdk) — accept and make Radius payments over x402 v2 (Hono / Cloudflare Workers first), plus balance and settlement helpers |
+| [`packages/sdk`](./packages/sdk) | [`radius-sdk`](https://www.npmjs.com/package/radius-sdk) — accept and make Radius payments over x402 v2 from any web-standard runtime, Hono, or the upstream x402 framework adapters (Express, Next.js), plus balance and settlement helpers |
 
 ```bash
 npx radius-cli wallet balance     # the CLI
-pnpm add radius-sdk hono          # SDK, seller side
+pnpm add radius-sdk               # SDK, seller side (add hono, or @x402/express + express, for those stacks)
 pnpm add radius-sdk viem          # SDK, buyer / agent side
 ```
 
-Runnable SDK examples (seller worker, agent buyer, browser demo dapp) are in [`packages/sdk/examples`](./packages/sdk/examples).
+Runnable SDK examples (seller workers with and without Hono, an Express seller, agent buyer, browser demo dapp) are in [`packages/sdk/examples`](./packages/sdk/examples).
 
 ## Agent skills
 
