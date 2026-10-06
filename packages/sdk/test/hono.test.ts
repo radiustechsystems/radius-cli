@@ -115,6 +115,17 @@ describe('radiusPayments facilitator configuration', () => {
     expect(decodePaymentRequiredHeader(res.headers.get('payment-required')!).accepts[0].extra).toMatchObject({ name: 'Custom Name', version: '9' });
   });
 
+  it('advertises eip3009 when the facilitator lists it first (SBC with EIP-3009)', async () => {
+    const kinds = ['eip3009', 'permit2'].map((assetTransferMethod) => ({ x402Version: 2, scheme: 'exact', network: 'eip155:72344', extra: { assetTransferMethod, name: 'Stable Coin', version: '1' } }));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ kinds, extensions: ['eip2612GasSponsoring'], signers: {} }));
+    const app = new Hono();
+    app.use(radiusPayments({ network: 'testnet', payTo: PAY_TO, routes: { 'GET /p': '$1' } }));
+    app.get('/p', (c) => c.text('x'));
+    const res = await app.request('/p');
+    expect(res.status).toBe(402);
+    expect(decodePaymentRequiredHeader(res.headers.get('payment-required')!).accepts[0].extra).toMatchObject({ assetTransferMethod: 'eip3009', name: 'Stable Coin', version: '1' });
+  });
+
   it('declares gas sponsoring only when the facilitator supports it (or when forced)', async () => {
     const supportedWithout = { kinds: [{ x402Version: 2, scheme: 'exact', network: 'eip155:72344', extra: { assetTransferMethod: 'permit2', name: 'Stable Coin', version: '1' } }], extensions: [], signers: {} };
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json(supportedWithout));

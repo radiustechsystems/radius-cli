@@ -9,7 +9,7 @@ export type GasSponsoringMode = 'auto' | boolean;
 export const EIP2612_GAS_SPONSORING = 'eip2612GasSponsoring';
 
 /**
- * Server-side `exact` scheme for Radius: prices in USD/SBC, Permit2 transfer method,
+ * Server-side `exact` scheme for Radius: prices in USD/SBC, Permit2 or EIP-3009 transfer method,
  * no dependency on @x402/evm (the facilitator does all the cryptography).
  */
 export class RadiusExactScheme implements SchemeNetworkServer {
@@ -30,12 +30,13 @@ export class RadiusExactScheme implements SchemeNetworkServer {
     settle: SettleMode = 'before',
     private readonly gasSponsoring: GasSponsoringMode = 'auto',
   ) {
-    this.paymentFlows = {
-      permit2: {
-        supported: ['authorization', 'upfront'],
-        default: settle === 'before' ? 'upfront' : 'authorization',
-      },
+    // Both transfer methods the Radius facilitator may list; it names the one it
+    // prefers first and that is what the 402 advertises.
+    const flows: SchemeNetworkServer['paymentFlows'][string] = {
+      supported: ['authorization', 'upfront'],
+      default: settle === 'before' ? 'upfront' : 'authorization',
     };
+    this.paymentFlows = { permit2: flows, eip3009: flows };
   }
 
   async parsePrice(price: X402Price, _network: Network): Promise<AssetAmount> {
