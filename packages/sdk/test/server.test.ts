@@ -169,6 +169,35 @@ describe('radiusPayments (web-standard handler): paid flow (facilitator mocked)'
     expect(calls).toHaveLength(0);
   });
 
+  it('streams the handler response through in settle-before mode', async () => {
+    mockFacilitator({ success: true, transaction: '0xstream' });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const app = makeHandler().wrap(() => {
+      const stream = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          controller.enqueue(new TextEncoder().encode('first,'));
+          await gate;
+          controller.enqueue(new TextEncoder().encode('second'));
+          controller.close();
+        },
+      });
+      return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
+    });
+    const sig = await payloadFor(app);
+    const res = await app(new Request('http://seller.test/api/lookup', { headers: { 'PAYMENT-SIGNATURE': sig } }));
+    expect(res.status).toBe(200);
+    expect(getPaymentReceipt(res)?.transaction).toBe('0xstream');
+    // The response (and its first chunk) arrive while the handler is still producing the rest.
+    const reader = res.body!.getReader();
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toBe('first,');
+    release();
+    const second = await reader.read();
+    expect(new TextDecoder().decode(second.value)).toBe('second');
+    expect((await reader.read()).done).toBe(true);
+  });
+
   it('handles responses with immutable headers (e.g. proxied from fetch)', async () => {
     mockFacilitator({ success: true, transaction: '0x1' });
     const pay = makeHandler();
@@ -287,6 +316,47 @@ describe('createRadiusServer', () => {
       expect(await paid.json()).toEqual({ data: 'secret' });
       expect(getPaymentReceipt(paid)?.transaction).toBe('0xexpress');
       expect(seen).toEqual(['0xexpress:express']);
+    } finally {
+      server.close();
+    }
+  });
+
+  it('settle: "after" and failed handlers behave the same through @x402/express', async () => {
+    const { paymentMiddleware } = await import('@x402/express');
+    const express = (await import('express')).default;
+    const seen: string[] = [];
+    const radius = createRadiusServer({ network: 'testnet', facilitator: { live: false }, settle: 'after', onSettled: (r) => { seen.push(r.transaction!); } });
+    const app = express();
+    app.use(paymentMiddleware(radius.routes({ payTo: PAY_TO, routes: { 'GET /api/lookup': '$0.001', 'GET /api/fail': '$0.001' } }), radius.server));
+    app.get('/api/lookup', (_req, res) => { res.json({ data: 'secret' }); });
+    app.get('/api/fail', (_req, res) => { res.status(500).json({ error: 'nope' }); });
+    const server = app.listen(0);
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const realFetch = globalThis.fetch;
+    const facilitatorCalls: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.endsWith('/verify')) { facilitatorCalls.push('verify'); return Response.json({ isValid: true, payer: '0xabc' }); }
+      if (url.endsWith('/settle')) { facilitatorCalls.push('settle'); return Response.json({ success: true, transaction: '0xafter', network: 'eip155:72344', payer: '0xabc' }); }
+      return realFetch(input, init);
+    });
+    const payloadFor = async (path: string) => {
+      const pr = decodePaymentRequiredHeader((await fetch(`${base}${path}`)).headers.get('payment-required')!);
+      expect(pr.accepts[0].extra).not.toHaveProperty('paymentFlow');
+      return encodePaymentSignatureHeader({ x402Version: 2, resource: pr.resource, accepted: pr.accepts[0], payload: { signature: '0xsig', permit2Authorization: {} } });
+    };
+    try {
+      const paid = await fetch(`${base}/api/lookup`, { headers: { 'PAYMENT-SIGNATURE': await payloadFor('/api/lookup') } });
+      expect(paid.status).toBe(200);
+      expect(getPaymentReceipt(paid)?.transaction).toBe('0xafter');
+      expect(facilitatorCalls).toEqual(['verify', 'settle']);
+      expect(seen).toEqual(['0xafter']);
+
+      const failed = await fetch(`${base}/api/fail`, { headers: { 'PAYMENT-SIGNATURE': await payloadFor('/api/fail') } });
+      expect(failed.status).toBe(500);
+      // Verified but never settled: the handler failed first, so no funds moved.
+      expect(facilitatorCalls).toEqual(['verify', 'settle', 'verify']);
+      expect(seen).toEqual(['0xafter']);
     } finally {
       server.close();
     }

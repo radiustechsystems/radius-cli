@@ -73,6 +73,19 @@ export default {
 // or, with your own router: `pay(request, (request, payment) => router.handle(request))`
 ```
 
+**Validate, then pay.** With the default `settle: 'before'`, funds move before your handler runs,
+so anything the handler discovers afterwards (missing record, failed lookup) is a paid error.
+Do fallible work before calling `pay`, return the unpaid 404 there, and hand the prepared result
+to the paid handler. `examples/astro-seller` shows this in an Astro API route:
+
+```ts
+export const GET: APIRoute = async ({ request, params }) => {
+  const article = await loadArticle(params.slug);
+  if (!article) return new Response('Not found', { status: 404 });   // nothing charged
+  return pay(request, () => Response.json(article));                 // charge, then deliver
+};
+```
+
 **Hono** (`pnpm add hono`): the same options as middleware; dynamic `payTo`/`price` and
 `onSettled` receive the Hono context and paid handlers read `c.get('radiusPayment')`.
 
@@ -124,7 +137,10 @@ What you get, on the wire, with no Radius-specific client knowledge required:
   `PAYMENT-RESPONSE` header with the transaction hash.
 - The receipt in the handler (second argument / `c.get('radiusPayment')`), and `onSettled` for
   logging with every adapter: it receives the `Request` (web-standard handler), the Hono context,
-  or the x402 request context (`createRadiusServer`).
+  or the x402 request context (`createRadiusServer`). `onSettled` records settlement, not
+  delivery: in the default flow it fires before the handler, and errors it throws are logged, not
+  surfaced. Keep the receipt and the delivery outcome separately, and reconcile a paid 5xx (or an
+  uncertain 502) against the transaction before the buyer pays again.
 - `eip2612GasSponsoring` is declared only when the facilitator's `/supported` lists it
   (`gasSponsoring: true | false` overrides), so clients never send a permit nobody will honour.
 - No I/O at module scope (Workers-safe): the SDK's handlers fetch the facilitator's `/supported`
@@ -389,6 +405,7 @@ self-hosted facilitator with your own auth or routing.
 | `examples/worker-plain` | Worker with no framework, the web-standard handler: free `/`, paid `/api/lookup` and `/api/query` (`pnpm --filter radius-worker-plain dev`, port 8788) |
 | `examples/worker-seller` | Same API on Hono (`pnpm --filter radius-worker-seller dev`) |
 | `examples/express-seller` | Same API on Express through `@x402/express` (`pnpm --filter radius-express-seller start`, port 8789) |
+| `examples/astro-seller` | Astro API route: validate the article before charging, then deliver it paid (`pnpm --filter radius-astro-seller dev`, port 8790) |
 | `examples/agent-buyer` | `buy.mjs` (pay a URL), `fresh-wallet.mjs` (gasless proof from a new wallet), `permit2-pull.mjs` (sign a Permit2 transfer off-chain, pull it from another account) |
 | `examples/demo-dapp` | Test-dapp style page exercising both sides in the browser (burner wallet or MetaMask) |
 | `test/` | unit tests (facilitator and RPC mocked; `client-parity.test.ts` pins the wire format against radius-cli's; `balances.test.ts` runs the native-balance init code in a real EVM; `erc20.semantics.test.ts` runs the ERC-20 actions against `evmNode.ts`, a JSON-RPC node backed by @ethereumjs/evm executing the forge-compiled `fixtures/TestToken` (rebuild with `fixtures/build.sh` after editing the .sol; the artifact is committed because CI has no forge)); `test/e2e` real settlement, balance reconciliation and ERC-20 round trips on testnet or mainnet (`RADIUS_E2E=1 RADIUS_PRIVATE_KEY=… [RADIUS_NETWORK=mainnet] pnpm test:e2e`) |

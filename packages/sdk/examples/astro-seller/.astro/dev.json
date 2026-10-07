@@ -1,0 +1,14 @@
+{
+	"pid": 1653295,
+	"port": 8790,
+	"url": "http://localhost:8790",
+	"urls": {
+		"local": [
+			"http://localhost:8790/"
+		],
+		"network": [],
+		"networkInterfaceNames": []
+	},
+	"background": true,
+	"startedAt": "2026-10-07T08:54:03.841Z"
+}

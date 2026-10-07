@@ -74,6 +74,11 @@ export interface RadiusServerOptions extends NetworkOverrides {
    * Called once per settled payment, whichever adapter served the request. `context`
    * is the x402 request context; `requestOf(context)` gives the `Request` when the
    * SDK's own adapter handled it.
+   *
+   * Records settlement, not delivery: with `settle: 'before'` it fires before the handler
+   * runs, and the handler may still fail or return an error. Errors thrown here are logged
+   * by x402 core, not surfaced to the buyer. Persist the receipt and the delivery outcome
+   * separately so a paid 5xx (or an uncertain 502) can be reconciled before the buyer pays again.
    */
   onSettled?: (receipt: PaymentReceipt, context: HTTPRequestContext | undefined) => void | Promise<void>;
 }
@@ -342,7 +347,10 @@ export function createPaymentHandler(radius: RadiusServer, routes: RoutesConfig)
       return failure;
     }
 
-    const responseBody = new Uint8Array(await res.arrayBuffer());
+    // Settlement already happened in the 'before' flow: core only echoes its headers, so the
+    // handler's body streams through untouched. The 'after' flow settles on the finished
+    // response and needs the body in hand.
+    const responseBody = beforeHandlerSettlement ? undefined : new Uint8Array(await res.arrayBuffer());
     const responseHeaders: Record<string, string> = {};
     res.headers.forEach((v, k) => {
       responseHeaders[k] = v;
@@ -357,7 +365,7 @@ export function createPaymentHandler(radius: RadiusServer, routes: RoutesConfig)
         beforeHandlerSettlement,
       );
       if (!settleResult.success) return instructionsToResponse(settleResult.response);
-      const out = mutable(res, responseBody);
+      const out = mutable(res, responseBody ?? res.body);
       setHeaders(out, settleResult.headers);
       out.headers.set('Cache-Control', withPrivateCacheControl(out.headers.get('Cache-Control')));
       out.headers.delete(SETTLEMENT_OVERRIDES_HEADER);
