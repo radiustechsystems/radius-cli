@@ -1,5 +1,14 @@
 # radius-cli
 
+## 0.3.1
+
+### Patch Changes
+
+- Updated dependencies [23f73d6]
+- Updated dependencies [5a915b2]
+- Updated dependencies [bdd6d76]
+  - radius-sdk@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes
