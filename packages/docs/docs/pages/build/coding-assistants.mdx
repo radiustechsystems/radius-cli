@@ -1,0 +1,256 @@
+---
+title: Build with LLMs
+description: Use LLM workflows, Radius skills, and radius-cli to plan, build, validate, and troubleshoot Radius integrations faster.
+---
+
+import { TESTNET_RPC_URL } from '../../constants';
+
+# Build with LLMs [Use LLM workflows to integrate with Radius]
+
+Use this page to run faster, safer Radius development with LLM-assisted workflows. The goal is simple: give the model Radius-specific context, use the right execution tool for the job, and verify outputs before shipping.
+
+This page is about a development assistant helping you build. For an agent that pays for resources itself, see [set up an agent to pay](/build/make-payments/agents).
+
+## Why this works for Radius
+
+Radius docs and skills are available in Markdown-friendly formats, which makes them easy for LLM tools to parse and reason about.
+
+- Append `.md` to docs URLs when you need plain text context
+- Use `/llms.txt` for a compact index of key docs
+- Use `/llms-full.txt` for broader corpus-style ingestion
+- Use `/skills/radius-dev.md`, `/skills/dripping-faucet.md`, and `/skills/x402.md` when an agent needs durable operating instructions
+
+These formats reduce UI noise and preserve heading structure for better model responses.
+
+## Recommended agent stack
+
+| Layer                      | Use this                              | Why                                                                           |
+| -------------------------- | ------------------------------------- | ----------------------------------------------------------------------------- |
+| Radius context             | Docs markdown + Radius skills         | Keeps the model grounded in current Radius rules                              |
+| x402 payments in code      | [`radius-sdk`](/reference/radius-sdk) | `radiusPayments` to charge for routes, `createRadiusFetch` to pay             |
+| Local wallet and execution | [`radius-cli`](/reference/radius-cli) | Handles agent wallets, signing, balances, sends, reads, and x402 CLI requests |
+| Other chain access in code | viem                                  | Contract calls, RPC reads, and transactions outside x402                      |
+| React wallet UX            | wagmi + viem                          | Standard hooks for browser wallets                                            |
+| Smart contracts            | Foundry                               | Contract builds, tests, scripts, and deployments                              |
+
+Treat skills as guidance, and pick the tool by where the payment happens:
+
+- **x402 in TypeScript:** use `radius-sdk`. Ask the assistant for `radiusPayments` (Hono, including Cloudflare Workers) to charge for routes, and `createRadiusFetch` to pay. See [Accept payments](/build/accept-payments) and [Make payments](/build/make-payments).
+- **In a terminal or agent shell:** use `radius-cli`, for wallets and for paying x402 endpoints.
+- **Everything else on chain:** use viem.
+
+Do not ask an assistant to hand-build x402 headers, signatures, or Permit2 approvals; the SDK and CLI already do this. Build against the protocol directly only when neither fits, for example a server framework other than Hono or another language; see [x402 payments](/build/x402).
+
+## Setup checklist
+
+### 1) Install Radius skills for guidance
+
+### Claude Code
+
+```bash
+/plugin marketplace add radiustechsystems/radius-cli
+/plugin install radius-dev@radius-cli
+```
+
+The `radius-dev` plugin includes the `radius-dev`, `dripping-faucet`, and `x402` skills.
+
+### npx skills
+
+```bash
+npx skills add radiustechsystems/radius-cli
+```
+
+### Public flat files
+
+Agents can also read the generated skill references directly:
+
+- `https://docs.radiustech.xyz/skills/radius-dev.md`
+- `https://docs.radiustech.xyz/skills/dripping-faucet.md`
+- `https://docs.radiustech.xyz/skills/x402.md`
+
+### 2) Install and verify radius-cli
+
+```bash
+npx radius-cli --help
+```
+
+Or install globally:
+
+```bash
+npm install -g radius-cli
+command -v radius-cli
+radius-cli --help
+```
+
+Use `radius-cli` version `0.3.0` or later; `wallet x402` pays through `radius-sdk` from `0.2.0`. Verify that your installed binary exposes the x402 command:
+
+```bash
+radius-cli wallet x402 --help
+```
+
+### 3) Scope the agent wallet
+
+Use a project-scoped Radius home so test wallets do not leak across demos, repos, or agent runs:
+
+```bash
+export RADIUS_HOME=.radius
+export RADIUS_NETWORK=testnet
+
+radius-cli wallet address
+radius-cli wallet balance --json
+```
+
+:::warning
+Keep `.radius/` and `.env` out of git. Never paste, log, or pass raw private keys as CLI arguments.
+:::
+
+## Recommended workflow
+
+### 1) Prime the model with project constraints
+
+Start every session with the rules your integration must follow.
+
+Include at minimum:
+
+- Chain ID: `72344`
+- RPC URL: <code>{TESTNET_RPC_URL}</code>
+- Native fee token: `RUSD`
+- Stablecoin token: `SBC`
+- Tooling standards: **radius-sdk** for x402 payments in code, **radius-cli** for local wallet execution, **viem** for other chain access, **Foundry** for contracts, **pnpm** for package workflows
+
+Also include links or excerpts from:
+
+- `/reference/network`
+- `/reference/radius-sdk`
+- `/reference/radius-cli`
+- `/reference/fees`
+- `/reference/json-rpc/methods`
+- `/reference/ethereum-compatibility`
+- `/build/tooling`
+
+### 2) Ask for one scoped task at a time
+
+Avoid broad prompts like “build my app.” Use narrow prompts with explicit output shape.
+
+Good prompt pattern:
+
+- Task objective
+- Input context
+- Expected output format
+- Non-negotiable constraints
+
+Example scope:
+
+- “Create a `defineChain` config using Radius testnet values (chain ID 72344, RPC endpoint `{TESTNET_RPC_URL}`).”
+
+### 3) Require deterministic outputs
+
+Ask the model to return:
+
+- Exact file edits
+- Minimal diffs
+- Copy-paste-ready commands
+- Short rationale tied to Radius behavior differences
+
+This reduces rework and makes review faster.
+
+### 4) Validate every generated change
+
+Before merging:
+
+1. Run your type checks and tests.
+2. Verify app code uses Radius-compatible fee behavior.
+3. Confirm no Ethereum assumptions leak into block behavior logic.
+4. Confirm x402 code uses `radius-sdk` (`radiusPayments`, `createRadiusFetch`) and terminal or agent-shell payments use `radius-cli`, with no hand-built payment headers.
+
+## Fund wallets with the dripping-faucet skill
+
+Use the `dripping-faucet` skill to fund testnet wallets inside an agentic workflow. The skill should use `radius-cli` for the local wallet address, challenge signing, and balance verification.
+
+Claude Code prompt:
+
+```bash
+claude "Read docs.radiustech.xyz/skills/dripping-faucet.md and fund a local testnet wallet. Use RADIUS_HOME=.radius, RADIUS_NETWORK=testnet, and radius-cli for wallet address, signing, and balance checks."
+```
+
+The skill triggers on prompts like "fund my wallet", "get testnet tokens", "drip SBC", or "use the faucet".
+
+:::note[Testnet only]
+The `dripping-faucet` skill targets the testnet faucet API. There is no agentic faucet workflow for mainnet. For mainnet, use the [Dashboard](https://network.radiustech.xyz) to claim SBC, or [bridge stablecoins](/build/bridge) from Ethereum or Base.
+:::
+
+In code, `createRadiusFetch(...).fund()` from `radius-sdk/client` requests the same testnet drip for its signer; see [wallet helpers](/reference/radius-sdk#wallet-helpers). For the full API reference and programmatic examples, see [Fund a wallet](/build/wallet).
+
+## Consume x402 endpoints with radius-cli
+
+For an agent or terminal session, use `radius-cli wallet x402` instead of hand-building payment headers.
+
+```bash
+RADIUS_HOME=.radius RADIUS_NETWORK=testnet \
+  radius-cli wallet x402 get https://example.com/protected \
+  --x402-threshold 0.001 \
+  --json \
+  -y
+```
+
+`--x402-threshold` is in display units such as SBC, not raw 6-decimal integer units. Use it for non-interactive agent runs so the command refuses unexpectedly expensive requests.
+
+## Prompt templates you can reuse
+
+### Prepare the agent
+
+“Use Radius Testnet. Read `/reference/network.md`, `/reference/radius-sdk.md`, `/reference/radius-cli.md`, `/build/tooling.md`, and `/skills/radius-dev.md`. Use `radius-sdk` for x402 payments in code, `radius-cli` for local wallet operations, and viem for other chain access. Return a short plan before editing.”
+
+### Generate x402 code
+
+“Read `/build/accept-payments.md` and `/reference/radius-sdk.md`. Add `radiusPayments` from `radius-sdk/hono` to this Hono app so `GET /api/lookup` costs 0.001 SBC on testnet, paid to the address in `PAY_TO`. Do not hand-build x402 headers. Return the changed files and a curl command that shows the `402`.”
+
+### Generate integration code
+
+“Using viem, generate a Radius testnet chain config with `id: 72344` and RPC `https://rpc.testnet.radiustech.xyz`. No fee overrides are needed because viem estimates fees correctly with the Radius chain definition. Return only the final TypeScript file content.”
+
+### Audit an implementation
+
+“Review this transaction flow for Radius compatibility. Check fee configuration, JSON-RPC method assumptions, block-related logic, SBC decimal handling, and whether local wallet operations should use `radius-cli`. Return: (1) critical issues, (2) exact code changes, (3) a short validation checklist.”
+
+### Create and fund a testnet wallet
+
+“Read `https://docs.radiustech.xyz/skills/dripping-faucet.md`. Create or use a project-scoped testnet wallet with `RADIUS_HOME=.radius RADIUS_NETWORK=testnet radius-cli wallet address`, fund it from the testnet faucet, and verify the SBC balance with `radius-cli wallet balance --json`. Do not print private keys.”
+
+### Consume an x402 endpoint
+
+“Use `radius-cli wallet x402 get <URL>` with `RADIUS_HOME=.radius`, `RADIUS_NETWORK=testnet`, `--x402-threshold 0.001`, `--json`, and `-y`. Do not manually construct x402 headers unless `radius-cli` is unavailable.”
+
+### Create a migration plan
+
+“Migrate this ethers.js snippet to viem for Radius. Keep behavior identical. Return: (1) migration diff, (2) risks, (3) test plan.”
+
+## Common mistakes to avoid
+
+- Treating Radius like Ethereum for block semantics
+- Relying on external automatic fee defaults
+- Using Foundry or ad hoc scripts as the default agent wallet surface
+- Reusing one global wallet across unrelated agent demos
+- Passing raw private keys as CLI arguments
+- Mixing toolchains without a clear reason
+- Asking for large multi-feature output in one prompt
+- Accepting generated code without runtime validation
+
+## Practical tips
+
+- Keep a reusable “Radius context block” in your editor snippets.
+- Ask the model to cite the exact page section used for each decision.
+- Prefer iterative prompt loops: plan → patch → verify.
+- Store approved prompts with your project docs so the team reuses proven patterns.
+- Convert repeatable prompts into composable skills as they stabilize.
+- Revisit your installed skills periodically so your agent setup stays current as new skills become available.
+- Use `--json` for CLI output that another agent or script needs to parse.
+
+## Related pages
+
+- [Network and RPC](/reference/network)
+- [radius-cli](/reference/radius-cli)
+- [Fees](/reference/fees)
+- [JSON-RPC API](/reference/json-rpc/methods)
+- [Ethereum compatibility](/reference/ethereum-compatibility)
+- [Tooling configuration](/build/tooling)

@@ -1,0 +1,149 @@
+# =============================================================================
+# Cloudflare Pages redirect rules
+# Fixes soft 404s from legacy docs URL structure (pre-Vocs migration)
+# Ref: https://developers.cloudflare.com/pages/configuration/redirects/
+#
+# Rules are evaluated top-to-bottom, first match wins.
+# Specific paths MUST come before splat (*) catch-alls.
+# =============================================================================
+
+# --- Canonical markdown file URLs -------------------------------------------
+
+/*.md/                     /:splat.md                              301
+
+# --- Individual /reference paths with non-default destinations -------------
+
+/reference/eth_chainid      /reference/network  301
+
+# --- /how-to paths ---------------------------------------------------------
+
+/how-to/deploy-a-smart-contract  /build/                         301
+/how-to/subscribe-to-events      /reference/json-rpc/methods     301
+/how-to/get-testnet-tokens       /build/claim-and-transact       301
+/how-to                          /build/                         301
+/how-to/*                        /build/                         301
+
+# --- /quickstart paths -----------------------------------------------------
+
+/quickstart/python          /build/                              301
+/quickstart/*               /build/                              301
+
+# --- /concepts paths -------------------------------------------------------
+
+/concepts/ethereum-transaction-types  /reference/ethereum-compatibility  301
+/concepts/web3-libraries              /reference/json-rpc      301
+/concepts/*                           /reference/ethereum-compatibility  301
+
+# --- Old page URL redirect ------------------------------------------------
+
+/developer-resources/ethereum-divergence  /reference/ethereum-compatibility  301
+
+# --- Legacy top-level pages ------------------------------------------------
+
+/radius-testnet-access      /reference/network  301
+/radius-sdks                /reference/radius-sdk      301
+/radius-sdks/*              /reference/radius-sdk      301
+
+# --- Dead GitBook assets ---------------------------------------------------
+
+/~gitbook/*                 /                                           301
+
+# --- Skills: legacy top-level path → per-skill path ----------------------
+
+/skills.md                  /skills/radius-dev.md               301
+
+# --- Docs restructure (2026-10): Discover / Build / Reference ---------------
+
+/use-cases                  /build/                                     301
+/use-cases/                 /build/                                     301
+/use-cases/*                /build/examples/:splat                      301
+/differentiators/designed-for-internet-of-tomorrow      /architecture/execution-and-compatibility     301
+/differentiators/designed-for-internet-of-tomorrow/     /architecture/execution-and-compatibility/    301
+/differentiators/designed-for-internet-of-tomorrow.md   /architecture/execution-and-compatibility.md  301
+/differentiators/architected-for-scale                  /architecture/parallel-execution              301
+/differentiators/architected-for-scale/                 /architecture/parallel-execution/             301
+/differentiators/architected-for-scale.md               /architecture/parallel-execution.md           301
+/get-started                                            /build                                        301
+/get-started/                                           /build/                                       301
+/get-started.md                                         /build.md                                     301
+/accept-payments                                        /build/accept-payments                        301
+/accept-payments/                                       /build/accept-payments/                       301
+/accept-payments.md                                     /build/accept-payments.md                     301
+/get-started/bridge-stablecoins                         /build/bridge                                 301
+/get-started/bridge-stablecoins/                        /build/bridge/                                301
+/get-started/bridge-stablecoins.md                      /build/bridge.md                              301
+/get-started/claim-and-transact                         /build/claim-and-transact                     301
+/get-started/claim-and-transact/                        /build/claim-and-transact/                    301
+/get-started/claim-and-transact.md                      /build/claim-and-transact.md                  301
+/get-started/build-with-llms                            /build/coding-assistants                      301
+/get-started/build-with-llms/                           /build/coding-assistants/                     301
+/get-started/build-with-llms.md                         /build/coding-assistants.md                   301
+/dashboard                                              /build/dashboard                              301
+/dashboard/                                             /build/dashboard/                             301
+/dashboard.md                                           /build/dashboard.md                           301
+/make-payments                                          /build/make-payments                          301
+/make-payments/                                         /build/make-payments/                         301
+/make-payments.md                                       /build/make-payments.md                       301
+/developer-resources/tooling-configuration              /build/tooling                                301
+/developer-resources/tooling-configuration/             /build/tooling/                               301
+/developer-resources/tooling-configuration.md           /build/tooling.md                             301
+/get-started/create-and-fund-wallet                     /build/wallet                                 301
+/get-started/create-and-fund-wallet/                    /build/wallet/                                301
+/get-started/create-and-fund-wallet.md                  /build/wallet.md                              301
+/developer-resources/x402-integration                   /build/x402                                   301
+/developer-resources/x402-integration/                  /build/x402/                                  301
+/developer-resources/x402-integration.md                /build/x402.md                                301
+/developer-resources/contract-addresses                 /reference/contract-addresses                 301
+/developer-resources/contract-addresses/                /reference/contract-addresses/                301
+/developer-resources/contract-addresses.md              /reference/contract-addresses.md              301
+/developer-resources/ethereum-compatibility             /reference/ethereum-compatibility             301
+/developer-resources/ethereum-compatibility/            /reference/ethereum-compatibility/            301
+/developer-resources/ethereum-compatibility.md          /reference/ethereum-compatibility.md          301
+/developer-resources/x402-facilitator-api               /reference/facilitator-api                    301
+/developer-resources/x402-facilitator-api/              /reference/facilitator-api/                   301
+/developer-resources/x402-facilitator-api.md            /reference/facilitator-api.md                 301
+/developer-resources/fees                               /reference/fees                               301
+/developer-resources/fees/                              /reference/fees/                              301
+/developer-resources/fees.md                            /reference/fees.md                            301
+/developer-resources/json-rpc-overview                  /reference/json-rpc                           301
+/developer-resources/json-rpc-overview/                 /reference/json-rpc/                          301
+/developer-resources/json-rpc-overview.md               /reference/json-rpc.md                        301
+/developer-resources/json-rpc-api                       /reference/json-rpc/methods                   301
+/developer-resources/json-rpc-api/                      /reference/json-rpc/methods/                  301
+/developer-resources/json-rpc-api.md                    /reference/json-rpc/methods.md                301
+/developer-resources/network-configuration              /reference/network                            301
+/developer-resources/network-configuration/             /reference/network/                           301
+/developer-resources/network-configuration.md           /reference/network.md                         301
+/developer-resources/radius-cli                         /reference/radius-cli                         301
+/developer-resources/radius-cli/                        /reference/radius-cli/                        301
+/developer-resources/radius-cli.md                      /reference/radius-cli.md                      301
+/developer-resources/radius-sdk                         /reference/radius-sdk                         301
+/developer-resources/radius-sdk/                        /reference/radius-sdk/                        301
+/developer-resources/radius-sdk.md                      /reference/radius-sdk.md                      301
+
+# --- Retired llms/ essays (2026-10) ----------------------------------------
+
+/llms/about                                             /                                             301
+/llms/about/                                            /                                             301
+/llms/about.md                                          /index.md                                     301
+/llms/agentic-payment-stack                             /why-radius                                   301
+/llms/agentic-payment-stack/                            /why-radius/                                  301
+/llms/agentic-payment-stack.md                          /why-radius.md                                301
+/llms/monetize-for-agentic-internet                     /build/accept-payments                        301
+/llms/monetize-for-agentic-internet/                    /build/accept-payments/                       301
+/llms/monetize-for-agentic-internet.md                  /build/accept-payments.md                     301
+/llms/no-native-token                                   /reference/fees                               301
+/llms/no-native-token/                                  /reference/fees/                              301
+/llms/no-native-token.md                                /reference/fees.md                            301
+/llms/settlement-layer-comparison                       /why-radius                                   301
+/llms/settlement-layer-comparison/                      /why-radius/                                  301
+/llms/settlement-layer-comparison.md                    /why-radius.md                                301
+/llms/x402-integration-guide                            /build/x402                                   301
+/llms/x402-integration-guide/                           /build/x402/                                  301
+/llms/x402-integration-guide.md                         /build/x402.md                                301
+/llms/why-radius                                        /why-radius                                   301
+/llms/why-radius/                                       /why-radius/                                  301
+/llms/why-radius.md                                     /why-radius.md                                301
+/llms/radius-vs-blockchain                              /architecture                                 301
+/llms/radius-vs-blockchain/                             /architecture/                                301
+/llms/radius-vs-blockchain.md                           /architecture.md                              301

@@ -1,0 +1,68 @@
+---
+title: Fees
+description: Understand fixed gas pricing on Radius, average transaction costs, and how Turnstile conversion covers fees when accounts lack RUSD.
+---
+
+import { NATIVE_TOKEN, STABLECOIN, STABLECOIN_DECIMALS, NATIVE_TOKEN_DECIMALS, GAS_PRICE } from '../../constants';
+import { TransactionCost } from '../../components/TransactionCost';
+
+# Fees [Fixed gas pricing, transaction costs, and Turnstile conversion behavior]
+
+:::note
+**Token names used in this page:**
+
+- **{NATIVE_TOKEN}** is the native token and fee token on Radius.
+- **{STABLECOIN}** is an ERC-20 stablecoin used for transfers.
+- If an account has {STABLECOIN} but not enough {NATIVE_TOKEN} for gas, the Turnstile can convert {STABLECOIN} to {NATIVE_TOKEN} inline.
+  :::
+
+## Overview
+
+Radius uses fixed gas pricing with low, predictable fees. A standard ERC-20 stablecoin transfer costs about <TransactionCost /> on average.
+
+Fees are paid in {NATIVE_TOKEN}. If an account holds a convertible stablecoin such as {STABLECOIN}, Radius can automatically convert it inline through [the Turnstile](#turnstile) at a 1:1 value [^1].
+
+[^1]: {NATIVE_TOKEN} uses {NATIVE_TOKEN_DECIMALS} decimals, while {STABLECOIN} uses {STABLECOIN_DECIMALS}. For {STABLECOIN}, 10^{STABLECOIN_DECIMALS} base units map to 10^{NATIVE_TOKEN_DECIMALS} base units of {NATIVE_TOKEN} at the same face value.
+
+| Parameter                               | Value                                |
+| --------------------------------------- | ------------------------------------ |
+| Avg. stablecoin transfer cost           | <TransactionCost />                  |
+| Target {STABLECOIN} transfers per 1 USD | 10,000                               |
+| Gas price                               | {GAS_PRICE} {NATIVE_TOKEN}           |
+| Gas used (avg. transfer)                | <TransactionCost field="gas_used" /> |
+
+## Query gas price
+
+Use the standard `eth_gasPrice` RPC method to fetch the current fixed gas price:
+
+```bash
+curl -X POST https://rpc.testnet.radiustech.xyz \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_gasPrice","params":[],"id":1}'
+```
+
+**Example response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "0x3b9aca00"
+}
+```
+
+The `result` is the gas price in wei (hex-encoded). `0x3b9aca00` = 1,000,000,000 wei = 1 gwei.
+
+## Use with development tools
+
+Radius accepts both legacy and EIP-1559 fee fields, and standard fee estimation works out of the box — viem, ethers.js, and wagmi land transactions with no gas overrides. The main exception is Hardhat v2, which benefits from a `gasPrice` line in its network config. See [Tooling configuration](/build/tooling) for setup instructions covering Foundry, viem, wagmi, Hardhat, and ethers.js.
+
+## Turnstile
+
+If a sender has {STABLECOIN} but not enough {NATIVE_TOKEN} for gas, Radius runs an automatic, zero-fee inline conversion before executing the transaction [^2].
+
+[^2]: If the account also lacks sufficient convertible stablecoin balance, the transaction fails.
+
+One minimum conversion (0.01 {STABLECOIN} → 0.01 {NATIVE_TOKEN}) covers roughly 1,000 standard transfers.
+
+For the Turnstile mechanics (conversion limits, one-way behavior, balance methods, and RPC interactions), see [The Turnstile and balances](/reference/ethereum-compatibility#the-turnstile-and-balances).

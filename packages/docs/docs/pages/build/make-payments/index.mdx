@@ -1,0 +1,145 @@
+---
+title: Make payments
+description: Pay for x402-protected APIs and content on Radius from a TypeScript app or agent with radius-sdk, within spending limits you control.
+---
+
+import { STABLECOIN, NATIVE_TOKEN } from '../../../constants';
+
+# Make payments [Pay for x402 resources from an app or agent]
+
+This guide pays for [x402](/build/x402)-protected resources from TypeScript with [`radius-sdk`](/reference/radius-sdk). `createRadiusFetch` returns a `fetch` that pays `402 Payment Required` challenges in {STABLECOIN} and retries the request, within limits you set. To pay from a terminal or an agent's shell instead, see [Pay from a terminal](#pay-from-a-terminal).
+
+## Before you start
+
+- A wallet funded with {STABLECOIN}. On testnet, see [Create and fund a wallet](/build/wallet). The wallet needs no {NATIVE_TOKEN}.
+- Node.js 20 or later, or another runtime with `fetch`, such as Cloudflare Workers or a browser.
+
+## Install
+
+```bash
+pnpm add radius-sdk viem
+```
+
+## Create a paying fetch
+
+```typescript
+import { createRadiusFetch } from 'radius-sdk/client';
+
+const payFetch = createRadiusFetch({
+  network: 'testnet',
+  signer: process.env.RADIUS_PRIVATE_KEY as `0x${string}`,
+  maxPerRequest: '0.01 SBC',
+});
+
+const response = await payFetch('https://{{SELLER_HOST}}/api/lookup');
+console.log(response.status, await response.text());
+```
+
+`payFetch` takes the same arguments as `fetch`. Responses that are not `402` come back unchanged, so you can use it for every request to a paid API.
+
+`signer` accepts a private key, a viem account (for example from `privateKeyToAccount`), or a viem `WalletClient`, such as one connected to a browser wallet. Load private keys from a secret manager; never commit or log them.
+
+## Limit what you pay
+
+`maxPerRequest` is required. The client refuses any offer above it before signing, with the error code `price_above_limit`. It also pays only on the configured network and only in {STABLECOIN}.
+
+`maxPerRequest` limits each payment, not the total. To approve offers yourself, pass `onPaymentRequired`, which runs before anything is signed; return `false` to decline. This example accepts only one seller and enforces a total budget of 1 {STABLECOIN}:
+
+```typescript
+const budget = 1_000_000n; // 1 SBC in base units
+let committed = 0n;
+
+const payFetch = createRadiusFetch({
+  network: 'testnet',
+  signer: process.env.RADIUS_PRIVATE_KEY as `0x${string}`,
+  maxPerRequest: '0.01 SBC',
+  onPaymentRequired: (offer) => {
+    if (offer.payTo !== '0xSellerAddress') return false;
+    if (committed + BigInt(offer.amount) > budget) return false;
+    committed += BigInt(offer.amount);
+    return true;
+  },
+});
+```
+
+The offer also includes `amountFormatted`, `resource.url`, and `scheme`.
+
+## Handle payment errors
+
+The client throws a `RadiusPaymentError` when it does not pay. Its `code` says why:
+
+| Code                                 | Meaning                                                              |
+| ------------------------------------ | -------------------------------------------------------------------- |
+| `price_above_limit`                  | Every compatible offer costs more than `maxPerRequest`               |
+| `declined`                           | `onPaymentRequired` returned `false`                                 |
+| `network_mismatch`, `asset_mismatch` | The server wants a different network or token                        |
+| `unsupported_transfer_method`        | The server needs a transfer method other than `permit2` or `eip3009` |
+| `payment_rejected`                   | The server answered the paid retry with another `402`                |
+| `approval_required`                  | A Permit2 approval is needed and `permit2Approval` is `'never'`      |
+
+```typescript
+import { RadiusPaymentError } from 'radius-sdk/client';
+
+try {
+  const response = await payFetch('https://{{SELLER_HOST}}/api/lookup');
+} catch (error) {
+  if (!(error instanceof RadiusPaymentError)) throw error;
+  console.error(error.code, error.message);
+}
+```
+
+For `payment_rejected`, `error.details.response` holds the server's response. See the [reference](/reference/radius-sdk#errors) for every code.
+
+## Confirm the payment
+
+`getPaymentReceipt` decodes the seller's `PAYMENT-RESPONSE` header. It returns nothing for a free response:
+
+```typescript
+import { getPaymentReceipt } from 'radius-sdk/client';
+
+const receipt = getPaymentReceipt(response, payFetch.network);
+if (receipt) console.log(receipt.success, receipt.transaction, receipt.explorerUrl);
+```
+
+If a paid request fails or times out, check the chain before paying again. `payFetch.getSettlement(txHash)` returns the settlement's status and transfers, or `undefined` while the node does not know the transaction. Use `settlement.paid(to)` for the amount a recipient received: `transfers` can include unrelated transfers in the same transaction, such as the facilitator's fee conversion.
+
+### When the outcome is uncertain
+
+A timeout or HTTP `502` can mean the payment settled but its response was lost. Checking status, recovering delivery, and signing a new payment are different actions:
+
+- **Status unknown:** keep the request details and any transaction hash, and check it with `getSettlement`. `undefined` is not proof that the payment failed. Without a transaction hash, ask the seller or facilitator operator to check the attempt.
+- **Paid, but the resource did not arrive:** ask the seller to deliver the same purchase. Do not authorize another payment for it.
+- **Rejected or reverted:** check for earlier attempts that may still be pending, fix the cause, and only then pay again.
+
+Calling `payFetch` again signs a new payment, so do not retry a paid request automatically after an uncertain result. For the full policy, including when a retry or another facilitator is safe, see [recover from failed or uncertain payments](/build/x402#recover-from-failed-or-uncertain-payments).
+
+## Permit2 approval
+
+Payments on Radius use Permit2, which needs a one-time {STABLECOIN} approval. With the Radius facilitator, the approval is gas-sponsored: the client signs it together with the first payment, and no transaction is sent.
+
+With a facilitator that does not sponsor it, the client sends one unlimited approval from the signer before the first payment. Its gas comes from {STABLECOIN} through the Turnstile, so keep about 0.01 {STABLECOIN} spare. To control this, set `permit2Approval: 'never'` or pass `onApprovalRequired`. Every payment is still a separate signature capped to its amount.
+
+## Pay from a terminal
+
+For shell scripts and agents that run commands, [`radius-cli`](/reference/radius-cli#x402-endpoint-consumption) pays with the same client from a local keystore:
+
+```bash
+RADIUS_HOME=.radius RADIUS_NETWORK=testnet \
+  radius-cli wallet x402 get https://{{SELLER_HOST}}/api/lookup \
+  --x402-threshold 0.01 \
+  --json \
+  -y
+```
+
+`--x402-threshold` plays the role of `maxPerRequest`: with `-y`, the CLI refuses a more expensive offer instead of paying it.
+
+With `--json`, stdout is one object, `{status, headers, body, bodyEncoding, payment}`. Check `payment` as well as `status`: an HTTP success alone does not show that a payment settled. To run this from an agent, see [set up an agent to pay](/build/make-payments/agents).
+
+## Next steps
+
+- [Tutorial: buy a data lookup](/build/tutorials/buy-data) — Fund a wallet, pay, confirm, and give it to an agent
+- [Set up an agent to pay](/build/make-payments/agents) — Skills, a wallet, and spending limits for an agent
+- [radius-sdk reference](/reference/radius-sdk) — Every option for `createRadiusFetch`
+- [Accept payments](/build/accept-payments) — Charge for your own API routes
+- [Agent payments](/build/examples/agent-payments) — Payment patterns for autonomous agents
+- [`agent-buyer` example](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk/examples/agent-buyer) — Node scripts that pay a URL

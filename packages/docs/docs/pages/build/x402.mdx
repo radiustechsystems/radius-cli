@@ -1,0 +1,199 @@
+---
+title: x402 payments
+description: How x402 HTTP payments work on Radius — request lifecycle, the payment challenge, facilitators, and why SBC payments use Permit2.
+---
+
+import { RADIUS_FACILITATOR_MAINNET_URL, RADIUS_FACILITATOR_TESTNET_URL, MAINNET_CAIP2, TESTNET_CAIP2, X402_PERMIT2_PROXY, STABLECOIN } from '../../constants';
+
+# x402 payments [How x402 payments work on Radius]
+
+[x402](https://www.x402.org/) is an HTTP-native payment protocol for paid APIs and paid content.
+
+A protected endpoint returns `402 Payment Required` with payment requirements.
+The client signs payment data and retries with a `PAYMENT-SIGNATURE` header.
+A facilitator verifies and settles the payment on Radius.
+
+Radius is a strong fit for this model because fees are low and predictable.
+
+## Start with radius-sdk
+
+Use [`radius-sdk`](/reference/radius-sdk) when it fits your stack. It handles the challenge, signing, the Permit2 approval and its gas sponsoring, settlement through the Radius facilitator, and receipts, with {STABLECOIN} and the Radius network as defaults:
+
+- **[Accept payments](/build/accept-payments):** charge for routes in Workers, Hono, web-standard route handlers, or frameworks with an upstream x402 adapter.
+- **[Make payments](/build/make-payments):** pay from TypeScript in any runtime with `fetch`, including browsers. From a terminal or an agent shell, use [`radius-cli`](/reference/radius-cli).
+
+Build against the protocol directly only when the SDK does not fit, for example a service written in another language. `radius-sdk` speaks standard x402 v2, so any compliant x402 client can pay a `radius-sdk` endpoint, and `radius-sdk` can pay any x402 v2 endpoint on Radius. The rest of this page and the [facilitator API reference](/reference/facilitator-api) give the values a direct integration needs.
+
+## What you can build with x402
+
+- **[Per-request API billing](/build/examples/real-time-api-metering):** charge per call with immediate settlement
+- **[Content access](/build/examples/pay-per-visit-content):** charge for a single article, feed, or download
+- **[Streaming payments](/build/examples/streaming-payments):** combine x402 with recurring payment loops for compute and inference workloads
+
+## Request lifecycle
+
+1. Client requests a protected resource.
+2. Server responds with `402 Payment Required` and a `PAYMENT-REQUIRED` header listing the payments it accepts.
+3. Client signs a payment for one offer and retries with a `PAYMENT-SIGNATURE` header.
+4. Server sends the payment to a facilitator, which verifies it and settles it on Radius.
+5. Server returns the resource with a `PAYMENT-RESPONSE` header that carries the transaction hash.
+
+## The Radius payment challenge
+
+The `PAYMENT-REQUIRED` header holds a Base64-encoded JSON `PaymentRequired` object; the response body carries no protocol data. This is the decoded challenge `radius-sdk` sends for a 0.1 {STABLECOIN} route on mainnet, with the extension's JSON Schema omitted:
+
+```json
+{
+  "x402Version": 2,
+  "error": "Payment required",
+  "resource": {
+    "url": "https://api.example.com/premium/report",
+    "description": "Premium report",
+    "mimeType": ""
+  },
+  "accepts": [
+    {
+      "scheme": "exact",
+      "network": "eip155:723487",
+      "amount": "100000",
+      "asset": "0x33ad9e4BD16B69B5BFdED37D8B5D9fF9aba014Fb",
+      "payTo": "0x{{MERCHANT_ADDRESS}}",
+      "maxTimeoutSeconds": 300,
+      "extra": {
+        "assetTransferMethod": "permit2",
+        "name": "Stable Coin",
+        "version": "1",
+        "paymentFlow": "upfront"
+      }
+    }
+  ],
+  "extensions": {
+    "eip2612GasSponsoring": {
+      "info": { "description": "…", "version": "1" },
+      "schema": {}
+    }
+  }
+}
+```
+
+| Field                             | Meaning                                                                                                             |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `network`                         | CAIP-2 chain: <code>{MAINNET_CAIP2}</code> (mainnet) or <code>{TESTNET_CAIP2}</code> (testnet)                      |
+| `amount`                          | Base units; {STABLECOIN} has six decimals, so `"100000"` is 0.1 {STABLECOIN}                                        |
+| `extra.assetTransferMethod`       | `permit2`: the payer signs a Permit2 transfer, not a token-specific authorization                                   |
+| `extra.name`, `extra.version`     | The {STABLECOIN} EIP-712 domain, used to sign the gas-sponsoring permit                                             |
+| `extra.paymentFlow`               | Set by `radius-sdk`: `upfront` settles before the handler runs; a server-side hint that clients do not need to echo |
+| `extensions.eip2612GasSponsoring` | The facilitator accepts an EIP-2612 permit for Permit2, so a first-time payer needs no approval transaction         |
+
+The client answers with a `PAYMENT-SIGNATURE` header: a Base64-encoded `PaymentPayload` that echoes the chosen offer in `accepted` and carries a Permit2 `permitWitnessTransferFrom` signature. The spender is the canonical [`x402ExactPermit2Proxy`](/reference/contract-addresses#x402-contracts) (<code>{X402_PERMIT2_PROXY}</code>), which only transfers to the `payTo` address. When the payer has not approved Permit2 yet, the payload also carries the EIP-2612 permit under `extensions.eip2612GasSponsoring`. See the [x402 exact EVM scheme spec](https://github.com/coinbase/x402/blob/main/specs/schemes/exact/scheme_exact_evm.md) for every field, and the [x402 facilitator API](/reference/facilitator-api) for `/verify` and `/settle`.
+
+## Choose a facilitator
+
+### Radius (recommended)
+
+| Detail        | Value                                                                                 |
+| ------------- | ------------------------------------------------------------------------------------- |
+| URL (mainnet) | <code>{RADIUS_FACILITATOR_MAINNET_URL}</code>                                         |
+| URL (testnet) | <code>{RADIUS_FACILITATOR_TESTNET_URL}</code>                                         |
+| Networks      | Radius mainnet (<code>{MAINNET_CAIP2}</code>), testnet (<code>{TESTNET_CAIP2}</code>) |
+| Token         | {STABLECOIN} via Permit2 with EIP-2612 gas sponsoring                                 |
+| Protocol      | x402 v2                                                                               |
+| Operator      | Radius (first-party)                                                                  |
+
+The Radius facilitator settles each payment in one atomic call through the Permit2 proxy and pays all gas. It exposes `/supported`, `/verify`, `/settle`, and `/health`; it is the default in `radius-sdk`. Integrators do not need to know its settlement wallet addresses. Query the endpoint you plan to use before deployment:
+
+```bash
+curl https://facilitator.radiustech.xyz/supported
+curl https://facilitator.testnet.radiustech.xyz/supported
+```
+
+### Other facilitators
+
+| Facilitator                                                 | Networks            | Transfer method                     |
+| ----------------------------------------------------------- | ------------------- | ----------------------------------- |
+| [Stablecoin.xyz](https://docs.stablecoin.xyz/x402/overview) | Mainnet and testnet | `erc2612` (permit + `transferFrom`) |
+| [Middlebit](https://middlebit.com)                          | Mainnet             | Routes through Stablecoin.xyz       |
+
+`erc2612` is Stablecoin.xyz's own transfer method, not part of the x402 exact EVM scheme, which defines `eip3009` and `permit2`. `radius-sdk`, `radius-cli`, and other standard x402 clients cannot pay it; payers need a client that supports Stablecoin.xyz's format. They are therefore not failover targets for payments made with `radius-sdk` or `radius-cli`. See the [Stablecoin.xyz x402 documentation](https://docs.stablecoin.xyz/x402/overview) to integrate with it.
+
+To use your own facilitator with `radiusPayments`, pass `facilitator: { url, apiKey }` for one that serves the [x402 facilitator API](/reference/facilitator-api), or a `FacilitatorClient` from `@x402/core/server`.
+
+## SBC and transfer methods
+
+The token determines which x402 transfer methods are available:
+
+| Standard                                        | USDC (FiatTokenV2_2) | SBC (Radius native) | Integration impact                                         |
+| ----------------------------------------------- | -------------------: | ------------------: | ---------------------------------------------------------- |
+| EIP-2612 (`permit`)                             |                   ✅ |                  ✅ | Gasless approvals, used for Permit2 gas sponsoring         |
+| EIP-3009 (`transferWithAuthorization`)          |                   ✅ |                  ❌ | The `eip3009` transfer method is unavailable for SBC       |
+| EIP-1271 (contract-wallet signature validation) |                   ✅ |                  ❌ | Smart-account compatibility is reduced for signed payments |
+
+Because {STABLECOIN} has no EIP-3009, Radius payments use Permit2. The payer grants Permit2 an allowance once, through a gas-sponsored EIP-2612 permit or an approval transaction. After that, each payment is a separate Permit2 signature capped to its amount, settled in one transaction.
+
+## Check settlement and delivery
+
+`radius-sdk` performs these checks for you. If you verify payments yourself, check the payment against your own requirements before settling:
+
+- `scheme`, `network`, `asset`, and `payTo` match what you offered
+- `amount` is at least the price, in six-decimal base units
+- the signature is valid and the validity window has not expired
+
+After settlement, store the transaction hash with an idempotency key so a retried request does not charge twice. The `PAYMENT-RESPONSE` header carries the hash; to reconcile a payment on-chain, use `getSettlement(radiusTestnet, txHash)` (or `radiusMainnet`) from `radius-sdk/client`.
+
+With settle-before-handler (the `radius-sdk` default), a payment can succeed while the resource fails to deliver. Log the transaction hash with the failure so you can serve the resource again or refund.
+
+## Recover from failed or uncertain payments
+
+One rule applies to buyers and sellers: **before authorizing another payment, find out whether the first one settled.** Checking status, delivering a paid resource again, and signing a new payment are different actions.
+
+| What happened                                                                            | Did money move? | Safe next step                                                               |
+| ---------------------------------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------------- |
+| The paid retry got a new `402` (`payment_rejected`), or verification failed              | No              | Fix the cause, then sign a new payment                                       |
+| The facilitator was unreachable before settlement was requested (the seller can tell)    | No              | Retry; another facilitator is fine if it supports the same scheme and method |
+| The facilitator failed or timed out during settlement; the buyer sees `502` or a timeout | Maybe           | Check status before anything else                                            |
+| The payment settled but the resource did not arrive                                      | Yes             | Deliver the same purchase again; do not charge again                         |
+
+`radiusPayments` answers `502` with `facilitator_error` when the facilitator fails or cannot be reached, at verification or settlement, so a buyer must treat a `502` as uncertain. A definite settlement failure is a `402`.
+
+**Check status**
+
+- With a transaction hash, from the `PAYMENT-RESPONSE` header or the seller's logs: `getSettlement(radiusTestnet, txHash)` (or `radiusMainnet`) from `radius-sdk/client`. `undefined` means the node does not know the transaction yet, not that it failed.
+- Without one: the seller can check whether the payment's Permit2 nonce has been used, with `isPermit2NonceUsed(client, { owner, nonce })` from `radius-sdk/client` (or the `permit2Actions()` action). `owner` and `nonce` are `payload.permit2Authorization.from` and `.nonce` in the base64 JSON of the request's `PAYMENT-SIGNATURE` header; `radiusPayments` does not pass them to the handler, so log the header if you need this check. Until the authorization's deadline passes, an unused nonce can still be settled; after it, an unused nonce means the payment did not settle. The buyer can ask the seller.
+
+**Retry or pay again**
+
+- Submitting the **same** signed payment again cannot charge twice: each Permit2 nonce can be used once.
+- Signing a **new** payment while the first is uncertain can charge twice. Calling the `payFetch` from `createRadiusFetch` or `radius-cli wallet x402` again signs a new payment.
+- Switch facilitators only to one that supports the same scheme and transfer method (`exact` with `permit2` on Radius). Today that is the Radius facilitator; the [other facilitators](#other-facilitators) are not substitutes for `radius-sdk` payments.
+
+## Troubleshooting
+
+### "No available wallets in pool"
+
+This error from the facilitator `/settle` endpoint means the facilitator's internal pool of settlement wallets is temporarily exhausted. This is a facilitator operational issue, not a client-side or payer-wallet problem.
+
+Retry after a brief delay (1-2 seconds). If persistent, contact the facilitator operator.
+
+### 502 from facilitator
+
+The facilitator failed or could not be reached. During settlement the payment may still have settled, so check before paying again; see [recover from failed or uncertain payments](#recover-from-failed-or-uncertain-payments).
+
+### "Permit expired"
+
+The `validBefore` or `deadline` timestamp in the payment authorization has passed. The paying client needs to re-sign with a fresh deadline.
+
+### Client refuses to pay
+
+`radius-sdk` and `radius-cli` refuse offers before signing when the network, asset, or transfer method does not match, or the price is above the cap. The SDK's `RadiusPaymentError.code` names the reason, for example `network_mismatch`, `asset_mismatch`, `unsupported_transfer_method`, or `price_above_limit`.
+
+## Related pages
+
+- [Accept payments](/build/accept-payments)
+- [Make payments](/build/make-payments)
+- [radius-sdk reference](/reference/radius-sdk)
+- [radius-cli](/reference/radius-cli)
+- [x402 facilitator API](/reference/facilitator-api)
+- [Contract addresses](/reference/contract-addresses)
+- [Agent payments](/build/examples/agent-payments)
+- [Example projects](/build/examples/workshop-playground)
+- [Network and RPC](/reference/network)

@@ -1,0 +1,25 @@
+---
+title: CDNs and edge platforms
+description: Evaluate payment enforcement at the edge for customer APIs and content.
+---
+
+# CDNs and edge platforms [Paid access at the edge]
+
+For a CDN or edge platform, Radius offers a payment integration to evaluate alongside request routing and access control. A customer can define a price for an API response or content resource, while an edge handler checks payment before serving it.
+
+## Example payment flow
+
+A data provider publishes a paid endpoint behind your edge service. An agent requests a result, receives payment requirements, pays, and receives the result after settlement.
+
+## Plan your integration
+
+- Decide whether payment is enforced at the edge or the origin, including how direct origin access is controlled.
+- Define how cached resources remain subject to payment and how access is scoped to the buyer.
+- Separate customer configuration, recipient wallets, and payment records.
+- Measure the added request latency and define behavior during payment-service failures.
+
+## Evaluate with Radius
+
+[Accept payments](/build/accept-payments) builds a paid Cloudflare Worker endpoint. Use it to evaluate one endpoint before expanding to platform-wide merchant configuration.
+
+[Contact Radius](https://www.radiustech.xyz/contact) to discuss your requirements.

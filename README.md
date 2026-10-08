@@ -1,11 +1,12 @@
 # radius
 
-Tools for the [Radius Network](https://radiustech.xyz), managed as one pnpm workspace.
+Tools and developer docs for the [Radius Network](https://radiustech.xyz), managed as one pnpm workspace.
 
 | Package | What |
 | --- | --- |
 | [`packages/cli`](./packages/cli) | [`radius-cli`](https://www.npmjs.com/package/radius-cli) — CLI wallet for Radius, modeled on Foundry's `cast`; `wallet x402` pays through `radius-sdk` |
 | [`packages/sdk`](./packages/sdk) | [`radius-sdk`](https://www.npmjs.com/package/radius-sdk) — accept and make Radius payments over x402 v2 from any web-standard runtime, Hono, or the upstream x402 framework adapters (Express, Next.js), plus balance and settlement helpers |
+| [`packages/docs`](./packages/docs) | Source of [docs.radiustech.xyz](https://docs.radiustech.xyz) (Vocs on a Cloudflare Worker); private, never published to npm |
 
 ```bash
 npx radius-cli wallet balance     # the CLI
@@ -79,7 +80,7 @@ pnpm --filter radius-cli build        # one package
 node packages/cli/dist/index.js --help
 ```
 
-Requires Node ≥ 22 and pnpm 10 (`corepack enable pnpm`); `.node-version` pins Node 24 for local development. `pnpm build` / `pnpm test` / `pnpm typecheck` at the root run every package in dependency order. Building or typechecking the CLI on its own also works from a fresh clone: `packages/cli` is a TypeScript project reference to `packages/sdk`, so `tsc -b` rebuilds the SDK whenever its source is newer than its `dist`; the CLI's tests read the SDK from source.
+Requires Node ≥ 22 and pnpm 10 (`corepack enable pnpm`); `.node-version` pins Node 24 for local development, and the docs need Node ≥ 22.15. `pnpm build` / `pnpm test` / `pnpm typecheck` at the root run the npm packages in dependency order; the docs have their own commands and CI ([`packages/docs/README.md`](packages/docs/README.md)). Building or typechecking the CLI on its own also works from a fresh clone: `packages/cli` is a TypeScript project reference to `packages/sdk`, so `tsc -b` rebuilds the SDK whenever its source is newer than its `dist`; the CLI's tests read the SDK from source.
 
 Every PR that changes `packages/cli` or `packages/sdk` adds a [changeset](.changeset/README.md) (`pnpm changeset`); the `changeset` GitHub check enforces it, and a bot comment on the PR lists what will be released. CI (`.github/workflows/ci.yml`) builds, typechecks and tests every package on Node 22 and 24.
 
@@ -89,6 +90,7 @@ Releases are automated with [changesets/action](https://github.com/changesets/ac
 
 1. Merging PRs that carry changesets to `main` opens or refreshes a **Version Packages** PR (branch `changeset-release/main`). It applies the pending changesets: version bumps and `CHANGELOG.md` entries, with `radius-cli` given at least a patch bump whenever `radius-sdk` moves (`updateInternalDependencies: "patch"`), so every SDK release ships a CLI built against it. Review it like any other PR; it keeps updating as more changesets land.
 2. Merging the Version Packages PR builds, tests and packs the bumped packages, publishes them to npm in dependency order (SDK before CLI), pushes a `<name>@<version>` git tag for each, and creates a GitHub Release from the changelog.
+3. After the publish, the docs deploy to production (`.github/workflows/docs-deploy.yml`), so docs written alongside a change go live with it. Docs-only releases run that workflow by hand; it refuses while package changesets are pending. See [`packages/docs/README.md`](packages/docs/README.md#hosting-and-releases).
 
 Publishing uses [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers): the `publish` job authenticates with a short-lived GitHub OIDC token, no `NPM_TOKEN` secret exists, and npm attaches provenance attestations automatically. Only that job has `id-token: write`.
 
@@ -96,6 +98,7 @@ One-time setup (repeat the npm step for every new package):
 
 - On npmjs.com, for `radius-cli` and `radius-sdk`: **Settings → Trusted Publisher → GitHub Actions**, organization `radiustechsystems`, repository `radius-cli`, workflow filename `release.yml`, environment blank (or `npm` if you enable the `environment:` line in the publish job). Once a trusted publish succeeds, set **Publishing access** to *Require two-factor authentication and disallow tokens* so tokens can no longer publish.
 - On GitHub, **Settings → Actions → General → Workflow permissions**: tick *Allow GitHub Actions to create and approve pull requests* (needed to open the Version Packages PR) and choose *Read repository contents and packages permissions* (every workflow declares the permissions it needs). If the option is greyed out, enable it for the organization first.
+- For the docs: Actions secrets `CLOUDFLARE_API_TOKEN` (Workers Scripts edit, for the account that owns `docs.radiustech.xyz`) and `CLOUDFLARE_ACCOUNT_ID`. The `docs-production` environment is created on first deploy; add required reviewers there to gate docs deploys.
 - Optional: mark the `changeset`, `Node 22` and `Node 24` checks as required in the `main` branch ruleset.
 
 Manual fallback: `pnpm version-packages`, merge, then `pnpm release` publishes with `changeset publish`. Each package can also publish from its own directory (`pnpm publish` inside `packages/<name>`); the CLI's `prepublishOnly` refuses to publish until the SDK version it depends on is on npm. Note that `pnpm pack`/tarball publishing in CI does not run `prepublishOnly`, which is why the release workflow builds explicitly and relies on changesets' dependency ordering instead.

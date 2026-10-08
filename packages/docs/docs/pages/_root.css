@@ -1,0 +1,577 @@
+/* Radius Documentation Global Styles
+ * Vocs 2 loads this file automatically (docs/pages/_root.css).
+ * Theme tokens: https://vocs.dev/features/theming#css-variables
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&display=swap');
+
+@font-face {
+  font-family: 'Mona Sans';
+  src:
+    url('https://cdn.jsdelivr.net/npm/mona-sans@1.0.0/Mona-Sans.woff2') format('woff2 supports variations'),
+    url('https://cdn.jsdelivr.net/npm/mona-sans@1.0.0/Mona-Sans.woff2') format('woff2-variations');
+  font-weight: 200 900;
+  font-stretch: 75% 125%;
+  font-display: swap;
+  font-style: normal;
+}
+
+/* ---------------------------------------------------------------------------
+ * Design tokens (light). Dark overrides follow the document color-scheme.
+ * ------------------------------------------------------------------------- */
+:root {
+  --vocs-font-family: 'Instrument Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --vocs-font-family-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+
+  /* Backgrounds */
+  --vocs-background-color-primary: #ffffff;
+  --vocs-background-color-surface: #f5f5f5;
+  --vocs-background-color-surfaceMuted: #eeeeee;
+  --vocs-background-color-surfaceTint: #f5f5f5;
+
+  /* Text */
+  --vocs-text-color-primary: #1f1f25;
+  --vocs-text-color-secondary: #4c4c4c;
+  --vocs-text-color-muted: #757575;
+  --vocs-text-color-heading: #1f1f25;
+  --vocs-text-color-link: #eb6359; /* Prosperous Red */
+  --vocs-text-color-link-hover: #d94a42;
+
+  /* Borders */
+  --vocs-border-color-primary: #e0e0e0;
+  --vocs-border-color-secondary: #d0d0d0;
+
+  /* Semantic colors from the design system */
+  --vocs-color-info: #3b82f6;
+  --vocs-color-info-hover: #2563eb;
+  --vocs-background-color-info-tint: #eff6ff;
+  --vocs-border-color-info-tint: #93c5fd;
+
+  --vocs-color-warning: #f59e0b;
+  --vocs-color-warning-hover: #d97706;
+  --vocs-background-color-warning-tint: #fffbeb;
+  --vocs-border-color-warning-tint: #fdde7b;
+
+  --vocs-color-destructive: #ef4444;
+  --vocs-color-destructive-hover: #dc2626;
+  --vocs-color-destructive-tint: #fee2e2;
+  --vocs-border-color-destructive-tint: #f87171;
+
+  --vocs-color-success: #10b981;
+  --vocs-color-success-hover: #059669;
+  --vocs-background-color-success-tint: #e6f7f5;
+  --vocs-border-color-success-tint: #a7e8e1;
+
+  /* Line heights optimized for readability */
+  --vocs-leading-h1: 1.4;
+  --vocs-leading-h2: 1.4;
+  --vocs-leading-h3: 1.4;
+  --vocs-leading-p: 1.8;
+  --vocs-leading-li: 1.6;
+  --vocs-leading-code: 1.75;
+}
+
+:root[style*='color-scheme:dark'],
+:root[style*='color-scheme: dark'] {
+  /* Executive Deep (#1F1F25) backgrounds */
+  --vocs-background-color-primary: #1f1f25;
+  --vocs-background-color-surface: #2d2c31;
+  --vocs-background-color-surfaceMuted: #3a3942;
+  --vocs-background-color-surfaceTint: #2d2c31;
+
+  /* Foundation Stone (#E2DDD9) text */
+  --vocs-text-color-primary: #e2ddd9;
+  --vocs-text-color-secondary: #c9c5c0;
+  --vocs-text-color-muted: #a8a39e;
+  --vocs-text-color-heading: #f5f3f0;
+  --vocs-text-color-link: #ff8f88;
+  --vocs-text-color-link-hover: #ffb0a8;
+
+  --vocs-border-color-primary: #3a3942;
+  --vocs-border-color-secondary: #4a4954;
+
+  --vocs-color-info: #93c5fd;
+  --vocs-color-info-hover: #bfdbfe;
+  --vocs-background-color-info-tint: #0c1e3e;
+  --vocs-border-color-info-tint: #93c5fd;
+
+  --vocs-color-warning: #fbbf24;
+  --vocs-color-warning-hover: #fcd34d;
+  --vocs-background-color-warning-tint: #44330e;
+  --vocs-border-color-warning-tint: #fbbf24;
+
+  --vocs-color-destructive: #fca5a5;
+  --vocs-color-destructive-hover: #fecaca;
+  --vocs-color-destructive-tint: #442020;
+  --vocs-border-color-destructive-tint: #fca5a5;
+
+  --vocs-color-success: #4eccc3;
+  --vocs-color-success-hover: #7eddd6;
+  --vocs-background-color-success-tint: #0f443e;
+  --vocs-border-color-success-tint: #4eccc3;
+}
+
+/* Mona Sans for H1 headings - matches design system typography */
+h1 {
+  font-family: 'Mona Sans', system-ui, sans-serif !important;
+  font-weight: 700 !important;
+  letter-spacing: 0 !important;
+}
+
+/* ---------------------------------------------------------------------------
+ * Reading surface, headings, inline code, sidebar groups (as in Vocs 1 site)
+ * ------------------------------------------------------------------------- */
+
+/* Vocs 2 paints the content area in the surface color: a fixed panel on
+ * desktop, the whole document on mobile. Keep the page color so cards and
+ * code blocks stand out from the page. */
+:root[data-vocs],
+[data-v-surface-bg] {
+  background-color: var(--vocs-background-color-primary);
+}
+
+[data-v-content] :is(h2, h3, h4) {
+  font-weight: 600;
+}
+
+/* Inline code only; code blocks are `pre > code`. */
+[data-v-content] :not(pre) > code {
+  color: #eb6359;
+  background-color: var(--vocs-background-color-surface);
+}
+
+/* Divider above each top-level sidebar group. */
+[data-v-sidebar] > [data-v-sidebar-section] {
+  border-top: 1px solid var(--vocs-border-color-primary);
+  padding-top: 0.75rem;
+}
+
+/* Label the mobile menu button, which Vocs 2 renders icon-only. */
+button[aria-haspopup][aria-label='Open menu'],
+button[aria-haspopup][aria-label='Close menu'] {
+  width: auto;
+  gap: 0.375rem;
+  padding: 0 0.5rem;
+}
+
+button[aria-haspopup][aria-label='Open menu']::before,
+button[aria-haspopup][aria-label='Close menu']::before {
+  content: 'Menu';
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+/* Vocs 2's floating "Ask AI" bar is fixed over the page and covers content, and
+ * its "Copy page for AI" button (outline rail, or page bottom on narrow screens)
+ * duplicates PageActions below the title. */
+[data-v-ask-ai-container],
+[data-v-copy-for-ai] {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * PageActions (docs/components/PageActions.tsx), below each page title
+ * ------------------------------------------------------------------------- */
+/* Title, subtitle, actions, then the divider (Vocs draws it under the title). */
+[data-v-content] > :has(+ .page-actions) {
+  margin-bottom: 1rem;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--vocs-border-color-primary);
+  color: var(--vocs-text-color-secondary);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.page-actions__button,
+.page-actions__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  font: inherit;
+}
+
+.page-actions__button {
+  padding-left: 1rem;
+  border-left: 1px solid var(--vocs-border-color-primary);
+}
+
+.page-actions__button:hover,
+.page-actions__link:hover {
+  color: var(--vocs-text-color-link);
+}
+
+/* ---------------------------------------------------------------------------
+ * Area switcher (docs/components/AreaSwitcher.tsx), top of the desktop sidebar
+ * ------------------------------------------------------------------------- */
+/* Keep it visible when the sidebar scrolls to a deep page. */
+[data-v-sidebar-header] {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 0.75rem 0;
+  background-color: var(--vocs-background-color-primary);
+}
+
+.area-switcher {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border: 1px solid var(--vocs-border-color-primary);
+  border-radius: 0.5rem;
+  background-color: var(--vocs-background-color-surface);
+}
+
+.area-switcher__link {
+  flex: 1;
+  padding: 0.375rem 0.5rem;
+  border-radius: 0.375rem;
+  color: var(--vocs-text-color-secondary);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  text-align: center;
+  text-decoration: none;
+}
+
+.area-switcher__link:hover {
+  color: var(--vocs-text-color-heading);
+}
+
+.area-switcher__link[aria-current='true'] {
+  background-color: var(--vocs-background-color-primary);
+  color: var(--vocs-text-color-link);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+/* Hide "Last updated" timestamp from page footers */
+[data-v-last-updated] {
+  display: none !important;
+}
+
+/* ---------------------------------------------------------------------------
+ * Card links (FeatureCards, GetStartedRow)
+ * ------------------------------------------------------------------------- */
+.a11y-card-link {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  padding: 1.5rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--vocs-border-color-primary);
+  border-left: 3px solid #eb6359;
+  background-color: var(--vocs-background-color-surface);
+  color: inherit;
+  text-decoration: none;
+  transition:
+    transform 0.2s ease-in-out,
+    box-shadow 0.2s ease-in-out,
+    background-color 0.2s ease-in-out,
+    border-color 0.2s ease-in-out;
+}
+
+.a11y-card-link:hover {
+  background-color: var(--vocs-background-color-surfaceMuted);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(235, 99, 89, 0.1);
+}
+
+.a11y-card-link--get-started {
+  padding: 2rem 1.5rem;
+  border-left-width: 1px;
+  border-radius: 0.75rem;
+  transition:
+    transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.a11y-card-link--get-started:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px rgba(235, 99, 89, 0.15);
+  border-color: #eb6359;
+}
+
+.a11y-card-link__companies img {
+  width: 20px;
+  height: 20px;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+.a11y-card-link__companies img:hover {
+  opacity: 1;
+}
+
+.a11y-card-link:focus-visible,
+footer a:focus-visible {
+  outline: 2px solid #eb6359;
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .a11y-card-link,
+  .a11y-card-link:hover,
+  .a11y-card-link--get-started,
+  .a11y-card-link--get-started:hover,
+  img {
+    transition: none !important;
+    transform: none !important;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Interactive "Try Radius" components (docs/components/try/)
+ * ------------------------------------------------------------------------- */
+.try-card {
+  margin: 1.5rem 0;
+  border: 1px solid var(--vocs-border-color-primary);
+  border-radius: 8px;
+  background: var(--vocs-background-color-primary);
+  overflow: hidden;
+}
+
+.try-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.625rem 1rem;
+  border-bottom: 1px solid var(--vocs-border-color-primary);
+  background: var(--vocs-background-color-surface);
+}
+
+.try-card__title {
+  font-weight: 600;
+  color: var(--vocs-text-color-heading);
+}
+
+.try-card__badge {
+  font-size: 0.75rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--vocs-border-color-secondary);
+  color: var(--vocs-text-color-muted);
+}
+
+.try-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  padding: 1rem;
+  font-size: 0.9375rem;
+}
+
+.try-card__body > * {
+  margin: 0;
+}
+
+.try-card a {
+  color: var(--vocs-text-color-link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.try-card a:hover {
+  color: var(--vocs-text-color-link-hover);
+}
+
+.try-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.try-button {
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  padding: 0.4375rem 0.875rem;
+  border-radius: 6px;
+  border: 1px solid var(--vocs-border-color-secondary);
+  background: var(--vocs-background-color-primary);
+  color: var(--vocs-text-color-primary);
+  cursor: pointer;
+}
+
+.try-button:hover:not(:disabled) {
+  background: var(--vocs-background-color-surface);
+}
+
+.try-button--primary {
+  border-color: var(--vocs-text-color-link-hover);
+  background: var(--vocs-text-color-link-hover);
+  color: var(--vocs-background-color-primary);
+}
+
+.try-button--primary:hover:not(:disabled) {
+  border-color: var(--vocs-text-color-link);
+  background: var(--vocs-text-color-link);
+}
+
+.try-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.try-button:focus-visible,
+.try-input:focus-visible {
+  outline: 2px solid var(--vocs-color-info);
+  outline-offset: 2px;
+}
+
+.try-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.75rem;
+}
+
+.try-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8125rem;
+  color: var(--vocs-text-color-secondary);
+}
+
+.try-input {
+  font: inherit;
+  font-size: 0.875rem;
+  padding: 0.4375rem 0.625rem;
+  border-radius: 6px;
+  border: 1px solid var(--vocs-border-color-secondary);
+  background: var(--vocs-background-color-primary);
+  color: var(--vocs-text-color-primary);
+  min-width: 0;
+}
+
+.try-mono {
+  font-family: var(--vocs-font-family-mono);
+  font-size: 0.8125rem;
+}
+
+.try-facts {
+  display: grid;
+  gap: 0.375rem;
+  margin: 0;
+}
+
+.try-facts__row {
+  display: grid;
+  grid-template-columns: minmax(7rem, 11rem) 1fr;
+  gap: 0.75rem;
+}
+
+.try-facts dt {
+  color: var(--vocs-text-color-muted);
+}
+
+.try-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.try-message {
+  color: var(--vocs-text-color-secondary);
+}
+
+.try-message--ok {
+  color: var(--vocs-text-color-primary);
+}
+
+.try-message--warn {
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  background: var(--vocs-background-color-warning-tint);
+  color: var(--vocs-text-color-primary);
+}
+
+.try-message--error {
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  background: var(--vocs-color-destructive-tint);
+  color: var(--vocs-text-color-primary);
+  overflow-wrap: anywhere;
+}
+
+.try-result {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding-top: 0.875rem;
+  border-top: 1px solid var(--vocs-border-color-primary);
+}
+
+.try-result > * {
+  margin: 0;
+}
+
+.try-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.try-steps__time {
+  display: inline-block;
+  min-width: 4.5rem;
+  font-family: var(--vocs-font-family-mono);
+  font-size: 0.8125rem;
+  color: var(--vocs-text-color-muted);
+}
+
+.try-raw summary {
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: var(--vocs-text-color-secondary);
+}
+
+.try-raw pre {
+  margin: 0.5rem 0 0;
+  padding: 0.75rem;
+  max-height: 22rem;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--vocs-background-color-surface);
+  font-size: 0.8125rem;
+}
+
+.try-raw > .try-message,
+.try-raw > .try-actions {
+  margin-top: 0.5rem;
+}
+
+.try-key {
+  margin: 0.5rem 0 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  background: var(--vocs-background-color-surface);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 640px) {
+  .try-facts__row {
+    grid-template-columns: 1fr;
+    gap: 0.125rem;
+  }
+}

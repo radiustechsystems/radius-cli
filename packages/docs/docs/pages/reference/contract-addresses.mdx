@@ -1,0 +1,73 @@
+---
+title: Contract addresses
+description: Find core and utility contract addresses for Radius Testnet and Radius Network, including stablecoin and infrastructure contracts.
+---
+
+import { FEE_CONTRACT, STABLECOIN } from '../../constants';
+
+# Contract addresses [Core and utility contract references]
+
+Use this page as a quick reference for deployed contracts on Radius Testnet and Radius Network (mainnet).
+All addresses are checksummed and copy-paste ready.
+
+## Core contract
+
+### {STABLECOIN} token contract
+
+The {STABLECOIN} contract is the stablecoin used for transfers and gas-fee conversion behavior on Radius.
+
+- **Contract address:** <code>{FEE_CONTRACT}</code>
+
+## Utility contracts
+
+These utility contracts are commonly used across tooling and app integrations.
+
+### Testnet
+
+| Contract                                                                                                                           | Address                                      | Why you use it                                                                                    |
+| ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| [Arachnid Create2 Factory (deterministic deployment proxy repository)](https://github.com/Arachnid/deterministic-deployment-proxy) | `0x4e59b44847b379578588920cA78FbF26c0B4956C` | Deploy contracts to deterministic addresses with CREATE2.                                         |
+| [CreateX deployment framework repository](https://github.com/pcaversaccio/createx)                                                 | `0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed` | Use advanced CREATE/CREATE2/CREATE3 deployment patterns.                                          |
+| [Multicall3 repository](https://github.com/mds1/multicall)                                                                         | `0xcA11bde05977b3631167028862bE2a173976CA11` | Batch multiple read calls into one RPC request.                                                   |
+| [Uniswap Permit2 repository](https://github.com/Uniswap/permit2)                                                                   | `0x000000000022D473030F116dDEE9F6B43aC78BA3` | Support signature-based approvals and transfer flows. Required for Permit2-based x402 settlement. |
+
+### Mainnet
+
+| Contract                                                                                                                           | Address                                      | Why you use it                                                                                    |
+| ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| [Arachnid Create2 Factory (deterministic deployment proxy repository)](https://github.com/Arachnid/deterministic-deployment-proxy) | `0x4e59b44847b379578588920cA78FbF26c0B4956C` | Deploy contracts to deterministic addresses with CREATE2.                                         |
+| [Uniswap Permit2 repository](https://github.com/Uniswap/permit2)                                                                   | `0x000000000022D473030F116dDEE9F6B43aC78BA3` | Support signature-based approvals and transfer flows. Required for Permit2-based x402 settlement. |
+| [Multicall3 repository](https://github.com/mds1/multicall)                                                                         | `0xcA11bde05977b3631167028862bE2a173976CA11` | Batch multiple read calls into one RPC request.                                                   |
+| [CreateX deployment framework repository](https://github.com/pcaversaccio/createx)                                                 | `0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed` | Use advanced CREATE/CREATE2/CREATE3 deployment patterns.                                          |
+
+## Safe contracts
+
+The Safe singleton factory is Safe's presigned deterministic deployer. Safe contracts deployed through it land at the same addresses they use on other EVM chains, so Safe\{Wallet\} and the Safe Protocol Kit resolve them without custom configuration. The factory is deployed to the same address on Radius Testnet and Radius Network.
+
+| Contract                                                                      | Address                                      | Why you use it                                                  |
+| ----------------------------------------------------------------------------- | -------------------------------------------- | --------------------------------------------------------------- |
+| [Safe singleton factory](https://github.com/safe-fndn/safe-singleton-factory) | `0x914d7Fec6aaC8cd542e72Bca78B30650d45643d7` | Deploy Safe contracts at their canonical cross-chain addresses. |
+
+Deployment artifacts for both networks live in the safe-singleton-factory repository, under [`artifacts/72344`](https://github.com/safe-fndn/safe-singleton-factory/blob/main/artifacts/72344/deployment.json) for Radius Testnet and [`artifacts/723487`](https://github.com/safe-fndn/safe-singleton-factory/blob/main/artifacts/723487/deployment.json) for Radius Network.
+
+## x402 contracts
+
+These contracts are used by x402 facilitators for Permit2-based payment settlement. Both are deployed to the same deterministic address on all EVM chains via CREATE2.
+
+| Contract                                                                                                    | Address                                      | Why you use it                                                                                                                                                               |
+| ----------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [x402ExactPermit2Proxy](https://github.com/coinbase/x402/blob/main/specs/schemes/exact/scheme_exact_evm.md) | `0x402085c248EeA27D92E8b30b2C58ed07f9E20001` | Canonical spender for Permit2-based x402 settlement. Payers sign Permit2 transfers to this address. The proxy enforces that funds go only to the merchant (`payTo`) address. |
+| [Uniswap Permit2](https://github.com/Uniswap/permit2)                                                       | `0x000000000022D473030F116dDEE9F6B43aC78BA3` | Signature-based token approvals and transfers. Payers approve this contract once to enable Permit2 x402 flows.                                                               |
+
+## Accessibility and verification notes
+
+- Use the **contract name** column to understand purpose before copying an address.
+- Use the **Why you use it** column for quick context in screen-reader and scan-first workflows.
+- Verify target network before deployment or scripting.
+- Prefer checksummed addresses in config files and deployment artifacts.
+
+## Related pages
+
+- [Network and RPC](/reference/network)
+- [JSON-RPC API](/reference/json-rpc/methods)
+- [Fees](/reference/fees)

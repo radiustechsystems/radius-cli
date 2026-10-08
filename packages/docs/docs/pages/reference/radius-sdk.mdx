@@ -1,0 +1,379 @@
+---
+title: radius-sdk reference
+description: Reference for radius-sdk, the TypeScript SDK for x402 payments on Radius — entry points, radiusPayments and createRadiusFetch options, wallet helpers, balances, errors, and configuration.
+---
+
+import { TESTNET_CHAIN_ID, MAINNET_CHAIN_ID, STABLECOIN, NATIVE_TOKEN } from '../../constants';
+
+# radius-sdk reference [TypeScript SDK for x402 payments on Radius]
+
+`radius-sdk` accepts and makes [x402 v2](/build/x402) payments on Radius. It defaults to {STABLECOIN}, the Radius facilitator, and mainnet. For task guides, see [Accept payments](/build/accept-payments) and [Make payments](/build/make-payments).
+
+Source, changelog, and examples: [`radiustechsystems/radius-cli/packages/sdk`](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk). `radius-cli wallet x402` uses the same client.
+
+:::note
+`radius-sdk` is unrelated to the deprecated `@radiustechsystems/sdk`. It is pre-1.0: minor versions can change the API, so check the [changelog](https://github.com/radiustechsystems/radius-cli/blob/main/packages/sdk/CHANGELOG.md) when you upgrade.
+:::
+
+## Entry points
+
+Requires Node.js 20 or later, or a runtime with `fetch` such as Cloudflare Workers.
+
+| Entry point         | Exports                                                                                                      | Peer dependency   |
+| ------------------- | ------------------------------------------------------------------------------------------------------------ | ----------------- |
+| `radius-sdk`        | Networks, `SBC`, price helpers, `getPaymentReceipt`, `RadiusPaymentError`, `radiusEnv`                       | —                 |
+| `radius-sdk/server` | Web-standard `radiusPayments`, `createRadiusServer`, `RequestAdapter`, and server types                      | —                 |
+| `radius-sdk/hono`   | `radiusPayments` and its types                                                                               | `hono` `^4`       |
+| `radius-sdk/client` | `createRadiusFetch`, balance, ERC-20 and Permit2 actions, `getSettlement`, and the receipt and error exports | `viem` `^2.48.11` |
+
+The root, server, and Hono entry points do not load viem at runtime. Install Hono only for `radius-sdk/hono`; install viem for `radius-sdk/client`.
+
+## radiusPayments
+
+Answers unpaid requests to priced routes with `402 Payment Required`, then verifies and settles paid requests through a facilitator. Requests that match no route pass through.
+
+From `radius-sdk/server`, `radiusPayments(options)` returns a web-standard handler for Workers, Bun, Deno, and framework route handlers that use `Request` and `Response`:
+
+```typescript
+import { radiusPayments } from 'radius-sdk/server';
+
+const pay = radiusPayments({
+  network: 'testnet',
+  payTo: '0xYourWalletAddress',
+  routes: { 'GET /api/lookup': '0.001 SBC' },
+});
+
+export default {
+  fetch: pay.wrap((_request, payment) => Response.json({ paidBy: payment?.payer })),
+};
+```
+
+| Member                         | Purpose                                                                        |
+| ------------------------------ | ------------------------------------------------------------------------------ |
+| `pay(request, next)`           | Handles payment, then calls `next(request, payment)` for an accepted request   |
+| `pay.wrap(next)`               | Returns a `(request) => Promise<Response>` handler                             |
+| `pay.requiresPayment(request)` | Checks whether a route is priced, without network I/O; does not verify payment |
+| `pay.radius`                   | The underlying `RadiusServer`                                                  |
+
+From `radius-sdk/hono`, it returns Hono middleware with the same payment options:
+
+```typescript
+import { radiusPayments } from 'radius-sdk/hono';
+
+app.use('/api/*', radiusPayments({ network: 'testnet', payTo: '0xYourWalletAddress', routes: { 'GET /api/lookup': '0.001 SBC' } }));
+```
+
+| Option          | Type                                           | Default            | Description                                                                                                     |
+| --------------- | ---------------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `payTo`         | address or `(context) => address`              | Required           | Recipient of every payment unless a route overrides it                                                          |
+| `routes`        | `Record<string, RouteSpec \| Price>`           | Required           | Priced routes keyed `METHOD /path`, with `*` wildcards; a bare price is shorthand for `{ price }`               |
+| `network`       | `'mainnet'`, `'testnet'`, or a `RadiusNetwork` | `'mainnet'`        | See [Networks](#networks)                                                                                       |
+| `settle`        | `'before'` or `'after'`                        | `'before'`         | `'before'` settles, then runs the handler; `'after'` runs the handler and settles only if it responds below 400 |
+| `gasSponsoring` | `'auto'` or boolean                            | `'auto'`           | Declare `eip2612GasSponsoring` in 402s; `'auto'` follows the facilitator's `/supported`                         |
+| `facilitator`   | options object or `FacilitatorClient`          | Radius facilitator | See [Facilitator](#facilitator)                                                                                 |
+| `onSettled`     | `(receipt, context) => void \| Promise<void>`  | —                  | Called once per settled payment                                                                                 |
+
+It also accepts the [network overrides](#networks). Dynamic `payTo` and `price` functions receive the web-standard `Request` for `radius-sdk/server`, or the Hono context for `radius-sdk/hono`; they can return promises. `onSettled` receives that same context as its second argument.
+
+With `settle: 'before'`, the web-standard handler receives the [receipt](#receipts) as its second argument. Hono handlers read `c.get('radiusPayment')`; add `RadiusPaymentVariables` to the Hono `Variables` type. With `settle: 'after'`, payment is not yet settled during the handler; use `onSettled` to record the receipt.
+
+The SDK initializes the facilitator lazily on the first request matching a priced route, so creating either handler performs no module-scope I/O.
+
+### Settlement and streaming
+
+The default `settle: 'before'` settles before the application handler runs and passes response bodies through without buffering, including SSE and token streams. A handler error or interrupted stream after settlement does not undo the payment. Validate inputs and check resource availability before entering the payment handler; see [validate before charging](/build/accept-payments#validate-before-charging).
+
+`settle: 'after'` runs the handler first, buffers a successful response body, and settles before returning it. Responses with a status of 400 or higher are not charged. Use `'before'` for streaming responses.
+
+`onSettled` records settlement, not delivery. With `'before'`, it runs before the application handler. Errors thrown by the hook are logged by x402 core and do not fail the request. Store the receipt and delivery outcome separately.
+
+### RouteSpec
+
+| Field               | Type                              | Default                  | Description                                   |
+| ------------------- | --------------------------------- | ------------------------ | --------------------------------------------- |
+| `price`             | `Price` or `(context) => Price`   | Required                 | See [Prices](#prices)                         |
+| `payTo`             | address or `(context) => address` | The middleware's `payTo` | Recipient for this route                      |
+| `description`       | string                            | —                        | Shown to buyers in the challenge's `resource` |
+| `mimeType`          | string                            | —                        | Response type advertised in the challenge     |
+| `maxTimeoutSeconds` | number                            | `300`                    | How long a signed payment stays valid         |
+
+### Prices
+
+A `Price` is a string or number in display units of the asset (`'0.001 SBC'`, `'0.001'`, `0.001`), or `{ amount: '1000' }` in base units. {STABLECOIN} has six decimals.
+
+## createRadiusServer
+
+`createRadiusServer(options)` from `radius-sdk/server` supplies the Radius resource server for upstream adapters such as `@x402/express`, `@x402/next`, and `@x402/hono`. It accepts `network`, `settle`, `gasSponsoring`, `facilitator`, `onSettled`, and the [network overrides](#networks). Configure recipients and prices through `routes()` or `handler()`.
+
+| Member                              | Purpose                                                                                        |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `radius.server`                     | The underlying x402 resource server, passed to an upstream adapter                             |
+| `radius.routes({ payTo, routes })`  | Builds x402 `RoutesConfig`; dynamic price and recipient functions receive `HTTPRequestContext` |
+| `radius.http({ payTo, routes })`    | Builds an `x402HTTPResourceServer` for adapters' `…FromHTTPServer` variants                    |
+| `radius.handler({ payTo, routes })` | Builds the SDK's web-standard payment handler; dynamic functions receive `Request`             |
+| `radius.onSettled(hook)`            | Registers a settlement listener and returns the server                                         |
+| `radius.network`                    | The resolved `RadiusNetwork`                                                                   |
+
+For `createRadiusServer`, `onSettled(receipt, context)` receives the x402 request context, which can be `undefined`. `requestOf(context)` extracts the web-standard `Request` when an SDK adapter supplied it. `RequestAdapter` wraps a `Request` as an x402 `HTTPAdapter` for custom integrations.
+
+Use upstream adapters from the `2.27.0` version line, matching the SDK's x402 dependencies. They initialize the facilitator at construction by default. Where module-scope I/O is forbidden, pass the adapter's `syncFacilitatorOnStart: false` option and await `radius.server.initialize()` during request handling before invoking the adapter. The SDK's own web-standard and Hono handlers handle lazy initialization for you.
+
+See [Express and upstream adapters](/build/accept-payments#express-and-upstream-adapters) for an example.
+
+## createRadiusFetch
+
+Returns a `fetch` that pays x402 challenges and retries the request. Responses other than `402` are returned unchanged.
+
+```typescript
+import { createRadiusFetch } from 'radius-sdk/client';
+
+const payFetch = createRadiusFetch({ network: 'testnet', signer: process.env.RADIUS_PRIVATE_KEY as `0x${string}`, maxPerRequest: '0.01 SBC' });
+```
+
+| Option               | Type                                           | Default            | Description                                                                                                 |
+| -------------------- | ---------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `signer`             | private key, viem account, or `WalletClient`   | Required           | Signs payments; sending transactions needs a key, a local account, or a `WalletClient`                      |
+| `maxPerRequest`      | `Price`                                        | Required           | Ceiling for each payment; not a cumulative budget                                                           |
+| `network`            | `'mainnet'`, `'testnet'`, or a `RadiusNetwork` | `'mainnet'`        | Payments are made only on this network                                                                      |
+| `onPaymentRequired`  | `(offer) => boolean \| Promise<boolean>`       | —                  | Approve or decline an [offer](#offers) before signing                                                       |
+| `permit2Approval`    | `'auto'` or `'never'`                          | `'auto'`           | Without gas sponsoring, `'auto'` sends one unlimited Permit2 approval; `'never'` throws `approval_required` |
+| `onApprovalRequired` | `(request) => boolean \| Promise<boolean>`     | —                  | Approve or decline any allowance change this client makes; see [approval requests](#approval-requests)      |
+| `onPaid`             | `(receipt, offer) => void`                     | —                  | Called after each paid response                                                                             |
+| `fetch`              | `typeof fetch`                                 | `globalThis.fetch` | Underlying fetch                                                                                            |
+
+It also accepts the [network overrides](#networks).
+
+Payment rules:
+
+- Pays only on the configured network and in the configured asset.
+- Takes the first compatible offer within `maxPerRequest`, in the server's order.
+- Schemes: x402 v2 `exact` (Permit2 or EIP-3009) and `upto` (Permit2), and x402 v1 `exact` (EIP-3009).
+- The signing window is the server's `maxTimeoutSeconds`, capped at 600 seconds.
+- The paid retry never follows a redirect to another origin (`redirect_refused`).
+
+### Offers
+
+`onPaymentRequired` receives a `PaymentOffer`:
+
+| Field                       | Description                                                |
+| --------------------------- | ---------------------------------------------------------- |
+| `amount`                    | Base units as a string; for `upto`, the authorized maximum |
+| `amountFormatted`           | Display amount, for example `0.01 SBC`                     |
+| `payTo`, `asset`, `network` | Recipient, token, and CAIP-2 network                       |
+| `resource`                  | `{ url, description, mimeType }` from the challenge        |
+| `scheme`, `x402Version`     | `exact` or `upto`; `1` or `2`                              |
+| `transferMethod`            | `permit2` or `eip3009`                                     |
+| `gasSponsored`              | Whether the facilitator sponsors the Permit2 approval      |
+| `requirements`              | The raw requirement from the challenge                     |
+
+### Approval requests
+
+`onApprovalRequired` receives an `ApprovalRequest` for every allowance change: the Permit2 approval a payment needs, `approvePermit2()`, and `approve()`. Return `false` to decline; the call throws `declined` with the request as `details`.
+
+| Field              | Description                                                                  |
+| ------------------ | ---------------------------------------------------------------------------- |
+| `reason`           | `'payment'`, `'approvePermit2'`, or `'approve'`                              |
+| `asset`, `spender` | Token and the address being approved                                         |
+| `amount`           | Allowance to grant: unlimited for Permit2, the caller's amount for `approve` |
+| `currentAllowance` | The spender's current allowance                                              |
+| `offer`            | The [offer](#offers) that needs the approval; only for `'payment'`           |
+
+### Wallet helpers
+
+The returned function also has these members:
+
+| Member                     | Returns                                                                                   |
+| -------------------------- | ----------------------------------------------------------------------------------------- |
+| `address`, `network`       | Signer address and resolved network                                                       |
+| `maxPerRequest`            | The cap in base units                                                                     |
+| `balance()`                | `{ atomic, formatted }`: the signer's {STABLECOIN} balance                                |
+| `balances()`               | Native {NATIVE_TOKEN} and {STABLECOIN} separately; see [Balances](#balances)              |
+| `send(to, amount)`         | Transfers {STABLECOIN}; needs a key or local account                                      |
+| `allowance(spender)`       | The {STABLECOIN} allowance granted to `spender`, in base units                            |
+| `approve(spender, amount)` | Approves `spender` for `amount` of {STABLECOIN}; goes through `onApprovalRequired`        |
+| `permit2Allowance()`       | The current Permit2 allowance                                                             |
+| `approvePermit2()`         | Sends the unlimited Permit2 approval now; goes through `onApprovalRequired`               |
+| `getSettlement(txHash)`    | A [settlement](#settlements), or `undefined` while the node does not know the transaction |
+| `fund()`                   | Requests a faucet drip for this wallet                                                    |
+| `client`                   | The underlying `@x402/core` client                                                        |
+
+Members that send a transaction return a `TxResult`: `hash`, `status` (`'success'` or `'reverted'` from the receipt), and `explorerUrl`.
+
+## Receipts
+
+`getPaymentReceipt(response, network)` decodes a `PAYMENT-RESPONSE` header and returns `undefined` when there is none. With `settle: 'before'`, `radiusPayments` exposes the receipt as the web-standard handler's second argument or Hono's `c.get('radiusPayment')`.
+
+| Field                         | Description                                                                                                                          |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `success`                     | Whether settlement succeeded                                                                                                         |
+| `transaction`                 | Settlement transaction hash                                                                                                          |
+| `payer`, `network`            | Paying address and CAIP-2 network                                                                                                    |
+| `amount`                      | Base units charged; for `upto` it can be less than the offer. `getPaymentReceipt` reports it only when the facilitator does (`upto`) |
+| `explorerUrl`                 | Explorer link for the transaction                                                                                                    |
+| `errorReason`, `errorMessage` | Set when settlement failed                                                                                                           |
+
+## Settlements
+
+`getSettlement(radiusTestnet, txHash)` (any `RadiusNetwork`) from `radius-sdk/client`, or `payFetch.getSettlement(txHash)`, reads a settlement transaction from the chain. The result has `status`, `blockNumber`, `transfers` (each `{ from, to, amount }` in the payment asset), `paid(to?)`, `paidFormatted(to?)`, and `explorerUrl`. Use `paid(to)` for what a recipient received: `transfers` lists every payment-asset transfer in the transaction, which can include the facilitator's fee conversion.
+
+## Balances
+
+On Radius, `eth_getBalance` includes convertible {STABLECOIN}; see [The Turnstile and balances](/reference/ethereum-compatibility#the-turnstile-and-balances). These viem actions from `radius-sdk/client` report each part separately:
+
+| Action                                        | Returns                                                                                       |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `getBalances(client, { address })`            | `native` (`raw`, `aggregate`, `convertible`), `tokens` ({STABLECOIN} by default), and `total` |
+| `getNativeBalance(client, { address })`       | Native {NATIVE_TOKEN} only, in wei                                                            |
+| `getAggregateBalance(client, { address })`    | What `eth_getBalance` returns                                                                 |
+| `getTokenBalance(client, { address, token })` | An ERC-20 `balanceOf`                                                                         |
+
+Each takes an optional `blockNumber` or `blockTag`. `radiusActions()` adds them to a viem client:
+
+```typescript
+import { createPublicClient, http } from 'viem';
+import { radiusTestnet } from 'radius-sdk';
+import { radiusActions } from 'radius-sdk/client';
+
+const client = createPublicClient({ chain: radiusTestnet.chain, transport: http() }).extend(radiusActions());
+const balances = await client.getBalances({ address: '0xYourWalletAddress' });
+```
+
+## ERC-20 actions
+
+`erc20Actions({ token?, network? })` from `radius-sdk/client` adds token actions to a viem client. The token defaults to the payment asset ({STABLECOIN}) of the client's Radius chain; on any other chain, name the `token`. Amounts are base units as `bigint` or display units as a string, for example `'0.01'`.
+
+| Action                                                   | Returns                                                                                                                                                                                    |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `getTokenMetadata()`                                     | `address`, `name`, `symbol`, `decimals`, and `totalSupply`                                                                                                                                 |
+| `getAllowance({ owner, spender })`                       | Allowance in base units                                                                                                                                                                    |
+| `approve({ spender, amount })`                           | `TxResult`                                                                                                                                                                                 |
+| `transfer({ to, amount })`                               | `TxResult`                                                                                                                                                                                 |
+| `transferFrom({ from, to, amount })`                     | `TxResult`                                                                                                                                                                                 |
+| `getTransfers({ from?, to?, fromBlock?, toBlock? })`     | Transfer events; defaults to the last `MAX_LOG_RANGE` (1,000,000) blocks, and splits wider ranges                                                                                          |
+| `watchTransfers({ from?, to?, fromBlock?, onTransfer })` | A stop function; polls for new transfers in order, at least once each; resume with `fromBlock` set to the block from `onCheckpoint` plus one, and deduplicate with `transferKey(transfer)` |
+
+Writes wait for the receipt. Pass `wait: false` to return as soon as the transaction is sent, with `status: 'pending'`.
+
+```typescript
+import { createWalletClient, http } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { radiusTestnet } from 'radius-sdk';
+import { erc20Actions } from 'radius-sdk/client';
+
+const wallet = createWalletClient({
+  chain: radiusTestnet.chain,
+  transport: http(),
+  account: privateKeyToAccount(process.env.RADIUS_PRIVATE_KEY as `0x${string}`),
+}).extend(erc20Actions());
+
+const result = await wallet.transfer({ to: '0xRecipientAddress', amount: '0.01' });
+console.log(result.status, result.explorerUrl);
+```
+
+Block numbers on Radius are millisecond timestamps, so 1,000,000 blocks is about 17 minutes; see [`eth_getLogs`](/reference/ethereum-compatibility#eth_getlogs-constraints).
+
+## Permit2 actions
+
+`permit2Actions()` from `radius-sdk/client` adds actions for the canonical Permit2 contract. x402 payments use them internally; use them directly to build your own Permit2 flows.
+
+| Action                                                                                 | Purpose                                                                        |
+| -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `getPermit2Approval({ owner })`                                                        | The ERC-20 allowance the owner has granted Permit2                             |
+| `approvePermit2()`                                                                     | Grants Permit2 an unlimited allowance (once per token)                         |
+| `signPermit2Transfer({ amount, spender, witness? })`                                   | Signs a one-off transfer off-chain (SignatureTransfer, as x402 uses)           |
+| `permit2TransferFrom({ signed, to })`                                                  | The spender submits a signed transfer to pull the tokens                       |
+| `isPermit2NonceUsed({ owner, nonce })`                                                 | Whether a SignatureTransfer nonce has been used                                |
+| `signPermit2Allowance(...)`, `permit2Permit(...)`, `permit2AllowanceTransferFrom(...)` | AllowanceTransfer: a time-limited allowance the spender can draw on repeatedly |
+| `getPermit2Allowance({ owner, spender })`                                              | The current AllowanceTransfer allowance and its expiration                     |
+
+Writes return a `TxResult`. The EIP-712 helpers and ABI (`permit2Domain`, `PERMIT2_ABI`, and the type definitions) are exported too.
+
+## Errors
+
+### Seller responses
+
+The SDK's web-standard and Hono handlers return `502` with `error: 'facilitator_error'` when a facilitator call fails without the facilitator's own answer, such as a dropped connection or gateway error page. Settlement can already have reached the chain. A `502` does not mean nothing moved: [reconcile the attempt](/build/x402#recover-from-failed-or-uncertain-payments) before authorizing another payment. A facilitator's explicit payment rejection still returns `402`.
+
+### Buyer errors
+
+Payment failures throw `RadiusPaymentError` with a `code` and, for some codes, `details`:
+
+| Code                          | Cause                                                                                      |
+| ----------------------------- | ------------------------------------------------------------------------------------------ |
+| `price_above_limit`           | Every compatible offer is above `maxPerRequest`                                            |
+| `declined`                    | `onPaymentRequired` or `onApprovalRequired` returned `false`                               |
+| `network_mismatch`            | The server's offers are on another network                                                 |
+| `asset_mismatch`              | The server's offers are in another token                                                   |
+| `no_compatible_offer`         | No offer uses a scheme this client pays                                                    |
+| `unsupported_transfer_method` | The server needs a transfer method other than `permit2` or `eip3009`                       |
+| `invalid_challenge`           | The 402 could not be parsed; `details.response` holds the response                         |
+| `payment_rejected`            | The paid retry got another 402; `details.response` holds the response                      |
+| `invalid_receipt`             | An `upto` payment response is invalid, for example it charges more than the signed maximum |
+| `redirect_refused`            | The paid retry redirected to another origin                                                |
+| `approval_required`           | A Permit2 approval is needed and `permit2Approval` is `'never'`                            |
+| `approval_failed`             | The approval transaction reverted                                                          |
+| `faucet`                      | `fund()` failed                                                                            |
+| `config`                      | The options are invalid, for example a missing `maxPerRequest`                             |
+
+## Networks
+
+| Network     | Chain ID           | Export          |
+| ----------- | ------------------ | --------------- |
+| `'mainnet'` | {MAINNET_CHAIN_ID} | `radiusMainnet` |
+| `'testnet'` | {TESTNET_CHAIN_ID} | `radiusTestnet` |
+
+A `RadiusNetwork` carries a viem `Chain` (`radiusTestnet.chain`) plus `facilitatorUrl`, `faucetUrl`, and `asset`. `defineRadiusNetwork` builds one from a chain ID or a viem chain.
+
+Both `radiusPayments` and `createRadiusFetch` accept these overrides alongside `network`:
+
+| Override                   | Default                                                              |
+| -------------------------- | -------------------------------------------------------------------- |
+| `rpcUrl`                   | The network's public RPC endpoint                                    |
+| `facilitatorUrl`           | The Radius facilitator for the network                               |
+| `asset`                    | {STABLECOIN} (six decimals, permit domain `Stable Coin` version `1`) |
+| `explorerUrl`, `faucetUrl` | The network's explorer and faucet                                    |
+
+### Facilitator
+
+For `radiusPayments` and `createRadiusServer`, `facilitator` takes:
+
+- `{ url, apiKey }` for another hosted facilitator; `apiKey` is sent as `x-api-key`
+- `{ live: false }` to use the built-in Radius `/supported` answer instead of fetching it during initialization
+- `{ timeoutMs }` to bound facilitator calls
+- a `FacilitatorClient` from `@x402/core/server` for a self-hosted facilitator
+
+The seller supports both `permit2` and `eip3009` when the facilitator advertises them for `exact`, including facilitators that prefer `eip3009`. This does not add EIP-3009 support to a token: the configured asset must support the selected transfer method. The documented SBC payment flow uses Permit2.
+
+## Environment variables
+
+`radiusEnv(env)` reads these variables, using the same names as `radius-cli`, and returns options to spread into either function. Explicit options take precedence. On Cloudflare Workers, pass `c.env`.
+
+| Variable                     | Option                                       |
+| ---------------------------- | -------------------------------------------- |
+| `RADIUS_NETWORK`             | `network` (`mainnet` or `testnet`)           |
+| `RADIUS_RPC_URL`             | `rpcUrl`                                     |
+| `RADIUS_FACILITATOR_URL`     | `facilitatorUrl`                             |
+| `RADIUS_FACILITATOR_API_KEY` | `facilitator.apiKey`                         |
+| `RADIUS_ASSET_ADDRESS`       | `asset.address` (alias `RADIUS_SBC_ADDRESS`) |
+| `RADIUS_PAY_TO`              | `payTo`                                      |
+| `RADIUS_PRIVATE_KEY`         | `signer`                                     |
+| `RADIUS_MAX_PER_REQUEST`     | `maxPerRequest`                              |
+
+## Examples
+
+| Example                                                                                                            | What it shows                                                                  |
+| ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| [`worker-plain`](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk/examples/worker-plain)     | Worker using `radius-sdk/server` without a framework                           |
+| [`express-seller`](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk/examples/express-seller) | Express with the upstream x402 adapter                                         |
+| [`astro-seller`](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk/examples/astro-seller)     | Astro API route that validates before charging                                 |
+| [`worker-seller`](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk/examples/worker-seller)   | Hono Worker with a free route and two paid routes                              |
+| [`agent-buyer`](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk/examples/agent-buyer)       | Node scripts that pay a URL, including from a wallet holding only {STABLECOIN} |
+| [`demo-dapp`](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk/examples/demo-dapp)           | Browser page that exercises both sides with a burner wallet or MetaMask        |
+
+## Related pages
+
+- [Accept payments](/build/accept-payments)
+- [Make payments](/build/make-payments)
+- [x402 payments](/build/x402)
+- [radius-cli](/reference/radius-cli)
+- [x402 facilitator API](/reference/facilitator-api)

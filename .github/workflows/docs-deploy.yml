@@ -1,0 +1,103 @@
+name: Deploy docs
+
+# Deploys packages/docs to production (the radius-docs Worker) and moves the `docs-live` tag to the deployed
+# commit, so `git diff docs-live main -- packages/docs` shows what is not live yet.
+#
+#   * release.yml calls this after every npm publish, so the docs never describe an unpublished SDK or CLI.
+#   * Run it by hand ("Run workflow") for a docs-only release. It refuses a ref with pending changesets for
+#     the npm packages: those docs may describe code that is not on npm yet. Release the packages instead.
+#   * Urgent fix while package changes are pending: branch from `docs-live`, commit the fix, run this
+#     workflow on that branch, and merge the same fix to main. Until main has it, deploys from main refuse
+#     (they would revert the fix); `force` overrides that check.
+on:
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or SHA to deploy
+        default: main
+        required: true
+      force:
+        description: Deploy even if `docs-live` has commits the ref does not contain
+        type: boolean
+        default: false
+
+permissions: {}
+
+# One deploy at a time; a queued deploy waits instead of cancelling the running one.
+concurrency:
+  group: docs-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: docs-production
+      url: https://docs.radiustech.xyz
+    permissions:
+      contents: write # to move the docs-live tag
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 0 # docs-live ancestry check
+          fetch-tags: true
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false # this job has write access; do not restore a shared cache
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: No unreleased package changes
+        run: |
+          pnpm changeset status --output="$RUNNER_TEMP/changesets.json"
+          pending=$(jq -r '[.releases[] | select(.type != "none") | "\(.name) (\(.type))"] | join(", ")' "$RUNNER_TEMP/changesets.json")
+          if [ -n "$pending" ]; then
+            echo "::error::Pending changesets for $pending. The docs at this ref may describe unpublished code: merge the Version Packages PR instead, or deploy a branch cut from docs-live."
+            exit 1
+          fi
+
+      - name: Live docs are contained in this ref
+        if: ${{ !inputs.force }}
+        run: |
+          git rev-parse -q --verify refs/tags/docs-live >/dev/null || exit 0 # first deploy
+          # `git cherry` matches by patch, so a fix cherry-picked or squash-merged into main counts as contained.
+          missing=$(git cherry HEAD docs-live | grep '^+' || true)
+          if [ -n "$missing" ]; then
+            echo "::error::docs-live has commits this ref does not contain; deploying would revert them. Merge them first, or run with force."
+            git log --oneline --no-walk $(echo "$missing" | cut -c3-)
+            exit 1
+          fi
+
+      - name: Build radius-sdk
+        run: pnpm --filter radius-sdk build
+
+      # Live fee figures for the static fallback and agent Markdown; rewrites docs/constants.ts in the runner only.
+      - name: Fetch transaction cost
+        working-directory: packages/docs
+        run: pnpm fetch-cost
+
+      - name: Build docs
+        working-directory: packages/docs
+        run: pnpm build
+
+      - name: Deploy
+        working-directory: packages/docs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm wrangler deploy --message "$(git rev-parse --short HEAD)"
+
+      - name: Move docs-live
+        run: |
+          git tag -f docs-live HEAD
+          git push -f origin refs/tags/docs-live

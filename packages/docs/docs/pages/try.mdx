@@ -1,0 +1,47 @@
+---
+title: Try Radius in your browser
+description: Create a testnet wallet, fund it from the faucet, send SBC, and pay for an API request with x402, all from this page.
+---
+
+import { TryWallet } from '../components/try/TryWallet';
+import { TrySend } from '../components/try/TrySend';
+import { TryPaidRequest } from '../components/try/TryPaidRequest';
+
+# Try Radius [Create a wallet, send SBC, and pay for an API request]
+
+Everything on this page runs on Radius Testnet with test funds. Each step calls the same `radius-sdk` functions you use in your own code, and links every transaction to the testnet explorer.
+
+## 1. Create and fund a wallet
+
+Create a wallet, then click **Get testnet SBC**. The faucet sends 0.5 SBC, the payment asset, and a small amount of RUSD, the native fee asset.
+
+<TryWallet />
+
+The private key is generated in your browser and stays in its local storage. The other examples in these docs use the same wallet. In your own code, `createRadiusFetch` takes the key as `signer`, and `fund()` calls the [testnet faucet](/build/wallet).
+
+## 2. Send SBC
+
+Send SBC to any address. The default recipient is the testnet faucet, so the test funds go back to it.
+
+<TrySend />
+
+The time includes signing, sending, and waiting for the transaction receipt: Radius confirms transactions with sub-second finality. The fee is a fixed gas price paid in RUSD. A wallet that holds only SBC can still send, because the [Turnstile](/reference/fees#turnstile) converts SBC to RUSD when a transaction needs gas.
+
+## 3. Pay for an API request
+
+This page's API sells an IP reputation lookup for 0.001 SBC per request, and a full report for 0.05 SBC. Payments go back to the testnet faucet. It is built with `radiusPayments` from `radius-sdk/hono`, like the seller in [accept payments](/build/accept-payments).
+
+1. Click **Request without paying**. The API answers `402 Payment Required` and describes the price in the `PAYMENT-REQUIRED` header.
+2. Click **Pay and request**. The client reads the offer, checks it against your limit, signs a payment authorization, and sends the request again. The API settles the payment and returns the data in the same response.
+3. Choose the report endpoint and pay again. It costs more than your 0.01 SBC limit, so the client refuses before it signs anything.
+
+<TryPaidRequest />
+
+The wallet pays without an approval transaction. The Radius facilitator sponsors the one-time Permit2 approval for SBC, so a new wallet needs only SBC to pay. See [x402 payments](/build/x402) for the full request lifecycle.
+
+## Build it yourself
+
+- [Accept payments](/build/accept-payments): charge for API routes in a Hono app or Cloudflare Worker.
+- [Make payments](/build/make-payments): pay x402 endpoints from an app or agent, within a limit.
+- [Sell a data lookup](/build/tutorials/sell-data) and [buy a data lookup](/build/tutorials/buy-data): build both sides of this page's API on testnet.
+- [radius-sdk reference](/reference/radius-sdk): every option and function used on this page.

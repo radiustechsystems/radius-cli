@@ -1,0 +1,97 @@
+---
+title: Bridge stablecoins to Radius
+description: Bridge USDC or SBC from Ethereum or Base to Radius with step-by-step guidance for dashboard use, wallet setup, and verification.
+---
+
+import { MAINNET_DASHBOARD_URL, TESTNET_DASHBOARD_URL, STABLECOIN, NATIVE_TOKEN } from '../../constants';
+
+# Bridge stablecoins to Radius [Transfer USDC or SBC from Ethereum or Base to Radius Network]
+
+:::tip
+**This guide uses Radius Network (mainnet) and real funds.**
+
+If you want to test first, use the same flow on <a href={TESTNET_DASHBOARD_URL}>Radius Testnet</a>.
+:::
+
+## Overview
+
+Radius supports bridging **USDC** and **SBC** from Ethereum and Base.
+
+If you bridge USDC, it is converted to {STABLECOIN} on Radius.
+
+## Before you begin
+
+Make sure you have:
+
+- A wallet with USDC or SBC on a supported source network
+- ETH (or Base ETH) for source-network gas fees
+
+:::note
+You do not need to pre-fund {NATIVE_TOKEN} on Radius. The Turnstile can convert {STABLECOIN} inline for gas payments. See [Fees and the Turnstile](/reference/fees#turnstile).
+:::
+
+## Open the dashboard
+
+Go to:
+
+- **Mainnet dashboard:** <a href={MAINNET_DASHBOARD_URL}>{MAINNET_DASHBOARD_URL}</a>
+- **Testnet dashboard:** <a href={TESTNET_DASHBOARD_URL}>{TESTNET_DASHBOARD_URL}</a>
+
+## Bridge steps
+
+### 1. Connect your wallet
+
+Connect your embedded or external wallet in the dashboard.
+
+### 2. Select source and destination networks
+
+For mainnet:
+
+- **Source:** Ethereum or Base
+- **Destination:** Radius Network
+- **Token:** USDC or SBC
+
+For testnet:
+
+- **Source:** Sepolia or Base Sepolia
+- **Destination:** Radius Network Testnet
+- **Token:** SBC
+
+### 3. Enter bridge amount
+
+Enter the amount to bridge.
+
+If you bridge USDC, it arrives as SBC on Radius.
+
+### 4. Confirm and approve
+
+Approve the transaction in your wallet on the source network.
+
+Typical bridge times:
+
+- **Ethereum:** ~5–10 minutes
+- **Base:** ~1–2 minutes
+- **Sepolia:** ~5–10 minutes
+- **Base Sepolia:** ~1–2 minutes
+
+### 5. Verify on Radius explorer
+
+Check your balance and transfer status on the explorer:
+
+- **Mainnet explorer:** <a href={`${MAINNET_DASHBOARD_URL}/explorer`}>Open Radius mainnet explorer</a>
+- **Testnet explorer:** <a href={`${TESTNET_DASHBOARD_URL}/testnet/explorer`}>Open Radius testnet explorer</a>
+
+## Troubleshooting
+
+If funds do not appear after the expected time:
+
+1. Confirm the source transaction is finalized.
+2. Verify you selected the correct destination network.
+3. Refresh the explorer and wallet balance view.
+4. Recheck the destination wallet address used in the bridge flow.
+
+## Next steps
+
+- [Claim and transact](/build/claim-and-transact) — Send your first transaction on Radius
+- [Network and RPC](/reference/network) — Configure wallets and clients
+- [Fees](/reference/fees) — Understand fee behavior and the Turnstile

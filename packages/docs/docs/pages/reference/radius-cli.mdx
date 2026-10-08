@@ -1,0 +1,251 @@
+---
+title: radius-cli
+description: Use radius-cli for local Radius wallets, signing, balance checks, transactions, contract reads, and x402 endpoint consumption.
+---
+
+import { MAINNET_RPC_URL, MAINNET_CHAIN_ID, TESTNET_RPC_URL, TESTNET_CHAIN_ID, SBC_CONTRACT, STABLECOIN, NATIVE_TOKEN } from '../../constants';
+
+# radius-cli [Local wallet and execution CLI for Radius]
+
+`radius-cli` is the canonical terminal surface for local Radius wallets and agent workflows. Use it to create or select a wallet, sign messages, check balances, send transactions, read contracts, inspect transactions, and consume x402-protected endpoints.
+
+Use viem for application code and [`radius-sdk`](/reference/radius-sdk) to accept or make x402 payments from TypeScript. Use Foundry for smart contract builds, tests, and deployment scripts. Use `radius-cli` when an agent or terminal needs to operate a local Radius wallet.
+
+## Install and verify
+
+Requires Node.js 20 or later.
+
+Run one command with `npx`:
+
+```bash
+npx radius-cli --help
+```
+
+Or install the binary globally:
+
+```bash
+npm install -g radius-cli
+command -v radius-cli
+radius-cli --help
+```
+
+Use `radius-cli` version `0.3.0` or later. From `0.2.0`, `wallet x402` pays through `radius-sdk`, supports gas-sponsored Permit2 approvals, and treats `--x402-threshold` as a hard cap. From `0.3.0`, `wallet balance` reports {NATIVE_TOKEN} and {STABLECOIN} separately, and `wallet send` transfers any ERC-20. Verify that your installed binary exposes the x402 command:
+
+```bash
+radius-cli --version
+radius-cli wallet x402 --help
+```
+
+## Networks
+
+| Network   | Chain ID           | Default RPC                    |
+| --------- | ------------------ | ------------------------------ |
+| `mainnet` | {MAINNET_CHAIN_ID} | <code>{MAINNET_RPC_URL}</code> |
+| `testnet` | {TESTNET_CHAIN_ID} | <code>{TESTNET_RPC_URL}</code> |
+
+`radius-cli` defaults to mainnet. Set the network explicitly in scripts and agent workflows.
+
+```bash
+RADIUS_NETWORK=testnet radius-cli wallet address
+```
+
+Override the RPC endpoint with `--rpc-url` or `RADIUS_RPC_URL`:
+
+```bash
+RADIUS_NETWORK=testnet RADIUS_RPC_URL={TESTNET_RPC_URL} radius-cli wallet balance
+```
+
+## Project-scoped agent wallet
+
+Use `RADIUS_HOME` to isolate wallet state per project, repo, or agent run:
+
+```bash
+export RADIUS_HOME=.radius
+export RADIUS_NETWORK=testnet
+
+radius-cli wallet address
+radius-cli wallet balance --json
+```
+
+On first use, account-needing commands such as `wallet address`, `wallet balance`, `wallet sign`, and `wallet send` create a keystore in the configured Radius home. By default that is `~/.radius`; with `RADIUS_HOME=.radius`, it is local to the current project.
+
+:::warning
+Do not commit `.radius/`, `.env`, exported private keys, or command output that contains secret material. Prefer `radius-cli wallet address` for logging wallet identity.
+:::
+
+To opt into a password before creating a wallet, set `RADIUS_PASSWORD`:
+
+```bash
+RADIUS_HOME=.radius RADIUS_NETWORK=testnet RADIUS_PASSWORD='use-a-secret-manager' radius-cli wallet new
+```
+
+## Configuration precedence
+
+`radius-cli` resolves configuration in this order:
+
+1. CLI flags: `--network`, `--rpc-url`, `--sbc`, `--rusd`, `--json`, `--private-key`
+2. Environment: `RADIUS_NETWORK`, `RADIUS_RPC_URL`, `RADIUS_SBC_ADDRESS`, `RADIUS_RUSD_ADDRESS`, `RADIUS_PASSWORD`, `RADIUS_KEYSTORE_PATH`, `RADIUS_HOME`
+3. Radius config file in the active Radius home
+4. Built-in defaults
+
+{STABLECOIN} defaults to <code>{SBC_CONTRACT}</code>, its address on both mainnet and testnet. Set `RADIUS_SBC_ADDRESS` or pass `--sbc` only to use another deployment of the same token.
+
+## Wallet commands
+
+Create or import a wallet:
+
+```bash
+radius-cli wallet new
+radius-cli wallet import 0xPRIVATE_KEY
+radius-cli wallet address
+```
+
+Check balances:
+
+```bash
+RADIUS_HOME=.radius RADIUS_NETWORK=testnet \
+  radius-cli wallet balance --json
+
+radius-cli wallet balance 0x0000000000000000000000000000000000000000 --json
+```
+
+The JSON reports `sbc` and `rusd` separately (with `sbcWei` and `rusdWei`), their sum as `totalUsd`, and `aggregateWei`, the value `eth_getBalance` returns. On Radius `eth_getBalance` already includes {STABLECOIN}; see [The Turnstile and balances](/reference/ethereum-compatibility#the-turnstile-and-balances).
+
+Sign and verify messages:
+
+```bash
+radius-cli wallet sign "hello"
+echo -n "hello" | radius-cli wallet sign -
+radius-cli wallet verify "hello" 0xSIGNATURE --address 0xSignerAddress
+```
+
+Send native {NATIVE_TOKEN}:
+
+```bash
+RADIUS_HOME=.radius RADIUS_NETWORK=testnet \
+  radius-cli wallet send 0xRecipientAddress 0.10 RUSD
+```
+
+Send {STABLECOIN}:
+
+```bash
+RADIUS_HOME=.radius RADIUS_NETWORK=testnet \
+  radius-cli wallet send 0xRecipientAddress 0.10 SBC
+```
+
+Send any other ERC-20 by its address; decimals are read from the token:
+
+```bash
+RADIUS_HOME=.radius RADIUS_NETWORK=testnet \
+  radius-cli wallet send 0xRecipientAddress 0.10 0xTokenAddress
+```
+
+Call an arbitrary state-changing contract function:
+
+```bash
+radius-cli wallet send 0xTokenAddress "transfer(address,uint256)" 0xRecipientAddress 100000
+```
+
+Use `--json` for machine-readable output and `--no-wait` when you only need the submitted transaction hash.
+
+## Read commands
+
+Read a contract:
+
+```bash
+radius-cli call 0xTokenAddress "balanceOf(address)(uint256)" 0xWalletAddress
+```
+
+Inspect chain data:
+
+```bash
+radius-cli tx 0xTransactionHash --json
+radius-cli receipt 0xTransactionHash --json
+radius-cli storage 0xContractAddress 0
+radius-cli code 0xContractAddress
+radius-cli nonce 0xWalletAddress
+```
+
+Function signatures use cast-style syntax: `name(args)` for writes and `name(args)(returns)` for decoded reads.
+
+## x402 endpoint consumption
+
+Use `radius-cli wallet x402 <verb> <url>` to request an x402-protected endpoint. If the endpoint responds with `402 Payment Required`, the CLI checks the offer, signs and pays from the local wallet, then retries the request. The protocol side is [`radius-sdk`](/reference/radius-sdk), the same client applications use.
+
+Agent-friendly GET request:
+
+```bash
+RADIUS_HOME=.radius RADIUS_NETWORK=testnet \
+  radius-cli wallet x402 get https://example.com/protected \
+  --x402-threshold 0.001 \
+  --json \
+  -y
+```
+
+POST with headers and JSON body:
+
+```bash
+RADIUS_HOME=.radius RADIUS_NETWORK=testnet \
+  radius-cli wallet x402 post https://api.example.com/query \
+  -H "Content-Type: application/json" \
+  -d '{"query":"radius"}' \
+  --x402-threshold 0.01 \
+  --json \
+  -y
+```
+
+Supported verbs are `get`, `post`, `put`, `patch`, `delete`, `head`, and `options`. `-d` accepts a literal string, `@path` to read a file, or `-` to read stdin.
+
+### Spending limits
+
+`--x402-threshold` is in display units for the payment asset, not raw integer units. For {STABLECOIN}, `0.01` means 0.01 {STABLECOIN}.
+
+| Flags                       | Offer at or below threshold       | Offer above threshold             |
+| --------------------------- | --------------------------------- | --------------------------------- |
+| `--x402-threshold`          | Pays without prompting            | Prompts on a TTY; refuses without |
+| `--x402-threshold` and `-y` | Pays without prompting            | Refuses (exit code 2)             |
+| `-y`, no threshold          | Pays any amount                   | Pays any amount                   |
+| Neither                     | Prompts on a TTY; refuses without | Prompts on a TTY; refuses without |
+
+Use `--x402-threshold` with `-y` for agent runs: the threshold stays a hard cap, and `-y` only removes the prompt. The threshold limits one request; it does not enforce a total budget across requests.
+
+### What the CLI pays
+
+- **Network and asset:** only {STABLECOIN} on the configured network. Offers on other networks or in other assets are refused before anything is signed, and the keystore is unlocked only after an offer is accepted.
+- **Offer choice:** when a server lists several compatible offers, the CLI takes the first in the server's order.
+- **Protocol versions:** x402 v1 and v2, selected from the server's `x402Version`.
+- **Schemes:** `exact` with EIP-3009 (v1 and v2) or Permit2 (v2), and `upto` with Permit2 (v2), where the facilitator settles actual usage up to the signed maximum.
+- **Redirects:** the paid retry is never replayed across a cross-origin redirect.
+
+### Permit2 approval
+
+Permit2 payments need a one-time {STABLECOIN} approval for the Permit2 contract. When the server declares `eip2612GasSponsoring`, as the Radius facilitator does, the CLI signs a permit with the payment and sends no approval transaction, so a wallet that holds only {STABLECOIN} can pay.
+
+Without sponsorship, pass `--x402-approve-permit2` (or `-y`) to send a one-time unlimited approval automatically; otherwise the CLI prompts, or refuses without a TTY. `--x402-approve-permit2` also sends the approval when the payment is sponsored, which resolves a facilitator `412` response. Each payment is still authorized by a Permit2 signature capped to its amount.
+
+### Output
+
+The response body goes to stdout. Payment confirmation and, with `--include`, status and headers go to stderr. With `--json`, stdout is one object: `{status, headers, body, bodyEncoding, payment}`.
+
+## When to use other tools
+
+| Task                                          | Preferred tool                           |
+| --------------------------------------------- | ---------------------------------------- |
+| Application reads and writes                  | viem                                     |
+| React wallet UX                               | wagmi + viem                             |
+| Contract tests and deployment scripts         | Foundry                                  |
+| Local agent wallet operations                 | `radius-cli`                             |
+| One-off contract reads from a terminal        | `radius-cli call` or Foundry `cast call` |
+| x402 endpoint consumption from an agent shell | `radius-cli wallet x402`                 |
+| Accept or make x402 payments in TypeScript    | [`radius-sdk`](/reference/radius-sdk)    |
+
+## Related pages
+
+- [Build with LLMs](/build/coding-assistants)
+- [Create and Fund a Wallet](/build/wallet)
+- [Tooling configuration](/build/tooling)
+- [Network and RPC](/reference/network)
+- [radius-sdk](/reference/radius-sdk)
+- [x402 payments](/build/x402)
+- [Agent payments](/build/examples/agent-payments)
+- [Example projects](/build/examples/workshop-playground)
