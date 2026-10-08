@@ -1,0 +1,26 @@
+// Cloudflare Worker for docs.radiustech.xyz: Workers static assets serve the built site from
+// dist/public (including public/_redirects and public/_headers); worker/index.ts handles /api/try/* only.
+// Deployed by .github/workflows/docs-deploy.yml, never from a laptop.
+// Ref: https://developers.cloudflare.com/workers/static-assets/
+{
+  "name": "radius-docs",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-09-29",
+  "assets": {
+    "directory": "./dist/public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/try/*"],
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page",
+  },
+  // Per-PR preview URLs come from `wrangler versions upload --preview-alias`.
+  "workers_dev": true,
+  "preview_urls": true,
+  // Recipient of the testnet payments made from the interactive "Try Radius" components: the testnet
+  // faucet's payout wallet, so test SBC goes back to the faucet. Testnet only; no private key on the server.
+  "vars": {
+    "TRY_PAY_TO": "0x0fD9Ba4a476C7f544cC9b04e54D6B7bb53F2f568",
+  },
+  // The custom domain is added at cutover, after the old Pages project releases it:
+  // "routes": [{ "pattern": "docs.radiustech.xyz", "custom_domain": true }],
+}

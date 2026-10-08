@@ -3,7 +3,7 @@ name: Release
 # Runs on every push to main and does one of two things:
 #   * changesets pending  -> opens or refreshes the "Version Packages" PR (branch `changeset-release/main`)
 #   * no changesets, and a package version is not on npm -> builds, packs and publishes it, then pushes
-#     the `<name>@<version>` git tag and creates a GitHub Release
+#     the `<name>@<version>` git tag and creates a GitHub Release, then deploys the docs (docs-deploy.yml)
 #
 # Publishing uses npm Trusted Publishing (OIDC): no NPM_TOKEN secret anywhere. Each package on npmjs.com
 # must list this repository + this workflow file (`release.yml`) as a trusted publisher; see README.md.
@@ -160,3 +160,11 @@ jobs:
           pack-dir-artifact-id: ${{ needs.pack.outputs.pack-dir-artifact-id }}
           create-github-releases: true
           push-git-tags: true
+
+  # Docs go live only after the packages they describe are on npm. Docs-only releases: docs-deploy.yml.
+  deploy-docs:
+    needs: publish
+    permissions:
+      contents: write # to move the docs-live tag (docs-deploy.yml)
+    uses: ./.github/workflows/docs-deploy.yml
+    secrets: inherit

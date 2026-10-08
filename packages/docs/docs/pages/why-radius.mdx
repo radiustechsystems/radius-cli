@@ -1,0 +1,65 @@
+---
+title: Why Radius
+description: A high-throughput, low-cost, stablecoin-native payment engine with a default payment path and EVM programmability for enterprise platforms and micropayments.
+---
+
+# Why Radius [Stablecoin payments at the scale of software]
+
+Radius is a stablecoin-native payment engine for agents and applications. It processes large volumes of payments at low cost. Use the standard payment flow to charge for APIs, data, and content. Use Solidity contracts when you need custom payment rules.
+
+Radius is built for frequent, small-value payments. An agent can pay when it requests data or content, so a data lookup, an article, or an API result can each be a paid request. Agentic commerce here means agents buying resources or services on a user's behalf.
+
+## High throughput
+
+Agentic commerce turns individual requests into payment events. A platform serving many customers needs payment capacity that can grow with that traffic.
+
+Radius partitions state and processes independent transactions in parallel, distributing payment workloads across the engine. This architecture supports high-volume services such as data APIs, CDNs, and payment platforms. Read [Architecture](/architecture) for the execution model and how shared state affects scaling.
+
+## Low cost
+
+Small payments need small processing costs. Radius combines low transaction costs with fixed gas pricing, helping providers price individual resources and plan payment expenses.
+
+The [fee reference](/reference/fees) reports the current average stablecoin transfer cost and explains the fee model. Execution cost depends on the operation, so use the cost of your payment flow when calculating the margin on a paid request.
+
+## Stablecoin-native
+
+Stablecoin payments are central to Radius's design. Providers can price resources in stable-value units, receive supported stablecoins, and use a payment engine with a stablecoin-native fee flow.
+
+Agents and services can use stable-value amounts to set prices, approve purchases, and track spending. The [fee reference](/reference/fees) explains RUSD fees and SBC conversion; [contract addresses](/reference/contract-addresses) and the [bridge guide](/build/bridge) identify the assets and funding routes for an integration.
+
+## Programmable when you need it
+
+Radius combines a ready-to-integrate payment path with the flexibility of smart contracts. Start with `radius-sdk` to [accept payments](/build/accept-payments) for an endpoint; it uses the hosted Radius facilitator. When your product needs custom behavior, use Solidity contracts to express your own payment logic, such as splitting proceeds among recipients or defining rules for releasing funds.
+
+Radius is broadly EVM compatible, so developers can build with familiar languages, libraries, and tools. This programmability lets you extend the payment flow as your product evolves, while keeping the standard path for routine payments.
+
+Compatibility has specific differences, including fee and balance behavior, how block-related fields behave, and supported RPC methods. Use the [Ethereum compatibility reference](/reference/ethereum-compatibility) when designing contracts and the [tooling guide](/build/tooling) to configure your development environment.
+
+## Enterprise-ready integration
+
+Radius brings high-volume payment execution together with familiar interfaces and a defined operating model. Ethereum-compatible wallets, signing tools, and JSON-RPC libraries give engineering teams established integration tools. The [hosted x402 facilitator](/reference/facilitator-api) connects paid HTTP requests to verification and settlement, while transaction references support payment reconciliation.
+
+Radius is centrally operated infrastructure. Enterprises can evaluate it against their capacity, access, reporting, and support requirements.
+
+Use the [Ethereum compatibility reference](/reference/ethereum-compatibility) for interface behavior and the [architecture overview](/architecture) for component responsibilities.
+
+## Micropayment-friendly
+
+Charge for the unit of value you deliver: one query, one record, one article, or one API result. Low execution costs and programmatic payment authorization make Radius a foundation for frequent, small-value purchases.
+
+With [x402](/build/x402), an endpoint communicates its price over HTTP. An agent authorizes payment, the facilitator settles it on Radius, and the provider returns the resource. Per-request access can sit alongside subscriptions and account-based billing, giving customers another way to buy.
+
+[`radius-sdk`](/reference/radius-sdk) handles that flow in TypeScript for both sellers and buyers, and [`radius-cli`](/reference/radius-cli) lets developers and agents pay from a terminal.
+
+## Match Radius to your business
+
+| Your service         | Opportunity to evaluate                             | Start here                                        |
+| -------------------- | --------------------------------------------------- | ------------------------------------------------- |
+| Data API             | Sell an individual query, record, or result         | [Data providers](/solutions/data-providers)       |
+| Publisher            | Offer paid access to an article, feed, or archive   | [Web publishers](/solutions/publishers)           |
+| CDN or edge platform | Enforce customer-defined paid access at the edge    | [CDNs and edge platforms](/solutions/cdns)        |
+| Payment platform     | Add machine-initiated payments to merchant services | [Payment providers](/solutions/payment-providers) |
+
+## Start building
+
+[Accept payments](/build/accept-payments) for an endpoint, or [make payments](/build/make-payments) from an agent or application. Read [Architecture](/architecture) to understand how the payment engine works.

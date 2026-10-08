@@ -1,0 +1,82 @@
+---
+title: Dashboard overview
+description: Use the Radius Dashboard to claim testnet funds, send transactions, manage RPC keys, inspect fees, and explore account activity.
+---
+
+import { MAINNET_NAME, MAINNET_DASHBOARD_URL, TESTNET_NAME, TESTNET_DASHBOARD_URL, STABLECOIN, NATIVE_TOKEN } from '../../constants';
+
+# Dashboard overview [Accounts, fees, and RPC key management]
+
+:::note
+**Token names used on this page:**
+
+- **{NATIVE_TOKEN}** is the native token and fee token on Radius.
+- **{STABLECOIN}** is an ERC-20 stablecoin used for transfers.
+- If an account has {STABLECOIN} but not enough {NATIVE_TOKEN} for gas, the Turnstile can convert {STABLECOIN} to {NATIVE_TOKEN} inline.
+  :::
+
+The Radius Dashboard is the primary app for interacting with Radius. Use it to claim {STABLECOIN}, send transactions, bridge assets, manage RPC API keys, and explore network activity.
+
+<img src="/imgs/testnet.png" alt="Radius Dashboard landing view on testnet" style={{ borderRadius: '.75rem' }} />
+
+## Understand account environments
+
+Accounts on <a href={MAINNET_DASHBOARD_URL}>{MAINNET_NAME}</a> and <a href={TESTNET_DASHBOARD_URL}>{TESTNET_NAME}</a> are separate.
+
+If you use both environments, create one account per environment.
+
+<img src="/imgs/environment-selector.png" alt="Dashboard environment selector with Radius Network and Radius Testnet options" style={{ borderRadius: '.75rem' }} />
+
+:::note
+Switch environments with the selector at the top of the Dashboard.
+:::
+
+## Find fee data in the app
+
+Use these screens to check fees:
+
+1. **Network Activity**: The **Stablecoin Transfer Cost** metric shows the average cost of a standard stablecoin transfer.
+2. **Transaction Details**: The **Fee** field shows the fee charged for that transaction.
+
+<img src="/imgs/dashboard.png" alt="Network Activity screen with Stablecoin Transfer Cost metric highlighted" style={{ borderRadius: '.75rem' }} />
+
+### Compare transaction details by transfer type
+
+Transaction details differ by transfer type:
+
+- **ERC-20 transfer** (for example, {STABLECOIN}): shows contract interaction rows and token transfer rows.
+- **{NATIVE_TOKEN} transfer**: usually shows one native transfer row.
+
+Both views include the fee, but the operation breakdown is different.
+
+#### ERC-20 transfer example
+
+<img src="/imgs/tx-erc20.png" alt="Transaction details for ERC-20 transfer with contract call and transfer event rows" style={{ borderRadius: '.75rem' }} />
+
+#### {NATIVE_TOKEN} transfer example
+
+<img src="/imgs/tx-rusd.png" alt="Transaction details for native token transfer with a single transfer row" style={{ borderRadius: '.75rem', marginTop: '1rem' }} />
+
+:::info
+**Stablecoin Transfer Cost** is an average reference value for standard transfers. Actual fees depend on gas used.
+:::
+
+Read more in [Fees](/reference/fees).
+
+## Manage RPC API keys
+
+Create RPC API keys in the Dashboard.
+
+Each Dashboard account supports up to five API keys.
+
+<img src="/imgs/rpc-keys.png" alt="RPC key management table in Radius Dashboard showing generated API keys" style={{ borderRadius: '.75rem' }} />
+
+For usage details, see [Network and RPC](/reference/network#rate-limiting--api-keys).
+
+## EIP-3091 explorer link support
+
+The Dashboard supports [EIP-3091](https://eips.ethereum.org/EIPS/eip-3091) URL patterns for explorer deep links. It uses standard routes such as `/tx/{hash}`, `/address/{address}`, and `/token/{address}` so wallets and apps can generate links without custom mapping.
+
+:::note
+Radius handles blocks differently from Ethereum. Read [Ethereum compatibility](/reference/ethereum-compatibility#blocks) for details.
+:::

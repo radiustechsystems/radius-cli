@@ -1,0 +1,13 @@
+# Build output and caches
+dist/
+.wrangler/
+.vocs/
+tmp/
+
+# Generated at build time (scripts/generate-skills-md.ts, scripts/generate-sitemap.ts)
+public/skills/
+public/sitemap.txt
+public/*.xml
+
+# Route types written by `vocs dev` (waku fs-router typegen); not produced by `vocs build`
+docs/pages.gen.ts

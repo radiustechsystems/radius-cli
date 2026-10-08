@@ -1,0 +1,167 @@
+name: Docs
+
+# Checks packages/docs on every pull request and push to main that can change the built site: the docs
+# themselves, the SDK they import, the skills they publish under /skills/, and the lockfile.
+# Same-repo pull requests also get a preview: a Worker version uploaded under the alias pr-<number>.
+# Production deploys are not done here; see docs-deploy.yml.
+on:
+  pull_request:
+    paths:
+      - packages/docs/**
+      - packages/sdk/**
+      - plugins/radius/**
+      - .claude-plugin/**
+      - pnpm-lock.yaml
+      - .github/workflows/docs.yml
+  push:
+    branches: [main]
+    paths:
+      - packages/docs/**
+      - packages/sdk/**
+      - plugins/radius/**
+      - .claude-plugin/**
+      - pnpm-lock.yaml
+      - .github/workflows/docs.yml
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    working-directory: packages/docs
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version # waku needs >= 22.15
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The docs import radius-sdk from the workspace, which resolves to its dist/.
+      - name: Build radius-sdk
+        run: pnpm --filter radius-sdk build
+
+      - name: Format
+        run: pnpm format:check
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck:docs
+
+      - name: Validate docs
+        run: pnpm docs:validate
+
+      - name: Markdown audit
+        run: pnpm docs:markdown-audit
+
+      - name: Build
+        run: pnpm build
+
+      - name: Agent Markdown check
+        run: pnpm docs:agent-check
+
+      - name: Sitemap check
+        run: pnpm docs:sitemap-check
+
+      - name: Upload site
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-artifact@v7
+        with:
+          name: docs-site
+          path: packages/docs/dist/public
+          include-hidden-files: true
+          retention-days: 3
+
+  # Fork pull requests get no preview: they cannot read the Cloudflare secrets.
+  preview:
+    needs: check
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # to comment the preview URL
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build radius-sdk
+        run: pnpm --filter radius-sdk build
+
+      - name: Download site
+        uses: actions/download-artifact@v8
+        with:
+          name: docs-site
+          path: packages/docs/dist/public
+
+      - name: Upload preview version
+        id: upload
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ALIAS: pr-${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -o pipefail
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::warning::No preview: the CLOUDFLARE_API_TOKEN secret is not set."
+            exit 0
+          fi
+          pnpm wrangler versions upload --preview-alias "$ALIAS" --tag "${SHA:0:7}" --message "PR preview $ALIAS" | tee upload.log
+          url=$(grep -oE "https://$ALIAS-[^ ]+\.workers\.dev" upload.log | head -1)
+          if [ -z "$url" ]; then
+            echo "::error::Uploaded, but found no preview URL in the wrangler output."
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Comment preview URL
+        if: steps.upload.outputs.url != ''
+        uses: actions/github-script@v9
+        env:
+          URL: ${{ steps.upload.outputs.url }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        with:
+          script: |
+            const marker = '<!-- docs-preview -->';
+            const body = `${marker}\nDocs preview: ${process.env.URL} (${process.env.SHA.slice(0, 7)})`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const existing = comments.find((c) => c.body?.startsWith(marker));
+            if (existing) await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            else await github.rest.issues.createComment({ owner, repo, issue_number, body });

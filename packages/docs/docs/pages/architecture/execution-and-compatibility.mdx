@@ -1,0 +1,142 @@
+---
+title: Designed for the Internet of Tomorrow
+description: Build on an EVM-compatible network with stablecoin-native fees, fast finality, and predictable transaction costs.
+---
+
+import { TESTNET_RPC_URL, TESTNET_CHAIN_ID, NATIVE_TOKEN, HARDFORK, GAS_PRICE } from '../../constants';
+import { TransactionCost } from '../../components/TransactionCost';
+
+# Designed for the internet of tomorrow [EVM-compatible infrastructure with payment-first economics]
+
+Radius gives you Ethereum-compatible development patterns with payment-first economics optimized for real-world transaction volume.
+
+## What works out of the box
+
+Most Ethereum development workflows transfer directly to Radius.
+
+| Tool                     | Status                                       |
+| ------------------------ | -------------------------------------------- |
+| **Solidity**             | Fully supported (validated up to {HARDFORK}) |
+| **WAGMI**                | Compatible                                   |
+| **viem**                 | Compatible                                   |
+| **OpenZeppelin**         | Compatible                                   |
+| **Foundry**              | Compatible                                   |
+| **Standard precompiles** | Compatible (validated up to {HARDFORK})      |
+
+## What differs from Ethereum
+
+Radius is EVM compatible, but it makes deliberate tradeoffs for payment workloads.
+
+### Use fixed, predictable fees
+
+Ethereum fees change with demand. Radius uses fixed gas pricing so costs remain predictable.
+
+| Ethereum                 | Radius                             |
+| ------------------------ | ---------------------------------- |
+| Fee market bidding       | Fixed gas pricing                  |
+| `eth_gasPrice` varies    | `eth_gasPrice` returns {GAS_PRICE} |
+| Cost planning is dynamic | Cost planning is deterministic     |
+
+A standard transaction cost is about <TransactionCost />.
+
+### Settle in milliseconds
+
+| Ethereum                      | Radius                       |
+| ----------------------------- | ---------------------------- |
+| Confirmation-based confidence | Immediate finality           |
+| Reorg risk exists             | No reorg model               |
+| Minutes to high confidence    | Millisecond-scale settlement |
+
+### Use stablecoin-native fee flow
+
+| Ethereum                       | Radius                                  |
+| ------------------------------ | --------------------------------------- |
+| Must hold ETH for fees         | Fees paid in {NATIVE_TOKEN}             |
+| Separate gas-asset requirement | Stablecoin-native flow for payment apps |
+| Volatile fee asset             | Stable-value fee model                  |
+
+## Contract implications
+
+### Keep standard Solidity patterns
+
+Your existing contract logic and ERC standards work as expected.
+
+```solidity
+IERC20(token).transfer(recipient, amount);
+
+mapping(address => uint256) balances;
+balances[msg.sender] = 100;
+
+emit Transfer(from, to, amount);
+```
+
+### Avoid assumptions tied to Ethereum-native balance semantics
+
+Prefer explicit token accounting over patterns that assume ETH-style native balance behavior inside contract logic.
+
+```solidity
+// Prefer token-based accounting checks in payment flows.
+require(IERC20(feeToken).balanceOf(address(this)) > 0);
+```
+
+## Data integrity model
+
+Radius prioritizes deterministic execution and replicated operation:
+
+- Three-node clusters provide fault tolerance
+- Replication preserves data durability
+- Deterministic execution preserves consistency
+
+This model is designed for high-throughput payment infrastructure.
+
+## Why this matters for modern applications
+
+### AI and machine-to-machine payments
+
+Autonomous systems need low-latency settlement for API calls, inference, and compute usage. Radius supports this with:
+
+- Instant settlement
+- Sub-cent transaction costs
+- Stable-value fee economics
+
+### Micropayment business models
+
+Low predictable cost unlocks:
+
+- Per-request API billing
+- Pay-per-visit content
+- Streaming payments for compute and bandwidth
+
+## EIP support
+
+Radius tracks {HARDFORK} support through Revm 33.1.0.
+
+| EIP      | Support                                    |
+| -------- | ------------------------------------------ |
+| EIP-7702 | Supported                                  |
+| EIP-1559 | Supported (adapted to fixed-fee economics) |
+| EIP-2930 | Supported                                  |
+| EIP-4844 | Supported                                  |
+
+## Precompiles
+
+| Address range   | Precompile set                |
+| --------------- | ----------------------------- |
+| `0x01` - `0x0a` | Standard Ethereum precompiles |
+| `0x4Db27Fa...`  | Radius Edge extensions        |
+| `0x07a2bA2...`  | Debug utilities               |
+
+## Network configuration
+
+| Parameter       | Value              |
+| --------------- | ------------------ |
+| Network Name    | Radius Testnet     |
+| RPC URL         | {TESTNET_RPC_URL}  |
+| Chain ID        | {TESTNET_CHAIN_ID} |
+| Currency Symbol | {NATIVE_TOKEN}     |
+
+## Next steps
+
+- [Ethereum compatibility](/reference/ethereum-compatibility) — Behavior differences and RPC constraints that affect production systems
+- [Network and RPC](/reference/network) — Endpoints, chain IDs, and integration setup
+- [Fees](/reference/fees) — Fee model and the Turnstile behavior

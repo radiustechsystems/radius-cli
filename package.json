@@ -1,7 +1,7 @@
 {
   "name": "radius-monorepo",
   "private": true,
-  "description": "Radius CLI wallet and SDK",
+  "description": "Radius CLI wallet, SDK and developer docs",
   "license": "MIT",
   "engines": {
     "node": ">=22"
@@ -10,9 +10,9 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "pnpm --filter './packages/*' run build",
-    "test": "pnpm --filter './packages/*' run test",
-    "typecheck": "pnpm --filter './packages/*' run typecheck",
+    "build": "pnpm --filter './packages/*' --filter '!radius-docs' run build",
+    "test": "pnpm --filter './packages/*' --filter '!radius-docs' run test",
+    "typecheck": "pnpm --filter './packages/*' --filter '!radius-docs' run typecheck",
     "changeset": "changeset",
     "version-packages": "changeset version && pnpm install --lockfile-only",
     "release": "pnpm build && changeset publish"

@@ -12,7 +12,7 @@ pnpm add radius-sdk viem   # buyer and viem action examples
 ```
 
 Requirements:
-- Node.js >= 20 for radius-sdk
+- Node.js >= 22 for radius-sdk
 - TypeScript 5+ (recommended)
 
 ## Chain definition

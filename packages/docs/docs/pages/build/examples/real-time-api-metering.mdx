@@ -1,0 +1,104 @@
+---
+title: API metering
+description: Charge per API call with radius-sdk, price each call from the request, and settle only when the call succeeds.
+---
+
+import { STABLECOIN } from '../../../constants';
+
+# API metering [Charge per call, settle when the call succeeds]
+
+Charge for each API call instead of invoicing monthly. The client pays with the request, and you receive {STABLECOIN} on Radius for each call, with no account to set up and no unpaid balance between invoices. This suits agents that call an API in bursts, and callers you do not have a contract with.
+
+This example meters an embeddings endpoint: the price depends on the model, and a call that fails is not charged.
+
+## How it works
+
+1. The client calls the endpoint without payment and receives `402 Payment Required` with the price.
+2. The client signs a payment within its own limit and retries the call.
+3. `radiusPayments` verifies the payment, runs your handler, and settles only if the handler succeeded.
+4. The client receives the response and a receipt with the settlement transaction.
+
+`radius-sdk` handles steps 1–4 on both sides. See [x402 payments](/build/x402) for the protocol.
+
+## Seller: price each call
+
+```typescript
+import { Hono, type Context } from 'hono';
+import { radiusPayments, type RadiusPaymentVariables } from 'radius-sdk/hono';
+
+type Env = { Bindings: { PAY_TO: `0x${string}` }; Variables: RadiusPaymentVariables };
+const app = new Hono<Env>();
+
+// The price and the response read the model the same way.
+const modelOf = (c: Context) => (c.req.query('model') === 'large' ? 'large' : 'small');
+
+app.use(
+  '/v1/*',
+  radiusPayments<Env>({
+    network: 'testnet',
+    payTo: (c) => c.env.PAY_TO,
+    settle: 'after',
+    routes: {
+      'POST /v1/embeddings': {
+        price: (c) => (modelOf(c) === 'large' ? '0.002 SBC' : '0.0005 SBC'),
+        description: 'One embedding',
+      },
+    },
+  }),
+);
+
+app.post('/v1/embeddings', async (c) => {
+  const { input } = await c.req.json<{ input?: string }>().catch(() => ({ input: undefined }));
+  if (!input) return c.json({ error: 'input is required' }, 400);
+  return c.json({ model: modelOf(c), embedding: [0.12, -0.03, 0.88, 0.41] });
+});
+
+export default app;
+```
+
+- **Price from the request:** `price` can be a function of the request, so the model, a size, or a tier sets the price. The client sees it in the challenge before paying.
+- **Settle after the handler:** with `settle: 'after'`, a payment is settled only when the handler responds with a status below 400. In this example a call without `input` returns `400` and is not charged. The trade-off is that the response is computed before the money moves; with the default `settle: 'before'`, the handler runs only for money already received. See [choose when payment settles](/build/accept-payments#choose-when-payment-settles).
+
+On Radius testnet, a `large` call cost the caller exactly 0.002 {STABLECOIN}, and a call without `input` cost nothing.
+
+## Client: call the API
+
+```typescript
+import { createRadiusFetch, getPaymentReceipt } from 'radius-sdk/client';
+
+const payFetch = createRadiusFetch({
+  network: 'testnet',
+  signer: process.env.RADIUS_PRIVATE_KEY as `0x${string}`,
+  maxPerRequest: '0.01 SBC',
+});
+
+const response = await payFetch('https://api.example.com/v1/embeddings?model=large', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ input: 'radius' }),
+});
+console.log(response.status, getPaymentReceipt(response, payFetch.network)?.transaction);
+```
+
+`maxPerRequest` caps each call. For a total budget across calls, use `onPaymentRequired`; see [Make payments](/build/make-payments#limit-what-you-pay).
+
+## Design choices
+
+- **Show the price before the call.** Publish prices in your API docs as well as in the challenge, so callers can set limits.
+- **Price units of work.** Charge per call, per item, or per size band. For many small items, accept a batch in one call and price the batch.
+- **Decide what a failed call costs.** Use `settle: 'after'` when failures should be free, and return an error status for them.
+- **Keep the receipt with the request.** Log the settlement transaction (`onSettled`, or `c.get('radiusPayment')`) next to your request ID for reconciliation and support.
+- **Refunds are transfers.** A settled payment is not reversed. To refund, send {STABLECOIN} back from a wallet you control; your API server does not need that wallet's key.
+
+## Related workshop projects
+
+- [`merchant-console-demo`](https://github.com/radius-workshop/merchant-console-demo) — Threat-intelligence API demo with x402-gated endpoints, live settlement stats, and paid agent traffic visualization
+- [`rad-router-proxy`](https://github.com/radius-workshop/rad-router-proxy) — Local proxy that lets AI IDEs pay Rad Router through x402 on Radius
+- [`radius-agent-contracts`](https://github.com/radius-workshop/radius-agent-contracts) — Includes a `PayPerQuery` contract for pre-funded metered usage
+- [Example projects](/build/examples/workshop-playground) — Runnable radius-sdk examples
+
+## Next steps
+
+- [Tutorial: sell a data lookup](/build/tutorials/sell-data) — Build a paid endpoint step by step
+- [Accept payments](/build/accept-payments) — Prices, recipients, settlement timing, and mainnet
+- [Make payments](/build/make-payments) — Limits, errors, and receipts for callers

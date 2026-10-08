@@ -1,0 +1,73 @@
+---
+title: JSON-RPC overview
+description: Understand Radius JSON-RPC compatibility with Ethereum tooling, including key behavioral differences, limits, and integration guidance.
+---
+
+# JSON-RPC overview [Compatibility and integration guidance]
+
+Radius exposes a JSON-RPC 2.0 API that works with common Ethereum tooling. Use this page to understand what works as expected, what differs from Ethereum, and where to find method-level details.
+
+## Use compatible tooling
+
+Radius works with:
+
+- **viem** for TypeScript and Node.js integrations
+- **WAGMI** for React wallet integrations
+- **Foundry** for smart contract development and scripting
+
+Most `eth_*` methods behave as expected. Some methods are divergent or pseudo-supported. Review those differences before production deployment.
+
+## Understand key behavior differences
+
+Radius is EVM compatible, but not Ethereum-identical. Keep these differences in mind:
+
+- `eth_blockNumber` returns the current timestamp in milliseconds
+- `eth_getBalance` returns native balance plus convertible SBC balance
+- `eth_feeHistory` returns a pseudo-supported response
+
+For full context and implications, read [Ethereum compatibility](/reference/ethereum-compatibility).
+
+## Configure gas and fees correctly
+
+Radius uses fixed gas pricing and accepts both legacy and EIP-1559 fee fields. `eth_maxPriorityFeePerGas` and `eth_gasPrice` both return the correct fixed gas price, so viem's built-in fee estimation works with a standard `defineChain()` — no fee overrides are needed.
+
+Read [Gas pricing](/reference/ethereum-compatibility#gas-pricing) for details and [Tooling configuration](/build/tooling#chain-definition) for the full chain definition.
+
+## Submit transactions synchronously for lower latency
+
+Radius supports `eth_sendRawTransactionSync` ([EIP-7966](https://eips.ethereum.org/EIPS/eip-7966)), which combines transaction submission and receipt retrieval into a single RPC call. Unlike the standard `eth_sendRawTransaction`, this method waits synchronously for the transaction receipt before returning — eliminating the polling round-trip entirely.
+
+What is distinctive on Radius is what the returned receipt means: because Radius has instant finality, the sync receipt is both fast and **final** (~100 ms, no reorg). On a typical L2 the equivalent sync receipt reflects only transaction _inclusion_ and can still be reorganized until it settles on L1.
+
+Avoiding a separate polling step can reduce latency in [x402 payment flows](/build/x402), where settlement is on the critical path of the HTTP request. The benefit depends on the connection, workload, and polling interval.
+
+- **On success**: returns the full transaction receipt object
+- **On timeout**: returns error code `4` with the transaction hash, so you can continue monitoring
+- **On nonce gap**: returns error code `6` with the expected nonce, avoiding a separate `eth_getTransactionCount` call
+- **On async sends with `NonceTooHigh`**: standard `eth_sendRawTransaction` may queue the transaction for automatic retry instead of discarding it immediately
+
+An optional second parameter sets the maximum wait time in milliseconds. If omitted, the node default is used (recommended: 2 seconds).
+
+See [`eth_sendRawTransactionSync`](/reference/json-rpc/methods#eth_sendrawtransactionsync) in the method reference for full parameter and error code details.
+
+## Use WebSocket subscriptions with the right access
+
+`eth_subscribe` is supported for **logs only** and requires an RPC key with elevated privileges.
+
+- Supported: `logs`
+- Not supported: `newHeads`, `newPendingTransactions`, `syncing`
+
+For access and limits, see [Network and RPC](/reference/network).
+
+## Find the complete method reference
+
+For the full list of divergent, pseudo-supported, and unsupported methods, see:
+
+- [JSON-RPC API](/reference/json-rpc/methods)
+
+## Related pages
+
+- [Network and RPC](/reference/network)
+- [Fees](/reference/fees)
+- [Contract addresses](/reference/contract-addresses)
+- [Ethereum compatibility](/reference/ethereum-compatibility)

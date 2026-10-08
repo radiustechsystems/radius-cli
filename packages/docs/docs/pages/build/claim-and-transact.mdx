@@ -1,0 +1,121 @@
+---
+title: Claim and Transact on Radius Network
+description: Claim funds and complete your first transaction on Radius using the dashboard, wallet setup steps, and practical examples.
+---
+
+import { MAINNET_DASHBOARD_URL, TESTNET_DASHBOARD_URL, MAINNET_CHAIN_ID, MAINNET_RPC_URL, MAINNET_NAME, NATIVE_TOKEN, STABLECOIN, STABLECOIN_DECIMALS, FEE_CONTRACT, CURRENCY_SYMBOL } from '../../constants';
+
+# Claim {STABLECOIN} and Transact [Zero to first transaction]
+
+:::note
+**Token names used in this page:**
+
+- **{NATIVE_TOKEN}** is the native token and fee token on Radius.
+- **{STABLECOIN}** is an ERC-20 stablecoin used for transfers.
+- If an account has {STABLECOIN} but not enough {NATIVE_TOKEN} for gas, the Turnstile can convert {STABLECOIN} to {NATIVE_TOKEN} inline.
+  :::
+
+:::tip
+**This guide uses Radius Network (mainnet) with real money.**
+
+If you want to test without real money, the same process works on <a href={TESTNET_DASHBOARD_URL}>Radius Testnet</a>.
+:::
+
+## What you'll do
+
+1. Sign up at {MAINNET_DASHBOARD_URL} (no existing wallet necessary)
+2. Claim free {STABLECOIN}
+3. Send a test transaction
+4. View the transaction on the explorer
+
+## Prerequisites
+
+- An email address or social account
+- 2 minutes
+
+## Step 1: Sign up and get a wallet
+
+Visit <a href={MAINNET_DASHBOARD_URL}>{MAINNET_DASHBOARD_URL}</a> and sign up.
+
+Radius uses Privy to create an embedded wallet for you automatically. No browser extension needed.
+
+After signup, you'll have:
+
+- A Radius wallet address
+- Access to the dashboard
+- Access to claim {STABLECOIN}
+
+## Step 2: Claim {STABLECOIN}
+
+In the dashboard, click Add Funds and claim {STABLECOIN}.
+
+**This is a real dollar pegged stablecoin (ERC-20 token) pegged 1:1 to {CURRENCY_SYMBOL}.** Use it for transactions on Radius and bridge it to other networks (Ethereum, Base).
+
+:::tip[Programmatic access]
+To fund a testnet wallet without the Dashboard - for example, in a script or agent workflow - use [Create and Fund a Wallet](/build/wallet). The agentic faucet flow is testnet only; use the Dashboard or bridge stablecoins for mainnet.
+:::
+
+Claude Code prompt:
+
+```bash
+claude "Read docs.radiustech.xyz/skills/dripping-faucet.md and fund a local testnet wallet with RADIUS_HOME=.radius and radius-cli"
+```
+
+For terminal wallet operations such as address lookup, balance checks, signing, sends, contract reads, and x402 requests, see [radius-cli](/reference/radius-cli).
+
+## Step 3: Send a transaction
+
+### Dashboard Instructions
+
+1. Click Send funds
+2. Enter the recipient address and amount of {STABLECOIN} ("stablecoin") you want to send
+3. Click Send
+
+### Programmatic Instructions
+
+Alternatively, use viem (TypeScript):
+
+```typescript
+import { createWalletClient, defineChain, http, parseUnits } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+
+// Define Radius Network (mainnet)
+const radius = defineChain({
+  id: MAINNET_CHAIN_ID,
+  name: MAINNET_NAME,
+  nativeCurrency: { name: NATIVE_TOKEN, symbol: NATIVE_TOKEN, decimals: 18 },
+  rpcUrls: {
+    default: { http: [MAINNET_RPC_URL] },
+  },
+});
+
+// Your Privy wallet's private key (export from dashboard)
+const account = privateKeyToAccount('{{PRIVATE_KEY}}');
+
+const client = createWalletClient({
+  account,
+  chain: radius,
+  transport: http(),
+});
+
+// Send {STABLECOIN} (ERC-20 transfer)
+const hash = await client.writeContract({
+  address: FEE_CONTRACT, // {STABLECOIN} contract
+  abi: [
+    {
+      name: 'transfer',
+      type: 'function',
+      inputs: [
+        { name: 'to', type: 'address' },
+        { name: 'amount', type: 'uint256' },
+      ],
+      outputs: [{ name: '', type: 'bool' }],
+      stateMutability: 'nonpayable',
+    },
+  ],
+  functionName: 'transfer',
+  args: ['0xRecipientAddress', parseUnits('1', STABLECOIN_DECIMALS)], // 1 {STABLECOIN} ({STABLECOIN_DECIMALS} decimals)
+});
+
+console.log('Transaction hash:', hash);
+```

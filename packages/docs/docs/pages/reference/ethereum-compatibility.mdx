@@ -1,0 +1,483 @@
+---
+title: Ethereum compatibility
+description: EVM behavior differences including balance divergence, Turnstile conversion, instant finality, RPC constraints, and integration guidance for building on Radius.
+---
+
+import { GAS_PRICE, NATIVE_TOKEN, STABLECOIN, STABLECOIN_DECIMALS, NATIVE_TOKEN_DECIMALS } from '../../constants';
+
+# Ethereum compatibility [Behavior differences and RPC constraints]
+
+Radius is broadly EVM compatible. It supports Solidity contracts, wallets, and familiar Ethereum tools, with the behavior differences listed below. Validate the contract features and tool versions your integration uses. This page covers the specific areas where Radius behavior differs from Ethereum, with practical guidance for each. For tool-specific setup (Foundry, viem, Hardhat, ethers.js), see [Tooling configuration](/build/tooling).
+
+## At a glance
+
+| Area                       | Ethereum behavior                                              | Radius behavior                                                                                                                 |
+| -------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Gas pricing                | Market-based fee bidding                                       | Fixed gas price model                                                                                                           |
+| `eth_blockNumber`          | Monotonic block height                                         | Current timestamp in milliseconds                                                                                               |
+| Block storage              | Canonical block chain in state                                 | Blocks reconstructed on demand for RPC compatibility                                                                            |
+| Block hash                 | Hash of block header                                           | Equals block number (timestamp-based value)                                                                                     |
+| On-chain randomness        | `prevrandao` carries RANDAO mix                                | Not a randomness source: `prevrandao`/`difficulty` are `0`, `blockhash` predictable, no EIP-2935 — use off-chain entropy        |
+| `COINBASE` account reads   | Typically readable account state                               | Returns beneficiary address, but in-transaction state reads can appear empty                                                    |
+| `transactionIndex`         | Unique per transaction within a block                          | Always `0` — not a unique key; key on `transactionHash`                                                                         |
+| `eth_getLogs` filtering    | Address filter optional                                        | Address filter required                                                                                                         |
+| Block tag on state queries | Reads historical state at specified block                      | Accepts `latest`, `pending`, `safe`, `finalized`; returns error `-32000` for historical block numbers (no archive state)        |
+| `eth_getBalance` semantics | Raw native balance                                             | Native + full ERC-20 token holdings as native currency (uncapped; may exceed per-transaction spend limit)                       |
+| `eth_subscribe` types      | `logs`, `newHeads`, `newPendingTransactions`                   | `logs` only                                                                                                                     |
+| Poll-based filters         | `eth_newFilter` / `eth_getFilterChanges`                       | Not supported                                                                                                                   |
+| Replace-by-fee (RBF)       | Resubmit at a pending nonce with higher gas to cancel/replace  | Nonce whose tx already executed: rejected (`-33009`); a still-queued future nonce is replaceable with higher gas                |
+| Returned transaction hash  | Acknowledges the tx was accepted; not a guarantee it will mine | Means "queued" for a future-nonce tx — waits for the nonce gap to fill (evicted after ~30s if it doesn't); poll for the receipt |
+| `eth_getProof`             | Returns Merkle state proofs                                    | Not supported                                                                                                                   |
+| `eth_getBlockReceipts`     | Returns all receipts in a block                                | Not supported                                                                                                                   |
+| Transaction finality       | Probabilistic (reorgs possible)                                | Instant and final                                                                                                               |
+
+## Gas pricing
+
+Radius uses a fixed gas price model.
+
+Both legacy (`gasPrice`) and EIP-1559 fee fields are accepted, but any transaction whose gas price is below the fixed gas price is rejected.
+
+| Parameter                         | Supported    |
+| --------------------------------- | ------------ |
+| `gasPrice` (legacy)               | ✅ Supported |
+| `maxFeePerGas` (EIP-1559)         | ✅ Supported |
+| `maxPriorityFeePerGas` (EIP-1559) | ✅ Supported |
+
+Current fixed gas price: **~1 gwei** ({GAS_PRICE} {NATIVE_TOKEN} per unit of gas).
+
+Query the current gas price with `eth_gasPrice`. Radius applies this value to every transaction regardless of the fee fields it specifies. `eth_maxPriorityFeePerGas` is supported for tooling compatibility and returns the same value (there is no separate priority-fee market); `baseFeePerGas` is `0`, so standard EIP-1559 estimation (`baseFee + priorityFee`) resolves to the fixed gas price.
+
+viem works with a standard `defineChain()` — no fee overrides are needed. See [viem configuration](/build/tooling#chain-definition) for the full chain definition.
+
+### Foundry example
+
+```bash
+cast send --gas-price 1000000000 \
+  --rpc-url https://rpc.testnet.radiustech.xyz \
+  --account radius-deployer \
+  {{CONTRACT_ADDRESS}} "transfer(address,uint256)" {{WALLET_ADDRESS}} 1000000
+```
+
+Query `eth_gasPrice` for the current fixed gas price. For comprehensive tooling setup (Foundry config files, Hardhat, wagmi, ethers.js), see [Tooling configuration](/build/tooling).
+
+## The Turnstile and balances
+
+Radius auto-converts stablecoins to native currency for gas payments through a mechanism called the Turnstile. This changes how balance queries work compared to Ethereum.
+
+### How the Turnstile works
+
+If an account has {STABLECOIN} but not enough {NATIVE_TOKEN} for gas, Radius runs a zero-fee inline conversion before executing the transaction. The account must hold at least 0.01 {STABLECOIN} for the Turnstile to fire.
+
+| Parameter                      | Value                                        |
+| ------------------------------ | -------------------------------------------- |
+| Minimum conversion             | 0.01 {STABLECOIN} → 0.01 {NATIVE_TOKEN}      |
+| Maximum conversion per trigger | 10.0 {STABLECOIN} → 10.0 {NATIVE_TOKEN}      |
+| Conversion direction           | {STABLECOIN} → {NATIVE_TOKEN} only (one-way) |
+| Gas overhead                   | Zero — not charged to the caller             |
+
+For a standard ERC-20 transfer, 0.01 {NATIVE_TOKEN} covers roughly 1,000 transactions worth of gas. If a transaction requires more than 0.01 {NATIVE_TOKEN} (for example, a large contract deployment), the Turnstile converts whatever amount is needed up to 10.0. The Turnstile also fires for native {NATIVE_TOKEN} transfers that exceed the account's {NATIVE_TOKEN} balance, converting enough {STABLECOIN} to cover the shortfall.
+
+:::warning
+The Turnstile is one-way. {STABLECOIN} converted to {NATIVE_TOKEN} cannot be converted back through the Turnstile.
+:::
+
+### Three balance methods
+
+Radius exposes three ways to query an account's balance. Each returns a different value for the same address.
+
+| Method                               | Returns                                                        | Use when                                                                    |
+| ------------------------------------ | -------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `eth_getBalance`                     | {NATIVE_TOKEN} + full {STABLECOIN} holdings as native currency | Checking total gas-paying power; note: may exceed single-transaction limit  |
+| `rad_getBalanceRaw`                  | Raw {NATIVE_TOKEN} balance only                                | Checking actual {NATIVE_TOKEN} on hand (or whether the Turnstile will fire) |
+| `balanceOf` on {STABLECOIN} contract | {STABLECOIN} ERC-20 balance                                    | Displaying spendable {STABLECOIN}                                           |
+
+The relationship between them:
+
+**`eth_getBalance` = `rad_getBalanceRaw` + (`balanceOf` × 10^12)**
+
+The `10^12` multiplier bridges the decimal gap: {STABLECOIN} uses {STABLECOIN_DECIMALS} decimals while {NATIVE_TOKEN} uses {NATIVE_TOKEN_DECIMALS}, so 10^({NATIVE_TOKEN_DECIMALS} − {STABLECOIN_DECIMALS}) = 10^12.
+
+:::note
+`eth_getBalance` returns the **full** {STABLECOIN} token balance converted to native currency, with no cap. Wallets and block explorers may display a balance that exceeds what can actually be spent in a single transaction, because the per-transaction Turnstile conversion limit still applies during execution. Use `eth_estimateGas` to verify that a specific transaction will succeed before submitting.
+:::
+
+#### Worked example
+
+An account holding **0 {NATIVE_TOKEN}** and **5.000000 {STABLECOIN}**:
+
+| Method              | Raw value                        | Human-readable     |
+| ------------------- | -------------------------------- | ------------------ |
+| `balanceOf`         | `5000000` (6 decimals)           | 5.0 {STABLECOIN}   |
+| `rad_getBalanceRaw` | `0`                              | 0.0 {NATIVE_TOKEN} |
+| `eth_getBalance`    | `5000000000000000000` (5 × 10¹⁸) | 5.0 {NATIVE_TOKEN} |
+
+After the Turnstile converts 0.01 {STABLECOIN} → 0.01 {NATIVE_TOKEN}:
+
+| Method              | Raw value                         | Human-readable      |
+| ------------------- | --------------------------------- | ------------------- |
+| `balanceOf`         | `4990000`                         | 4.99 {STABLECOIN}   |
+| `rad_getBalanceRaw` | `10000000000000000`               | 0.01 {NATIVE_TOKEN} |
+| `eth_getBalance`    | `5000000000000000000` (unchanged) | 5.0 {NATIVE_TOKEN}  |
+
+`eth_getBalance` stays the same because total gas-paying power is unchanged — value moved from {STABLECOIN} to {NATIVE_TOKEN}.
+
+#### Query balances with viem
+
+```typescript
+import { createPublicClient, http } from 'viem';
+import { radiusTestnet } from './chain';
+
+const client = createPublicClient({
+  chain: radiusTestnet,
+  transport: http(),
+});
+
+const addr = '0xYourAddress' as `0x${string}`;
+
+// 1. eth_getBalance — native + full SBC token holdings as native currency (uncapped)
+const ethBalance = await client.getBalance({ address: addr });
+
+// 2. rad_getBalanceRaw — actual native RUSD only
+const rawHex = await client.request({
+  method: 'rad_getBalanceRaw' as any,
+  params: [addr] as any,
+});
+const rusdBalance = BigInt(rawHex as string);
+
+// 3. SBC balance — ERC-20 balanceOf
+const sbcBalance = await client.readContract({
+  address: '0x33ad9e4BD16B69B5BFdED37D8B5D9fF9aba014Fb',
+  abi: [
+    {
+      type: 'function',
+      name: 'balanceOf',
+      inputs: [{ name: 'account', type: 'address' }],
+      outputs: [{ type: 'uint256' }],
+      stateMutability: 'view',
+    },
+  ] as const,
+  functionName: 'balanceOf',
+  args: [addr],
+});
+```
+
+#### Query raw balance with `rad_getBalanceRaw`
+
+```bash
+curl -X POST https://rpc.testnet.radiustech.xyz \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"rad_getBalanceRaw","params":["0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18"],"id":1}'
+```
+
+### RPC behavior with the Turnstile
+
+The Turnstile operates automatically in the background for most applications. These methods reflect Turnstile-aware behavior:
+
+**`eth_sendRawTransaction`** — If the account lacks {NATIVE_TOKEN} but has sufficient {STABLECOIN}, the Turnstile executes inline before the transaction. Receipt logs include stablecoin conversion events.
+
+**`eth_call` and `eth_estimateGas`** — Dry-runs skip sender balance validation unconditionally. Simulations do not fail solely because the `from` account lacks enough {NATIVE_TOKEN} to pay for execution.
+
+## Blocks
+
+Radius does not use blocks as the execution primitive. The atomic execution unit is a transaction.
+
+To preserve Ethereum JSON-RPC compatibility, block-oriented responses are reconstructed on demand.
+
+### `eth_blockNumber`
+
+`eth_blockNumber` returns the current timestamp in milliseconds (hex encoded).
+
+Practical implications:
+
+- Do not treat block number as canonical chain height.
+- Do not assume "N blocks later" semantics match Ethereum finality patterns.
+
+:::warning
+`block.number` returns millisecond timestamps on Radius. Contracts that use block counts for timing (governance voting periods, timelocks, vesting schedules) produce incorrect results without adjustment. Use `block.timestamp` or OpenZeppelin's timestamp-based clock mode.
+:::
+
+#### Affected OpenZeppelin contracts
+
+If you are deploying governance, timelock, or vesting contracts, these differences are critical:
+
+| Contract           | Parameter                | Ethereum interpretation     | Radius interpretation             | Recommendation           |
+| ------------------ | ------------------------ | --------------------------- | --------------------------------- | ------------------------ |
+| Governor           | `votingDelay()` = 1      | ~12 seconds (1 block)       | 1 millisecond                     | Use timestamp clock mode |
+| Governor           | `votingPeriod()` = 50400 | ~1 week                     | ~50 seconds                       | Use timestamp clock mode |
+| TimelockController | Block-based delay        | Predictable block intervals | Millisecond timestamps            | Use `block.timestamp`    |
+| Vesting contracts  | Block-based schedule     | Predictable duration        | Duration depends on ms timestamps | Use `block.timestamp`    |
+
+OpenZeppelin v5 supports timestamp-based clock mode natively:
+
+```solidity
+function CLOCK_MODE() public pure override returns (string memory) {
+    return "mode=timestamp";
+}
+
+function clock() public view override returns (uint48) {
+    return uint48(block.timestamp);
+}
+```
+
+### Block reconstruction
+
+A reconstructed "block" contains transactions executed within the same millisecond.
+
+Practical implications:
+
+- Recent block reads are compatible for tooling, but block composition is not equivalent to Ethereum's globally sequenced blocks.
+
+#### Reconstructed header fields
+
+Because blocks are reconstructed on demand rather than produced by canonical block building, several header fields carry placeholder values. Tools that validate or re-hash block headers (some clients, explorers, bridges, and test harnesses) must account for these.
+
+| Field              | Reconstructed value                                       |
+| ------------------ | --------------------------------------------------------- |
+| `stateRoot`        | `0x0` (all zeros) — no Merkle Patricia Trie is maintained |
+| `receiptsRoot`     | `0x0` (all zeros)                                         |
+| `gasUsed`          | `0`, even when the block contains transactions            |
+| `baseFeePerGas`    | `0`                                                       |
+| `miner`            | `0x0` (zero address)                                      |
+| `transactionsRoot` | Empty-trie constant (see below), **not** `0x0`            |
+
+:::note
+`transactionsRoot` returns the canonical Ethereum empty-trie root constant, not `0x0`:
+
+```
+0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421
+```
+
+This value is returned for every reconstructed block, including blocks that contain transactions. Compare `transactionsRoot` against this constant rather than `0x0` in header-consistency checks. It does not encode the block's transaction list, so do not use it to verify transaction membership.
+:::
+
+### Genesis block
+
+The genesis block (block `0x0`) has a `parentHash` of `0x0`, matching standard Ethereum behavior.
+
+### Block hashes
+
+Block hash equals block number for a given reconstructed block (timestamp-based value), not a chained header hash.
+
+Practical implications:
+
+- Do not rely on parent-hash lineage assumptions from Ethereum.
+- Do not infer canonical history from hash chaining on Radius.
+
+### On-chain randomness
+
+On-chain values are not a secure source of randomness on any EVM chain. On Radius this is especially clear-cut: the block values Ethereum contracts sometimes use for entropy are constant or deterministic here, so they provide no unpredictability at all. Contracts ported from Ethereum that rely on them for randomness should switch to off-chain entropy.
+
+:::note
+Don't derive randomness from `blockhash`, `block.prevrandao`, or `block.difficulty`. On Radius these are constant or fully predictable, so ported contracts that use them for randomness — lotteries, raffles, randomized NFT mints, games, fair-ordering — won't behave as intended.
+:::
+
+| Source                        | Radius behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `block.prevrandao`            | Constant `0`. On Ethereum this returns the beacon-chain RANDAO mix, which varies block to block; on Radius it is always `0`.                                                                                                                                                                                                                                                                                                                                      |
+| `block.difficulty`            | Constant `0` (same opcode as `prevrandao` post-merge).                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `blockhash(block.number - 1)` | A deterministic, non-cryptographic value with no entropy — a contract can compute the identical value inside the same transaction.                                                                                                                                                                                                                                                                                                                                |
+| `blockhash` for older blocks  | Non-zero only for block numbers within ~256 of the current one — and because block numbers are millisecond timestamps, that is only a few hundred milliseconds of history (versus ~51 minutes on Ethereum: 256 blocks × ~12s). EIP-2935's historical-hash contract is not deployed, so OpenZeppelin's `Blockhash` utility cannot extend past that native window: within it, it returns the predictable native `blockhash` value; for older blocks it returns `0`. |
+
+```solidity
+// Predictable on Radius — not a source of randomness
+uint256 random = uint256(blockhash(block.number - 1));
+uint256 winner = random % participants.length;
+
+// Also not random — these are constant 0 on Radius
+uint256 r1 = block.prevrandao;
+uint256 r2 = block.difficulty;
+```
+
+Because these values are known when the transaction executes, the result is fully determined in advance — a contract can compute it in the same transaction, so it provides no unpredictability.
+
+Affected patterns:
+
+- Lottery and raffle contracts
+- Randomized NFT mints and trait generation
+- Games with randomized outcomes
+- Fair-ordering or commit-reveal schemes that hash against `blockhash()`
+
+For any randomness need, derive entropy **off-chain** and bring it on-chain through a trusted path — an external randomness oracle (VRF-style), or a commit-reveal scheme whose revealed value is entropy generated off-chain. What matters is where the entropy comes from, not the commit-reveal structure itself: a commit-reveal scheme that ultimately hashes an on-chain block value is still fully predictable. Do not derive randomness from block values.
+
+## Instant finality
+
+On Ethereum, confirmed transactions can be reorganized out of the chain. On Radius, every confirmed transaction is final.
+
+- When `waitForTransactionReceipt` returns, the transaction is final. There are no reorgs and no need to wait for additional confirmations.
+- [`eth_sendRawTransactionSync`](/reference/json-rpc/methods#eth_sendrawtransactionsync) — the [EIP-7966](https://eips.ethereum.org/EIPS/eip-7966) synchronous variant that returns the receipt directly in the send response — eliminates the need for a separate `waitForTransactionReceipt` call. On Radius the returned receipt is **instant and final**; it never reorgs. On a typical L2 the equivalent sync receipt reflects only _inclusion_ and can still be reorganized until it settles on L1.
+- Contracts and off-chain logic that wait for N block confirmations can treat confirmation count = 1 as final on Radius.
+
+## Transaction submission and the pseudo-mempool
+
+Radius tries to execute every transaction immediately. If a transaction's nonce is higher than the account's current nonce, it can't execute yet, so it enters a bounded pseudo-mempool that queues such future-nonce transactions until the preceding nonces fill and they become executable. This queue behaves differently from the average Ethereum client's mempool in two ways that affect ported tools. Neither affects finality — once a transaction executes, it is final — but both change what happens at the time of submission.
+
+### Replace-by-fee and stuck-transaction recovery
+
+For most Ethereum nodes, resubmitting a transaction at an already-occupied nonce with a higher gas price replaces the pending one. This is the basis for stuck-transaction recovery: cancelling a transaction, or bumping its fee to get it mined.
+
+On Radius, replace-by-fee applies only to a transaction that is still **queued** because it specifies a future nonce (higher than the account's current nonce): resubmitting at that nonce with a **higher** gas price swaps in the new transaction (the same or a lower gas price is rejected). Exactly one transaction per nonce executes, and it executes at the fixed system gas price — so the higher gas price used to win the replacement is not what you actually pay.
+
+The porting consequence: Ethereum's "fee-bump a stuck transaction" recovery targets a pending transaction at the current nonce — a state that does not exist on Radius, where a current-nonce transaction executes or is rejected immediately rather than sitting pending. You don't have to strip that recovery logic out — it simply becomes a no-op that never fires. Just be aware that a resubmission at an already-executed nonce is rejected with the generic `-33009 Exec Failed`, so don't treat that error as a failure of the original transaction. Rely on instant finality instead.
+
+### A returned transaction hash means "queued," not "will execute"
+
+On Ethereum, a hash returned from `eth_sendRawTransaction` acknowledges that the node accepted the transaction — it is not a guarantee the transaction will mine. That caution is not Radius-specific, but the queue gives it a Radius-specific shape: a hash returned for a **future-nonce** transaction (one submitted while an earlier nonce is still unfilled) means only that it was accepted into the pseudo-mempool. It waits for the nonce gap to fill and executes then — and a `null` receipt in the meantime is the normal queued state, not a failure.
+
+If the gap is not filled in time, the queued transaction is **evicted** rather than held indefinitely: Radius prunes the pseudo-mempool periodically (roughly a ~30s cycle). In testing, a queued transaction still executed when its gap was filled within ~40s, but had been dropped when the fill came later. Fill earlier nonces promptly; if a queued transaction is evicted, resubmit it.
+
+:::warning
+A returned transaction hash confirms the transaction was queued, not that it will execute. If you report success on the hash alone, a transaction waiting behind an unfilled nonce gap can be reported as successful before it runs. Poll for the receipt (or use [`eth_sendRawTransactionSync`](/reference/json-rpc/methods#eth_sendrawtransactionsync), which returns the receipt directly), and fill earlier nonces so the queued transaction can execute. A single `null` receipt read is not proof of failure — a still-queued transaction reads `null` until its gap fills. Pair polling with a timeout, though: an evicted transaction also reads `null`, permanently.
+:::
+
+For high-throughput submission from many accounts, keep each account's in-flight (unconfirmed) transactions low and submit in nonce order, so queued transactions can execute as earlier nonces fill.
+
+## RPC query constraints
+
+### `eth_getLogs` constraints
+
+`eth_getLogs` on Radius differs from Ethereum in two ways:
+
+- **Address filter required.** Queries without an `address` field return error `-33014`. General-purpose indexers must know contract addresses in advance.
+- **Block range limit.** The maximum range between `fromBlock` and `toBlock` is 1,000,000 units. Because block numbers are millisecond timestamps, this covers ~16 minutes 40 seconds — not ~1 million blocks as on Ethereum. Queries exceeding this range return error `-33002`.
+
+To query logs over longer periods, split the range into consecutive chunks of up to 1,000,000. See [`eth_getLogs`](/reference/json-rpc/methods#eth_getlogs) in the method reference.
+
+### `eth_getBlockReceipts` is not supported
+
+`eth_getBlockReceipts` returns error `-33000`. Radius executes transactions individually rather than in [blocks](#blocks) — the block number returned over RPC is wall-clock time, exposed for tooling compatibility — so "every receipt in a block" is not a meaningful unit of work on Radius.
+
+To retrieve the same data:
+
+- **All receipts for a block** — fetch the block's transactions with `eth_getBlockByNumber` (full transactions), then call `eth_getTransactionReceipt` for each. This is the direct equivalent of one `eth_getBlockReceipts` call.
+- **Event indexing over a range** — query `eth_getLogs` with an `address` filter (see [`eth_getLogs` constraints](#eth_getlogs-constraints)). This is the efficient path for tracking known contracts, but returns logs only — not full receipts.
+
+### No historical state access
+
+`eth_getBalance`, `eth_getTransactionCount`, `eth_getCode`, `eth_call`, `eth_getStorageAt`, and `eth_estimateGas` parse block tags correctly:
+
+- `latest`, `pending`, `safe`, and `finalized` return current state.
+- Historical block numbers return error `-32000`: _"required historical state unavailable"_.
+
+Radius does not support archive mode. There is no way to read state at a past block.
+
+Practical implications:
+
+- Foundry fork mode (`--fork-block-number`) returns an error — past state is not available.
+- `eth_call` at a past block returns an error instead of silently returning current state.
+- Indexers and analytics that query historical balances receive clear errors rather than misleading data.
+
+### `eth_getProof` is not supported
+
+`eth_getProof` returns error `-33000`. Radius stores state across a parallelized, sharded infrastructure with no single global Merkle-Patricia trie, so it does not issue state proofs — and its instant, deterministic finality removes the need for them.
+
+Read account and storage values directly with `eth_getBalance`, `eth_getCode`, and `eth_getStorageAt`.
+
+### WebSocket subscriptions support `logs` only
+
+`eth_subscribe("logs")` works correctly with live notifications and fully populated log fields.
+
+```typescript
+import { createPublicClient, webSocket } from 'viem';
+import { radiusTestnet } from './chain';
+
+const client = createPublicClient({
+  chain: radiusTestnet,
+  transport: webSocket('wss://rpc.testnet.radiustech.xyz'),
+});
+
+const unwatch = client.watchContractEvent({
+  address: contractAddress,
+  abi: contractAbi,
+  eventName: 'Transfer',
+  onLogs: (logs) => {
+    // process logs
+  },
+});
+```
+
+`eth_subscribe("newHeads")`, `eth_subscribe("newPendingTransactions")`, and `eth_subscribe("syncing")` return error `-32602`.
+
+For block tracking, poll `eth_blockNumber` on a 10–30 second interval.
+
+### Poll-based filters are not supported
+
+`eth_newFilter`, `eth_newBlockFilter`, `eth_newPendingTransactionFilter`, `eth_getFilterChanges`, and `eth_getFilterLogs` are unsupported.
+
+For event monitoring over HTTP, poll `eth_getLogs` with incrementing `fromBlock`:
+
+```typescript
+let lastBlock = await client.getBlockNumber();
+
+setInterval(async () => {
+  const currentBlock = await client.getBlockNumber();
+  if (currentBlock <= lastBlock) return;
+
+  const logs = await client.getLogs({
+    address: contractAddress,
+    fromBlock: lastBlock + 1n,
+    toBlock: currentBlock,
+  });
+  lastBlock = currentBlock;
+  // process logs
+}, 15_000); // 15-second interval
+```
+
+For real-time events, use WebSocket `eth_subscribe("logs")`.
+
+## Beneficiaries and `COINBASE (0x41)`
+
+Radius pays fees to beneficiary addresses.
+
+`COINBASE` returns the beneficiary address for the current execution environment. However, state reads of beneficiary accounts during execution can return an empty account view.
+
+`eth_getBalance` can still return beneficiary balance views, but those reads are ephemeral and can be stale.
+
+Practical implications:
+
+- Do not write contract logic that depends on fresh in-transaction beneficiary account state.
+- Treat `COINBASE` as an identifier, not as a reliable in-transaction state anchor.
+
+## Stored transaction data and receipts
+
+Receipts are broadly Ethereum-like. Contract deployment receipts set `to` to `null` and all log fields (`topics`, `data`, `logIndex`, `address`) are fully populated, matching standard Ethereum behavior.
+
+Three caveats:
+
+- `transactionIndex` is always `0` on Radius. Because transactions execute in parallel, Radius does not assign a position within the reconstructed block, so every transaction and log reports `transactionIndex = 0` and the value carries no ordering information.
+- `eth_getTransactionReceipt` may briefly return `null` for a transaction that has just been sent, before the receipt is committed to state (seen as premature-poll failures in tools like Foundry rather than measured directly). Poll rather than treating a single `null` as failure; the window is transient and a returned receipt indicates a transaction has finalized.
+- `eth_getLogs` visibility lags receipt availability by ~100 ms. A log can be missing from `eth_getLogs` results for a brief window after its `eth_getTransactionReceipt` already returns.
+
+Practical implications:
+
+- **`(blockNumber, transactionIndex)` is not a unique key on Radius.** Key on `transactionHash` instead. Indexers, explorers, or databases that treat `(blockNumber, transactionIndex)` as a unique row identifier — a common Ethereum assumption — will map multiple same-millisecond transactions to the same key; depending on the storage layer, those rows are overwritten or dropped.
+- Do not rely on `transactionIndex` for ordering. Use your own ordering keys (for example: ingestion sequence, application-level nonce tracking, or timestamp plus transaction hash).
+- Do not assume a log is queryable via `eth_getLogs` the instant its receipt exists. Re-scan the range on a subsequent pass to pick up events emitted within the visibility lag.
+- Poll for a receipt (`waitForTransactionReceipt`) rather than treating a single `null` read as failure; it resolves once the receipt is served.
+
+## Integration checklist
+
+Before shipping to production, verify:
+
+1. Fee estimation returns non-zero `gasPrice`.
+2. No logic assumes Ethereum block height semantics.
+3. No logic relies on block hash parent-chain behavior.
+4. No contract derives randomness from on-chain values (`blockhash`, `block.prevrandao`, `block.difficulty`) — all are predictable or constant on Radius. Use off-chain entropy.
+5. No contract path depends on fresh beneficiary account reads during execution.
+6. Indexers and analytics do not treat `transactionIndex` as authoritative ordering, and key on `transactionHash` — not `(blockNumber, transactionIndex)`, which is not unique on Radius. Indexers also re-scan `eth_getLogs` rather than assume a log is queryable the instant its receipt exists.
+7. Log queries always include an `address` filter.
+8. No logic queries state at a historical block number — Radius returns error `-32000` for historical state requests. Supported tags: `latest`, `pending`, `safe`, `finalized`.
+9. Event listeners use `eth_getLogs` polling or WebSocket `eth_subscribe("logs")` — not `eth_newFilter`.
+10. Block tracking uses `eth_blockNumber` polling — not `eth_subscribe("newHeads")`.
+11. Balance checks use the appropriate method (`eth_getBalance` for spendability, `rad_getBalanceRaw` for actual native balance, `balanceOf` for stablecoin balance).
+12. Transaction confirmation logic does not wait for multiple blocks. Execution is final.
+13. No integration depends on `eth_getProof` (state proofs) or `eth_getBlockReceipts`; both return error `-33000`. Use direct state reads and `eth_getTransactionReceipt` / `eth_getLogs` instead.
+14. No stuck-transaction recovery depends on fee-bumping a transaction at the current nonce — that Ethereum pattern is a harmless no-op on Radius (a current-nonce tx executes or is rejected immediately; rely on instant finality). Don't treat a `-33009 Exec Failed` on resubmission as failure of the original. Replace-by-fee works only for a transaction still queued behind an unfilled future nonce, and will only be accepted in the mempool if defined with a higher gas price.
+15. A returned transaction hash is treated as "queued," not "will execute." Poll for the receipt (or use `eth_sendRawTransactionSync`) and fill earlier nonces promptly — a queued future-nonce transaction is evicted (~30s) if the gap is not filled.
+
+## Related pages
+
+- [Tooling configuration](/build/tooling)
+- [JSON-RPC overview](/reference/json-rpc)
+- [JSON-RPC API](/reference/json-rpc/methods)
+- [Fees](/reference/fees)
+- [Network and RPC](/reference/network)

@@ -1,0 +1,171 @@
+---
+title: Content access
+description: Sell individual articles, reports, or downloads with radius-sdk, priced per item and paid by readers' wallets or agents.
+---
+
+import { STABLECOIN } from '../../../constants';
+
+# Content access [Sell an article, report, or download per visit]
+
+Charge for one piece of content instead of a subscription. A reader or an agent pays a small amount in {STABLECOIN} for the item it wants, and your server returns it once the payment has settled.
+
+## Why per-item access
+
+- **Subscriptions** ask readers to commit monthly for content they may read once; many leave at the paywall.
+- **Ads** degrade the page and pay little for traffic from agents and crawlers.
+- **Per-item prices** let a reader, or an agent working for one, buy exactly the article, report, or file it needs.
+
+## How it works
+
+1. The reader requests an item and receives `402 Payment Required` with its price.
+2. The reader's wallet, or an agent's payment client, signs a payment within its limit and retries.
+3. `radiusPayments` verifies and settles the payment, then your handler returns the item.
+
+`radius-sdk` handles these steps on both sides. A payment buys one retrieval; to grant repeat access, see [access rules](#access-rules).
+
+## Seller: price each item
+
+```typescript
+import { Hono } from 'hono';
+import { radiusPayments, type RadiusPaymentVariables } from 'radius-sdk/hono';
+
+type Env = { Bindings: { PAY_TO: `0x${string}` }; Variables: RadiusPaymentVariables };
+const app = new Hono<Env>();
+
+const ARTICLES: Record<string, { title: string; price: string; body: string }> = {
+  'edge-caching': { title: 'Caching at the edge', price: '0.002 SBC', body: 'Full article text…' },
+  'agent-billing': { title: 'Billing agents per request', price: '0.005 SBC', body: 'Full article text…' },
+};
+// The guard, the price and the handler all find the article the same way.
+const articleFor = (path: string) => {
+  const slug = /^\/articles\/([^/]+)$/.exec(path)?.[1];
+  return slug && Object.hasOwn(ARTICLES, slug) ? ARTICLES[slug] : undefined;
+};
+
+// Anything under /articles/ that is not an article gets a 404 before the payment middleware runs,
+// so nobody is asked to pay for it.
+app.use('/articles/*', async (c, next) => {
+  if (!articleFor(c.req.path)) return c.json({ error: 'not found' }, 404);
+  await next();
+});
+
+app.use(
+  '/articles/*',
+  radiusPayments<Env>({
+    network: 'testnet',
+    payTo: (c) => c.env.PAY_TO,
+    routes: {
+      'GET /articles/*': { price: (c) => articleFor(c.req.path)!.price, description: 'One article' },
+    },
+  }),
+);
+
+app.get('/articles/:slug', (c) => {
+  const article = articleFor(c.req.path)!;
+  return c.json({ title: article.title, body: article.body, transaction: c.get('radiusPayment')?.transaction });
+});
+
+export default app;
+```
+
+Route keys accept `*` wildcards, and `price` can be a function, so one rule covers every article at its own price. The handler runs only after the payment has settled; the middleware and facilitator check the payment against your recipient, the asset, and the price, so the handler does not verify it again.
+
+**Check that a resource exists before the payment middleware.** By default `radiusPayments` settles before your handler runs, so a handler that returns `404` would still have charged the buyer. The guard above answers every path under `/articles/` that is not an article with `404` and no payment challenge. It is registered on the same `/articles/*` pattern as the payment rule, so no path can reach the payment step without passing it.
+
+Keep free previews, such as titles and summaries, on routes without a price.
+
+## Check it
+
+This script requests a missing article, a nested path, and a real one, and compares {STABLECOIN} balances before and after each. Run it in a project with `radius-sdk` and `viem`, against the seller running locally with `pnpm wrangler dev`, with a funded testnet key in `RADIUS_PRIVATE_KEY` and the seller's `PAY_TO` in `SELLER_ADDRESS`:
+
+```javascript
+import { createPublicClient, http } from 'viem';
+import { createRadiusFetch, radiusActions } from 'radius-sdk/client';
+import { radiusTestnet } from 'radius-sdk';
+
+const base = 'http://localhost:8787/articles';
+const chain = createPublicClient({ chain: radiusTestnet.chain, transport: http() }).extend(radiusActions());
+const sbc = async (address) => (await chain.getBalances({ address })).tokens[0].atomic;
+
+const payFetch = createRadiusFetch({ network: 'testnet', signer: process.env.RADIUS_PRIVATE_KEY, maxPerRequest: '0.01 SBC' });
+const seller = process.env.SELLER_ADDRESS;
+
+for (const slug of ['no-such-article', 'x/agent-billing', 'agent-billing']) {
+  const [buyerBefore, sellerBefore] = [await sbc(payFetch.address), await sbc(seller)];
+  const response = await payFetch(`${base}/${slug}`);
+  const [buyerAfter, sellerAfter] = [await sbc(payFetch.address), await sbc(seller)];
+  console.log(slug, response.status, 'buyer', buyerAfter - buyerBefore, 'seller', sellerAfter - sellerBefore);
+}
+```
+
+```text
+no-such-article 404 buyer 0n seller 0n
+x/agent-billing 404 buyer 0n seller 0n
+agent-billing 200 buyer -5000n seller 5000n
+```
+
+The missing article and the nested path cost nothing. The real one moves exactly its price, 5000 base units (0.005 {STABLECOIN}), from buyer to seller.
+
+## Reader: pay from a browser wallet
+
+In a web page, pass a viem `WalletClient` for the reader's wallet as the signer:
+
+```typescript
+import { createWalletClient, custom, type EIP1193Provider } from 'viem';
+import { radiusTestnet } from 'radius-sdk';
+import { createRadiusFetch } from 'radius-sdk/client';
+
+declare global {
+  interface Window {
+    ethereum?: EIP1193Provider;
+  }
+}
+
+const provider = window.ethereum;
+if (!provider) throw new Error('No browser wallet found');
+const [account] = await provider.request({ method: 'eth_requestAccounts' });
+const wallet = createWalletClient({ account, chain: radiusTestnet.chain, transport: custom(provider) });
+
+// The wallet must be on Radius testnet to sign: add the network if the wallet does not know it.
+await wallet.switchChain({ id: radiusTestnet.chain.id }).catch(async () => {
+  await wallet.addChain({ chain: radiusTestnet.chain });
+  await wallet.switchChain({ id: radiusTestnet.chain.id });
+});
+
+const payFetch = createRadiusFetch({ network: 'testnet', signer: wallet, maxPerRequest: '0.01 SBC' });
+const response = await payFetch('/articles/agent-billing');
+const article = await response.json();
+```
+
+The wallet asks the reader to sign; with the Radius facilitator no transaction is sent and no gas is needed. Show the price before the reader clicks: read it from your catalog, or from `onPaymentRequired`, which receives the offer before anything is signed.
+
+Agents buy the same way with a key or a server-side wallet; see [Make payments](/build/make-payments). The SDK's [`demo-dapp`](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk/examples/demo-dapp) shows a complete browser buyer.
+
+## Access rules
+
+Decide what one payment buys, and make the server enforce it:
+
+- **One retrieval:** the default. Every request is a new purchase. This suits agents fetching data, and downloads.
+- **Repeat or time-limited access:** after a paid request, issue your own entitlement, such as a signed cookie or token tied to the reader and the item, and accept it on later requests without asking for payment. Store the settlement transaction with the entitlement.
+- **Bundles:** price a collection as one item, for example `GET /bundles/*`.
+
+If a payment settles but the response does not reach the reader, a plain retry is a new purchase. To serve the item again without charging twice, keep the transaction from `onSettled` or `c.get('radiusPayment')` and grant an entitlement for it, as above; see [when the outcome is uncertain](/build/make-payments#when-the-outcome-is-uncertain).
+
+## Use cases
+
+- **News and research:** articles, reports, papers, datasets.
+- **Media:** individual videos, episodes, high-resolution images.
+- **Learning:** single tutorials or chapters.
+- **Agent-readable content:** documentation, feeds, and archives that agents fetch on demand.
+
+## Related workshop projects
+
+- [Project Library](https://www.radiustech.xyz/project-library) — Includes Rad Reader as an example of paid reading and content access
+- [`merchant-console-demo`](https://github.com/radius-workshop/merchant-console-demo) — The same x402 pattern applied to paid API data
+- [Example projects](/build/examples/workshop-playground) — Runnable radius-sdk examples
+
+## Next steps
+
+- [Tutorial: sell a data lookup](/build/tutorials/sell-data) — Build a paid endpoint step by step
+- [Accept payments](/build/accept-payments) — Prices, recipients, settlement timing, and mainnet
+- [Web publishers](/solutions/publishers) — Evaluate per-item access for a publication
