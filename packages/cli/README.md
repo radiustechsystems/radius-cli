@@ -21,7 +21,7 @@ npm install -g radius-cli
 radius-cli wallet address
 ```
 
-Requires Node ≥ 20.
+Requires Node ≥ 22.
 
 ## Networks
 

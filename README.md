@@ -79,9 +79,9 @@ pnpm --filter radius-cli build        # one package
 node packages/cli/dist/index.js --help
 ```
 
-Requires Node ≥ 20 and pnpm 10 (`corepack enable pnpm`). `pnpm build` / `pnpm test` / `pnpm typecheck` at the root run every package in dependency order. Building or typechecking the CLI on its own also works from a fresh clone: `packages/cli` is a TypeScript project reference to `packages/sdk`, so `tsc -b` rebuilds the SDK whenever its source is newer than its `dist`; the CLI's tests read the SDK from source.
+Requires Node ≥ 22 and pnpm 10 (`corepack enable pnpm`); `.node-version` pins Node 24 for local development. `pnpm build` / `pnpm test` / `pnpm typecheck` at the root run every package in dependency order. Building or typechecking the CLI on its own also works from a fresh clone: `packages/cli` is a TypeScript project reference to `packages/sdk`, so `tsc -b` rebuilds the SDK whenever its source is newer than its `dist`; the CLI's tests read the SDK from source.
 
-Every PR that changes `packages/cli` or `packages/sdk` adds a [changeset](.changeset/README.md) (`pnpm changeset`); the `changeset` GitHub check enforces it, and a bot comment on the PR lists what will be released. CI (`.github/workflows/ci.yml`) builds, typechecks and tests every package on Node 20 and 24.
+Every PR that changes `packages/cli` or `packages/sdk` adds a [changeset](.changeset/README.md) (`pnpm changeset`); the `changeset` GitHub check enforces it, and a bot comment on the PR lists what will be released. CI (`.github/workflows/ci.yml`) builds, typechecks and tests every package on Node 22 and 24.
 
 ## Releasing
 
@@ -96,6 +96,6 @@ One-time setup (repeat the npm step for every new package):
 
 - On npmjs.com, for `radius-cli` and `radius-sdk`: **Settings → Trusted Publisher → GitHub Actions**, organization `radiustechsystems`, repository `radius-cli`, workflow filename `release.yml`, environment blank (or `npm` if you enable the `environment:` line in the publish job). Once a trusted publish succeeds, set **Publishing access** to *Require two-factor authentication and disallow tokens* so tokens can no longer publish.
 - On GitHub, **Settings → Actions → General → Workflow permissions**: tick *Allow GitHub Actions to create and approve pull requests* (needed to open the Version Packages PR) and choose *Read repository contents and packages permissions* (every workflow declares the permissions it needs). If the option is greyed out, enable it for the organization first.
-- Optional: mark the `changeset`, `Node 20` and `Node 24` checks as required in the `main` branch ruleset.
+- Optional: mark the `changeset`, `Node 22` and `Node 24` checks as required in the `main` branch ruleset.
 
 Manual fallback: `pnpm version-packages`, merge, then `pnpm release` publishes with `changeset publish`. Each package can also publish from its own directory (`pnpm publish` inside `packages/<name>`); the CLI's `prepublishOnly` refuses to publish until the SDK version it depends on is on npm. Note that `pnpm pack`/tarball publishing in CI does not run `prepublishOnly`, which is why the release workflow builds explicitly and relies on changesets' dependency ordering instead.

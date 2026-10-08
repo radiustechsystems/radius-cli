@@ -2,7 +2,7 @@ import type { HTTPAdapter, HTTPRequestContext } from '@x402/core/server';
 
 /**
  * x402 `HTTPAdapter` over a web-standard `Request`. Works anywhere `Request`/`Response`
- * exist: Cloudflare Workers, Bun, Deno, Node 18+, Next.js route handlers, and
+ * exist: Cloudflare Workers, Bun, Deno, Node 22+, Next.js route handlers, and
  * frameworks built on them (Hono, SvelteKit, Remix, Astro).
  */
 export class RequestAdapter implements HTTPAdapter {

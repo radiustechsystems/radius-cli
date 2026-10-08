@@ -50,7 +50,7 @@ across the full dependency tree depends on compatible ranges and the package man
 
 The payment configuration is the same everywhere; only the wrapper changes.
 
-**Any web-standard runtime** (Cloudflare Workers without a framework, Bun, Deno, Node 18+,
+**Any web-standard runtime** (Cloudflare Workers without a framework, Bun, Deno, Node 22+,
 Next.js / SvelteKit / Remix route handlers): a handler that takes a `Request` and returns a
 `Response`. Paid handlers receive the settled receipt.
 

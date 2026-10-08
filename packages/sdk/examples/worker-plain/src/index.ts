@@ -1,5 +1,5 @@
 // A paid API on Cloudflare Workers with no framework: the SDK's web-standard handler
-// takes a `Request` and returns a `Response`. The same code runs on Bun, Deno, Node 18+
+// takes a `Request` and returns a `Response`. The same code runs on Bun, Deno, Node 22+
 // (`Bun.serve({ fetch })`, `Deno.serve(fetch)`) and in Next.js / SvelteKit route handlers.
 import { radiusPayments, type PaymentHandler } from 'radius-sdk/server';
 
