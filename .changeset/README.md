@@ -5,6 +5,9 @@ changeset: `pnpm changeset`, pick the package(s), pick patch / minor / major, wr
 entry that will appear in the changelog. The `changeset` GitHub check refuses PRs that change a
 package without one; add the `no changeset` label for changes that need no release note.
 
+`packages/docs` is private and unversioned: docs-only PRs need no changeset. Its production deploys follow npm
+releases (see `packages/docs/README.md`).
+
 The Claude plugin under `plugins/radius` is released separately. Skill and plugin changes do not
 need a changeset unless the same PR also changes a publishable package. Bump the plugin version in
 `plugins/radius/.claude-plugin/plugin.json` for release content changes; plugin CI enforces this.

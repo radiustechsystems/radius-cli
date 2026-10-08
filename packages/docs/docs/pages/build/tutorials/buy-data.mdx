@@ -1,0 +1,219 @@
+---
+title: 'Tutorial: buy a data lookup'
+description: Fund a testnet wallet, pay for a lookup with radius-sdk within a per-request limit, confirm the settlement, and turn it into an agent tool with a total budget.
+---
+
+import { STABLECOIN, NATIVE_TOKEN } from '../../../constants';
+
+# Buy a data lookup [Pay with a limit, confirm, and give it to an agent]
+
+In this tutorial you buy the lookup from [sell a data lookup](/build/tutorials/sell-data). You fund a new testnet wallet, pay within a per-request limit, confirm the payment on chain, watch a more expensive offer get refused, and wrap the purchase in a tool an agent can call with a total budget.
+
+It takes about 10 minutes, and no AI model is needed: the agent tool is a plain function.
+
+:::note[Verified with]
+`radius-sdk` 0.3.0, `viem` 2.57.2, and `radius-cli` 0.3.0, on Node.js 22.23 and Radius testnet, against the seller from the first tutorial, on 2026-10-01.
+:::
+
+## Before you start
+
+- The seller from [sell a data lookup](/build/tutorials/sell-data) running on `http://localhost:8787`, and its `PAY_TO` address.
+- Node.js 20 or later and pnpm.
+
+## 1. Create the project and a wallet
+
+```bash
+mkdir lookup-buyer && cd lookup-buyer
+pnpm init
+pnpm pkg set type=module
+pnpm add radius-sdk@0.3.0 viem@2.57.2
+```
+
+Generate a test key and keep it in your shell, not in files you commit:
+
+```bash
+export RADIUS_PRIVATE_KEY=$(node --input-type=module -e "import { generatePrivateKey } from 'viem/accounts'; console.log(generatePrivateKey())")
+export SELLER_ADDRESS=0xTheSellersPayToAddress
+```
+
+Use this key only on testnet. Each new shell needs the same key, so keep it somewhere private if you stop and continue later.
+
+## 2. Fund the wallet
+
+Create `fund.mjs`:
+
+```javascript
+import { createRadiusFetch } from 'radius-sdk/client';
+
+const payFetch = createRadiusFetch({
+  network: 'testnet',
+  signer: process.env.RADIUS_PRIVATE_KEY,
+  maxPerRequest: '0.001 SBC',
+});
+
+console.log('wallet', payFetch.address);
+const result = await payFetch.fund();
+console.log('faucet', result.success, result.amount, 'SBC', result.txHash);
+
+const {
+  native,
+  tokens: [sbc],
+} = await payFetch.balances();
+console.log(`balance: ${sbc.formatted} ${sbc.symbol}, ${native.rawFormatted} ${native.symbol}`);
+```
+
+```bash
+node fund.mjs
+```
+
+```text
+wallet 0x243D…aA85
+faucet true 0.5 SBC 0xae7f…5a91
+balance: 0.5 SBC, 0.001 RUSD
+```
+
+The testnet faucet sends 0.5 {STABLECOIN} and a little {NATIVE_TOKEN}, and limits how often each wallet can use it. When it refuses, `fund()` throws a `RadiusPaymentError` with code `faucet`; wait and retry, or fund the wallet another way: see [create and fund a wallet](/build/wallet).
+
+## 3. Pay for a lookup
+
+Create `buy.mjs`:
+
+```javascript
+import { createPublicClient, http } from 'viem';
+import { createRadiusFetch, getPaymentReceipt, radiusActions, RadiusPaymentError } from 'radius-sdk/client';
+import { radiusTestnet } from 'radius-sdk';
+
+const url = 'http://localhost:8787/api/lookup?ip=9.9.9.9';
+const chain = createPublicClient({ chain: radiusTestnet.chain, transport: http() }).extend(radiusActions());
+const sbcOf = async (address) => (await chain.getBalances({ address })).tokens[0].formatted;
+
+const payFetch = createRadiusFetch({
+  network: 'testnet',
+  signer: process.env.RADIUS_PRIVATE_KEY,
+  maxPerRequest: '0.001 SBC',
+});
+
+console.log('before: buyer', await sbcOf(payFetch.address), 'SBC; seller', await sbcOf(process.env.SELLER_ADDRESS), 'SBC');
+
+const response = await payFetch(url);
+console.log('status', response.status, await response.json());
+
+const receipt = getPaymentReceipt(response, payFetch.network);
+console.log('receipt', receipt?.success, receipt?.explorerUrl);
+if (!receipt?.transaction) throw new Error('The seller returned no payment receipt');
+
+const settlement = await payFetch.getSettlement(receipt.transaction);
+console.log('settlement', settlement?.status, settlement?.paid(process.env.SELLER_ADDRESS));
+
+console.log('after: buyer', await sbcOf(payFetch.address), 'SBC; seller', await sbcOf(process.env.SELLER_ADDRESS), 'SBC');
+```
+
+```bash
+node buy.mjs
+```
+
+```text
+before: buyer 0.5 SBC; seller 0 SBC
+status 200 { ip: '9.9.9.9', reputation: 'clean', score: 7, paidBy: '0x243D…aA85', transaction: '0xe85c…1e55' }
+receipt true https://testnet.radiustech.xyz/tx/0xe85c…1e55
+settlement success 1000n
+after: buyer 0.499 SBC; seller 0.001 SBC
+```
+
+`payFetch` received the `402`, checked the offer against `maxPerRequest`, signed a payment, and retried. The receipt comes from the seller; `getSettlement` reads the same transaction from the chain, and `paid(seller)` shows the seller received 1000 base units. Use `paid(to)` rather than reading `transfers` directly: a settlement transaction can also contain the facilitator's own fee conversion. The buyer paid exactly the price: the facilitator sponsored the one-time Permit2 approval, so no gas was spent.
+
+## 4. Refuse an offer above the limit
+
+Add to the end of `buy.mjs`:
+
+```javascript
+const cheap = createRadiusFetch({ network: 'testnet', signer: process.env.RADIUS_PRIVATE_KEY, maxPerRequest: '0.0005 SBC' });
+try {
+  await cheap(url);
+} catch (error) {
+  if (!(error instanceof RadiusPaymentError)) throw error;
+  console.log('refused:', error.code, '-', error.message);
+}
+```
+
+```text
+refused: price_above_limit - Offer 0.001 SBC exceeds maxPerRequest 0.0005 SBC
+```
+
+The client refuses before signing, so nothing is charged.
+
+## 5. Give it to an agent
+
+`maxPerRequest` caps each payment, not the total. An agent that calls a paid tool in a loop needs a budget enforced by the code that signs. Create `tool.mjs`:
+
+```javascript
+import { createRadiusFetch, getPaymentReceipt, RadiusPaymentError } from 'radius-sdk/client';
+
+const SELLER = process.env.SELLER_ADDRESS.toLowerCase();
+const BUDGET = 1_500n; // 0.0015 SBC in base units, across all calls
+let spent = 0n;
+
+const payFetch = createRadiusFetch({
+  network: 'testnet',
+  signer: process.env.RADIUS_PRIVATE_KEY,
+  maxPerRequest: '0.001 SBC',
+  onPaymentRequired: (offer) => {
+    if (offer.payTo.toLowerCase() !== SELLER) return false;
+    if (spent + BigInt(offer.amount) > BUDGET) return false;
+    spent += BigInt(offer.amount);
+    return true;
+  },
+});
+
+/** Agent tool: look up one IP. Returns data, or an error the agent can act on. */
+export async function lookupIp(ip) {
+  try {
+    const response = await payFetch(`http://localhost:8787/api/lookup?ip=${encodeURIComponent(ip)}`);
+    const receipt = getPaymentReceipt(response, payFetch.network);
+    if (!response.ok) return { error: `HTTP ${response.status}`, transaction: receipt?.transaction };
+    return { result: await response.json(), transaction: receipt?.transaction };
+  } catch (error) {
+    if (error instanceof RadiusPaymentError) return { error: error.code };
+    throw error;
+  }
+}
+
+console.log(await lookupIp('8.8.8.8'));
+console.log(await lookupIp('8.8.4.4'));
+```
+
+```bash
+node tool.mjs
+```
+
+```text
+{ result: { ip: '8.8.8.8', reputation: 'clean', score: 7, … }, transaction: '0x6f46…257d' }
+{ error: 'declined' }
+```
+
+The first call fits the budget and pays. The second would exceed 0.0015 {STABLECOIN}, so `onPaymentRequired` declines it before signing. Register `lookupIp` as a tool in your agent framework; the model sees results and errors, never the key.
+
+This budget counts an offer when it is approved and lives in memory. In production, keep the amount spent in storage that survives restarts and is shared by concurrent requests; see [set up an agent to pay](/build/make-payments/agents).
+
+## From a terminal
+
+`radius-cli` pays the same endpoint from a project wallet, which suits agents that run shell commands. Select the project wallet first; the next command creates it and prints its address:
+
+```bash
+export RADIUS_HOME=.radius RADIUS_NETWORK=testnet
+npx radius-cli@0.3.0 wallet address
+```
+
+Fund that address with a little {STABLECOIN}, for example `await payFetch.send('0xCliWalletAddress', '0.01 SBC')` from the buyer wallet above, or see [create and fund a wallet](/build/wallet). Then, in the same shell:
+
+```bash
+npx radius-cli@0.3.0 wallet x402 get 'http://localhost:8787/api/lookup?ip=1.1.1.1' --x402-threshold 0.001 --json -y
+```
+
+With `--json`, the output includes a `payment` object with the amount, recipient and transaction. With `--x402-threshold 0.0005`, the CLI refuses the offer and exits with code `2`.
+
+## Next steps
+
+- [Make payments](/build/make-payments): signers, error codes, uncertain outcomes, and Permit2 approval.
+- [Set up an agent to pay](/build/make-payments/agents): skills, wallets, and where to enforce limits.
+- [radius-sdk reference](/reference/radius-sdk): every option for `createRadiusFetch`.

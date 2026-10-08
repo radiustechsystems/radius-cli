@@ -1,0 +1,80 @@
+---
+title: Create and Fund a Wallet
+description: Create a project-scoped Radius wallet with radius-cli, fund it on testnet, and verify balances from an agent or terminal workflow.
+---
+
+import { STABLECOIN } from '../../constants';
+
+# Create and Fund a Wallet [Go from zero to funded testnet wallet]
+
+This guide gets you a funded Radius testnet wallet using only a terminal or agent workflow. It is designed for developers and autonomous agents that need programmatic onboarding.
+
+## What your agent will do
+
+1. Generate a new wallet securely
+2. Fund it via the Faucet API
+3. Verify its balance on-chain
+
+## Prerequisites
+
+- Node.js 20 or later
+- `radius-cli`
+- Claude Code, Codex, or equivalent agentic software tools when using the skill flow
+
+Install or run `radius-cli`:
+
+```bash
+npx radius-cli --help
+```
+
+Or install globally:
+
+```bash
+npm install -g radius-cli
+radius-cli --help
+```
+
+## Create a project-scoped wallet
+
+Use `RADIUS_HOME` to keep an agent wallet local to the current project:
+
+```bash
+export RADIUS_HOME=.radius
+export RADIUS_NETWORK=testnet
+
+radius-cli wallet address
+```
+
+The first account-needing command creates a local keystore if one does not exist. Log the wallet address only. Do not print or commit private keys.
+
+:::warning
+Add `.radius/` and `.env` to `.gitignore` before creating project-local wallets.
+:::
+
+## Use the Dripping Faucet Skill
+
+Use the `dripping-faucet` skill when an agent should complete the whole testnet funding flow, including challenge signing if required and balance verification.
+
+```bash
+claude "Read docs.radiustech.xyz/skills/dripping-faucet.md and fund a local testnet wallet. Use RADIUS_HOME=.radius, RADIUS_NETWORK=testnet, and radius-cli for wallet address, signing, and balance checks."
+```
+
+After funding, verify the balance:
+
+```bash
+RADIUS_HOME=.radius RADIUS_NETWORK=testnet \
+  radius-cli wallet balance --json
+```
+
+:::note[Testnet only]
+The agentic faucet workflow targets Radius Testnet. For mainnet, use the [Dashboard](https://network.radiustech.xyz) to claim {STABLECOIN}, or [bridge stablecoins](/build/bridge) from Ethereum or Base.
+:::
+
+## What's next
+
+- [Send your first transaction](/build/claim-and-transact) — Use the dashboard or viem to send {STABLECOIN}
+- [radius-cli](/reference/radius-cli) — Common local wallet, signing, balance, transaction, and x402 commands
+- [Bridge stablecoins](/build/bridge) — Move USDC or {STABLECOIN} from Ethereum or Base
+- [Build with LLMs](/build/coding-assistants) — Use LLM-assisted workflows and the Radius Dev Skill
+- [Network and RPC](/reference/network) — Full network reference for both testnet and mainnet
+- [Fees](/reference/fees) — How stablecoin gas fees and the Turnstile work

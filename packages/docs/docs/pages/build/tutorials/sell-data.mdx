@@ -1,0 +1,161 @@
+---
+title: 'Tutorial: sell a data lookup'
+description: Build a Cloudflare Worker that charges 0.001 SBC per lookup with radius-sdk, run it locally, and see an unpaid request get a payment challenge.
+---
+
+import { STABLECOIN } from '../../../constants';
+
+# Sell a data lookup [Charge 0.001 SBC per request on testnet]
+
+In this tutorial you build a small API that sells one IP-reputation lookup for 0.001 {STABLECOIN}. You run it locally, see an unpaid request receive a payment challenge, and, after [the buyer tutorial](/build/tutorials/buy-data), see the payment arrive in your wallet. The data is synthetic; no external service is needed.
+
+It takes about 10 minutes. For the same steps as a reference, see [Accept payments](/build/accept-payments).
+
+:::note[Verified with]
+`radius-sdk` 0.3.0, `hono` 4.13.12, `wrangler` 4.145.0, and `radius-cli` 0.3.0, on Node.js 22.23 and Radius testnet, on 2026-10-01.
+:::
+
+## Before you start
+
+- Node.js 20 or later and pnpm.
+- A wallet address to receive payments. It needs no funds and no private key on the server; see [create and fund a wallet](/build/wallet).
+
+## 1. Create the project
+
+```bash
+mkdir lookup-seller && cd lookup-seller
+pnpm init
+pnpm add hono@4.13.12 radius-sdk@0.3.0
+pnpm add -D wrangler@4.145.0
+```
+
+`hono` serves the API, `radius-sdk` adds payments, and `wrangler` runs the Worker locally. The versions are pinned to the ones this tutorial was verified with; `radius-sdk` is pre-1.0, so newer minor versions can change its API.
+
+## 2. Configure the Worker
+
+Create `wrangler.toml`:
+
+```toml
+name = "lookup-seller"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+```
+
+Create `.dev.vars` with the address that receives payments, and keep it out of version control:
+
+```bash
+echo "PAY_TO=0xYourWalletAddress" > .dev.vars
+```
+
+## 3. Write the API
+
+Create `src/index.ts`:
+
+```typescript
+import { Hono } from 'hono';
+import { radiusPayments, type RadiusPaymentVariables } from 'radius-sdk/hono';
+
+type Env = {
+  Bindings: { PAY_TO: `0x${string}` };
+  Variables: RadiusPaymentVariables;
+};
+
+const app = new Hono<Env>();
+
+app.get('/health', (c) => c.json({ ok: true }));
+
+app.use(
+  '/api/*',
+  radiusPayments<Env>({
+    network: 'testnet',
+    payTo: (c) => c.env.PAY_TO,
+    routes: {
+      'GET /api/lookup': { price: '0.001 SBC', description: 'Reputation lookup for one IP address' },
+    },
+  }),
+);
+
+app.get('/api/lookup', (c) => {
+  const ip = c.req.query('ip') ?? '0.0.0.0';
+  const payment = c.get('radiusPayment');
+  return c.json({ ip, reputation: 'clean', score: 7, paidBy: payment?.payer, transaction: payment?.transaction });
+});
+
+export default app;
+```
+
+`radiusPayments` protects `GET /api/lookup`. The handler runs only after the payment has settled, so `c.get('radiusPayment')` always holds a payment there. `/health` has no price, so it stays free.
+
+## 4. Run it
+
+```bash
+pnpm wrangler dev
+```
+
+The Worker listens on `http://localhost:8787`. In another terminal, call the free route:
+
+```bash
+curl http://localhost:8787/health
+```
+
+```json
+{ "ok": true }
+```
+
+## 5. See the payment challenge
+
+Request the lookup without paying:
+
+```bash
+curl -i 'http://localhost:8787/api/lookup?ip=9.9.9.9'
+```
+
+The response is `HTTP/1.1 402 Payment Required`, with the offer in the `PAYMENT-REQUIRED` header. Decode it:
+
+```bash
+curl -s -D - -o /dev/null 'http://localhost:8787/api/lookup?ip=9.9.9.9' \
+  | grep -i '^payment-required:' | cut -d' ' -f2 | tr -d '\r' | base64 -d
+```
+
+The `accepts` entry says what a buyer must pay:
+
+| Field     | Value                                                 |
+| --------- | ----------------------------------------------------- |
+| `scheme`  | `exact`                                               |
+| `network` | `eip155:72344` (Radius testnet)                       |
+| `amount`  | `1000`: 0.001 {STABLECOIN} in base units (6 decimals) |
+| `asset`   | The {STABLECOIN} contract                             |
+| `payTo`   | Your `PAY_TO` address                                 |
+
+A request with an invalid payment gets the same `402`, and the handler does not run:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -H 'PAYMENT-SIGNATURE: eyJ4NDAyVmVyc2lvbiI6Mn0=' \
+  'http://localhost:8787/api/lookup?ip=9.9.9.9'
+```
+
+```text
+402
+```
+
+## 6. Get paid
+
+Leave the Worker running and follow [buy a data lookup](/build/tutorials/buy-data) with a second wallet. Then check your balance:
+
+```bash
+RADIUS_NETWORK=testnet npx radius-cli@0.3.0 wallet balance 0xYourWalletAddress --json
+```
+
+`sbc` increases by `0.001` for each paid lookup. The facilitator pays the gas, so you receive the full price.
+
+## What you built
+
+- A route priced in {STABLECOIN}, with payment checked and settled before the handler runs.
+- A free route next to it.
+- A recipient address in configuration, with no key on the server.
+
+## Next steps
+
+- [Accept payments](/build/accept-payments): per-request prices, reading the payment in handlers, settling after the handler, and moving to mainnet.
+- Deploy: set the recipient with `pnpm wrangler secret put PAY_TO`, then run `pnpm wrangler deploy`.
+- [x402 payments](/build/x402): what happens between the challenge and the settlement.

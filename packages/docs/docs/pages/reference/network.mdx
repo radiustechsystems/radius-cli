@@ -1,0 +1,126 @@
+---
+title: Network and RPC
+description: Configure Radius RPC endpoints, chain IDs, explorer and faucet links, API key usage, and fee-aware client behavior for each network.
+---
+
+import { MAINNET_RPC_URL, MAINNET_CHAIN_ID, TESTNET_RPC_URL, TESTNET_CHAIN_ID, MAINNET_NAME, TESTNET_NAME, NATIVE_TOKEN, MAINNET_DASHBOARD_URL, TESTNET_DASHBOARD_URL, FAUCET_DASHBOARD_PATH, FAUCET_TESTNET_API_URL, RADIUS_FACILITATOR_MAINNET_URL, RADIUS_FACILITATOR_TESTNET_URL, MAINNET_CAIP2, TESTNET_CAIP2 } from '../../constants';
+
+# Network and RPC [Endpoints, limits, and integration guidance]
+
+Use this page to configure wallets and apps for Radius. It includes network values, RPC behavior, rate limits, and fee configuration patterns.
+
+## Network configuration
+
+### Radius Network
+
+| Setting             | Value                                                                                                  |
+| ------------------- | ------------------------------------------------------------------------------------------------------ |
+| **Network name**    | {MAINNET_NAME}                                                                                         |
+| **RPC endpoint**    | {MAINNET_RPC_URL}                                                                                      |
+| **Chain ID**        | {MAINNET_CHAIN_ID}                                                                                     |
+| **CAIP-2**          | {MAINNET_CAIP2}                                                                                        |
+| **Currency symbol** | {NATIVE_TOKEN}                                                                                         |
+| **Explorer**        | {MAINNET_DASHBOARD_URL}                                                                                |
+| **Faucet (API)**    | [https://network.radiustech.xyz/api/v1/docs#faucet](https://network.radiustech.xyz/api/v1/docs#faucet) |
+
+### Radius Testnet
+
+| Setting                | Value                                                                                                  |
+| ---------------------- | ------------------------------------------------------------------------------------------------------ |
+| **Network name**       | {TESTNET_NAME}                                                                                         |
+| **RPC endpoint**       | {TESTNET_RPC_URL}                                                                                      |
+| **Chain ID**           | {TESTNET_CHAIN_ID}                                                                                     |
+| **CAIP-2**             | {TESTNET_CAIP2}                                                                                        |
+| **Currency symbol**    | {NATIVE_TOKEN}                                                                                         |
+| **Explorer**           | {TESTNET_DASHBOARD_URL}                                                                                |
+| **Faucet (Dashboard)** | [https://testnet.radiustech.xyz/wallet](https://testnet.radiustech.xyz/wallet)                         |
+| **Faucet (API)**       | [https://testnet.radiustech.xyz/api/v1/docs#faucet](https://testnet.radiustech.xyz/api/v1/docs#faucet) |
+
+## Add Radius to a wallet
+
+### MetaMask
+
+1. Open MetaMask and select **Add network**.
+2. Enter the values from the table above.
+3. Save and switch to the Radius network you configured.
+
+### Programmatic setup (viem)
+
+Use the Radius chain definition from [Tooling configuration — chain definition](/build/tooling#chain-definition). No fee overrides are needed — viem's built-in estimation works with Radius.
+
+### Terminal and agent setup (radius-cli)
+
+Use `radius-cli` for local wallet and agent execution. Set the network explicitly because the CLI defaults to mainnet:
+
+```bash
+RADIUS_HOME=.radius RADIUS_NETWORK=testnet RADIUS_RPC_URL={TESTNET_RPC_URL} \
+  radius-cli wallet balance --json
+```
+
+For command examples, see [radius-cli](/reference/radius-cli).
+
+## RPC endpoints and transport
+
+- **HTTP RPC:** Use the endpoint values in the network tables.
+- **WebSocket RPC:** Requires an RPC key with elevated privileges.
+
+For WebSocket access requests, use the <a href="https://www.radiustech.xyz/contact">Radius contact form</a>.
+
+## API keys and rate limiting
+
+Radius tracks request volume per API key.
+
+- Requests without an API key have lower limits.
+- Default API key limit is **10 MGas/s**.
+- For higher limits, use the <a href="https://www.radiustech.xyz/contact">Radius contact form</a>.
+
+In this context, “MGas” includes both RPC calls and gas consumed by submitted transactions.
+
+### Avoid throttling
+
+1. Reuse API keys consistently per environment.
+2. Add client-side retry with exponential backoff for `429`-style responses.
+3. Cache frequent read requests where possible.
+4. Batch reads with Multicall3 when practical.
+5. Queue and smooth bursty traffic instead of sending spikes.
+
+### RPC key URL format
+
+Append your API key to the RPC URL path:
+
+<code>{MAINNET_RPC_URL}/YOUR_API_KEY</code>
+
+## JSON-RPC behavior to account for
+
+Radius is EVM compatible, but some methods differ from Ethereum behavior:
+
+- `eth_blockNumber` returns the current timestamp in milliseconds
+- `eth_getBalance` returns native balance plus convertible SBC balance
+- `eth_gasPrice` returns the fixed network gas price
+- `eth_feeHistory` returns a pseudo-supported response
+
+See [JSON-RPC API](/reference/json-rpc/methods) for method details and [Ethereum compatibility](/reference/ethereum-compatibility) for rationale.
+
+## Get testnet funds
+
+Use the <a href={`${TESTNET_DASHBOARD_URL}${FAUCET_DASHBOARD_PATH}`}>Radius testnet faucet</a> (Dashboard) to claim SBC tokens with a point-and-click interface.
+
+For programmatic and agent access, use [Create and Fund a Wallet](/build/wallet). The agentic faucet flow is available on testnet only — use the Dashboard or bridge stablecoins for mainnet.
+
+## x402 facilitator endpoints
+
+Use the Radius facilitator for [x402](/build/x402) payment settlement. Each network has a dedicated facilitator URL.
+
+| Network                  | Facilitator URL                  | CAIP-2 identifier |
+| ------------------------ | -------------------------------- | ----------------- |
+| Radius Network (mainnet) | {RADIUS_FACILITATOR_MAINNET_URL} | {MAINNET_CAIP2}   |
+| Radius Testnet           | {RADIUS_FACILITATOR_TESTNET_URL} | {TESTNET_CAIP2}   |
+
+For integration patterns, see [x402 payments](/build/x402). For the facilitator API reference, see [x402 facilitator API](/reference/facilitator-api).
+
+## Related pages
+
+- [JSON-RPC API](/reference/json-rpc/methods)
+- [Fees](/reference/fees)
+- [Contract addresses](/reference/contract-addresses)
+- [Ethereum compatibility](/reference/ethereum-compatibility)

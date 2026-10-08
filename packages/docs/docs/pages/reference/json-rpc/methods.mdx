@@ -1,0 +1,328 @@
+---
+title: JSON-RPC API
+description: JSON-RPC 2.0 method reference for Radius with divergent, pseudo-supported, and unsupported behaviors.
+---
+
+import { NATIVE_TOKEN, STABLECOIN } from '../../../constants';
+
+# JSON-RPC API [Method behavior and compatibility]
+
+Radius exposes a JSON-RPC 2.0 API compatible with standard Ethereum tooling. This page documents methods that differ from Ethereum, methods requiring elevated access, pseudo-supported methods, and unsupported methods.
+
+For integration guidance, see [JSON-RPC overview](/reference/json-rpc).
+
+## Divergent methods
+
+### `eth_blockNumber`
+
+Returns the current timestamp in milliseconds, encoded as a hex string.
+
+**Parameters:** None
+
+**Returns:** `string` — Current block number as a hex string.
+
+---
+
+### `eth_getBalance`
+
+Returns the account's native balance plus the full {STABLECOIN} ERC-20 token holdings converted to native currency at the current exchange rate, with no cap.
+
+:::note
+The returned balance may exceed what can be spent in a single transaction, because the per-transaction Turnstile conversion limit still applies during execution. Use `eth_estimateGas` to verify that a specific transaction will succeed before submitting.
+:::
+
+**Parameters:**
+
+| Name      | Type     | Description                                                                                                           |
+| --------- | -------- | --------------------------------------------------------------------------------------------------------------------- |
+| `address` | `string` | Address to query (20 bytes, hex encoded)                                                                              |
+| `block`   | `string` | Block tag (`latest`, `pending`, `safe`, `finalized`) or block number. Historical block numbers return error `-32000`. |
+
+**Returns:** `string` — Balance in wei as a hex string.
+
+---
+
+### `eth_getBlock`, `eth_getBlockByNumber`, `eth_getBlockByHash`
+
+Blocks are reconstructed on demand. Very recent reads are not guaranteed to be stable across repeated calls. `eth_getBlockByHash` returns `null` for hashes that do not correspond to a known block.
+
+See [Ethereum compatibility](/reference/ethereum-compatibility#blocks).
+
+---
+
+### `eth_call`, `eth_estimateGas`
+
+Dry-run execution skips sender balance validation unconditionally.
+
+This means `eth_call` and `eth_estimateGas` do not fail solely because the `from` account lacks enough {NATIVE_TOKEN} to pay for execution.
+
+**Turnstile simulation behavior:** The Turnstile only fires during simulation when `gas_price × gas_limit + value > 0`. At an effective gas price of zero with no native value sent, zero Turnstile iterations run and `balanceOf` returns the unmodified balance. At a non-zero gas price, simulation applies the Turnstile deduction as normal.
+
+---
+
+### `eth_sendRawTransaction`
+
+If a submitted transaction is rejected with `NonceTooHigh`, Radius may queue it in a per-sender pending transaction pool instead of discarding it immediately.
+
+- Up to 30 queued transactions per sender
+- Up to 100 sender addresses tracked globally
+- Queued transactions are retried automatically by a background clearout loop
+- Replace-by-fee is supported for queued transactions
+
+Transactions rejected by the pending pool return a distinct error message per rejection reason (gas price too low, duplicate nonce, replace-by-fee underpriced, and so on). Clients that parse the error message text to detect specific rejection reasons must match against the specific reason string returned.
+
+---
+
+### `eth_maxPriorityFeePerGas`
+
+Returns the current gas price. On Radius this equals `eth_gasPrice` — there is no separate priority-fee market.
+
+**Parameters:** None
+
+**Returns:** `string` — Gas price in wei as a hex string.
+
+---
+
+### `eth_getLogs`
+
+Two constraints differ from Ethereum:
+
+**Address filter required.** Every query must include an `address` field. Omitting it returns error `-33014`.
+
+**Block range limit.** The maximum range between `fromBlock` and `toBlock` is 1,000,000 units. Because Radius block numbers are millisecond timestamps (see [`eth_blockNumber`](#eth_blocknumber)), this covers ~16 minutes 40 seconds of wall time. Queries exceeding this return error `-33002`.
+
+To query logs over a longer period, split the range into consecutive chunks of up to 1,000,000 and concatenate the results. For real-time event monitoring, use [WebSocket `eth_subscribe("logs")`](#eth_subscribe) instead.
+
+## Extended methods
+
+These methods are not part of the core Ethereum JSON-RPC specification but are supported by Radius. Some, such as `eth_sendRawTransactionSync`, implement a standard (EIP-7966); others (such as `rad_*` methods) are Radius-specific.
+
+### `eth_sendRawTransactionSync`
+
+Submits a signed raw transaction and waits synchronously for the transaction receipt before returning. Implements [EIP-7966](https://eips.ethereum.org/EIPS/eip-7966).
+
+Unlike `eth_sendRawTransaction`, which returns a transaction hash immediately and requires the client to poll for inclusion, `eth_sendRawTransactionSync` combines submission and receipt retrieval into a single RPC call. This avoids a separate receipt-polling step. The latency benefit depends on the workload, network connection, and polling interval.
+
+What is distinctive on Radius is what the returned receipt represents. Because Radius has [instant finality](/reference/ethereum-compatibility#instant-finality), the sync receipt is both fast and **final** (~100 ms, no reorg). On a typical L2 the equivalent sync receipt reflects only transaction _inclusion_ and can still be reorganized until it settles on L1.
+
+This is especially useful for latency-sensitive applications such as [x402 payment flows](/build/x402), where on-chain settlement is on the critical path of an HTTP request-response cycle.
+
+**Parameters:**
+
+| Position | Type     | Description                              | Required |
+| -------- | -------- | ---------------------------------------- | -------- |
+| 1        | `string` | Signed, RLP-encoded transaction hex data | Yes      |
+| 2        | `number` | Maximum wait time in milliseconds        | No       |
+
+If no timeout is provided, the node's configured default is used (recommended: 2 000 ms). The timeout cannot exceed the node-configured maximum.
+
+**Returns:** Transaction receipt object (same structure as `eth_getTransactionReceipt`) on success.
+
+**Method-specific error codes:**
+
+| Code | Type           | Description                                                           | `data` field         |
+| ---- | -------------- | --------------------------------------------------------------------- | -------------------- |
+| `4`  | Timeout        | Transaction was added to the mempool but not processed within timeout | Transaction hash     |
+| `5`  | Unknown/Queued | Transaction was not added to the mempool                              | Transaction hash     |
+| `6`  | Nonce gap      | Transaction rejected due to a nonce gap                               | Expected nonce (hex) |
+
+On error code `6`, the `data` field contains the expected nonce as a hex string directly, so the caller can immediately resubmit with the correct nonce without making a separate `eth_getTransactionCount` call.
+
+On error code `4`, the `data` field contains the transaction hash. The transaction was accepted into the mempool — the caller can continue monitoring via `eth_getTransactionReceipt`.
+
+**Example request:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "eth_sendRawTransactionSync",
+  "params": ["0xf86c808504a817c80082520894ab..."],
+  "id": 1
+}
+```
+
+**Example success response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "transactionHash": "0x1234abcd...",
+    "blockHash": "0xabcd1234...",
+    "blockNumber": "0x10d4f",
+    "gasUsed": "0x5208",
+    "status": "0x1",
+    "logs": []
+  }
+}
+```
+
+**Example timeout response (error code 4):**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": 4,
+    "message": "The transaction was added to the mempool but wasn't processed within the designated timeout interval.",
+    "data": "0x1234abcd..."
+  }
+}
+```
+
+## Methods requiring elevated RPC access
+
+### `eth_subscribe`
+
+Creates a WebSocket subscription for real-time logs. Radius supports `logs` only.
+
+`newHeads` and `newPendingTransactions` are not available.
+
+**Parameters:**
+
+| Name     | Type     | Description                             |
+| -------- | -------- | --------------------------------------- |
+| `type`   | `string` | Subscription type (for example, `logs`) |
+| `filter` | `object` | Log filter object                       |
+
+**Returns:** `string` — Subscription ID.
+
+## Pseudo-supported methods
+
+These methods return defaults and do not return errors. Most applications should not rely on them.
+
+### `eth_accounts`
+
+Always returns an empty array. Radius does not manage accounts.
+
+**Parameters:** None
+
+**Returns:** `array` — `[]`
+
+---
+
+### `eth_feeHistory`
+
+Returns a static response. Radius uses fixed pricing instead of fee-market history.
+
+**Parameters:** See Ethereum JSON-RPC specification
+
+**Returns:** `object`
+
+---
+
+### `eth_mining`
+
+Always returns `true`.
+
+**Parameters:** None
+
+**Returns:** `boolean`
+
+---
+
+### `eth_syncing`
+
+Always returns `false`.
+
+**Parameters:** None
+
+**Returns:** `boolean`
+
+---
+
+### `eth_hashrate`
+
+Always returns `0x0`.
+
+**Parameters:** None
+
+**Returns:** `string`
+
+---
+
+### `eth_uninstallFilter`
+
+Always returns `true`. Filters are not persisted.
+
+**Parameters:**
+
+| Name       | Type     | Description |
+| ---------- | -------- | ----------- |
+| `filterId` | `string` | Filter ID   |
+
+**Returns:** `boolean`
+
+---
+
+### `net_listening`
+
+Always returns `false`. Radius does not use peer-to-peer networking.
+
+**Parameters:** None
+
+**Returns:** `boolean`
+
+---
+
+### `net_peerCount`
+
+Always returns `0x0`. Radius does not use peer-to-peer networking.
+
+**Parameters:** None
+
+**Returns:** `string`
+
+## Unsupported methods
+
+Radius returns errors for these methods:
+
+- `eth_coinbase`
+- `eth_getBlockReceipts`
+- `eth_getFilterChanges`
+- `eth_getFilterLogs`
+- `eth_getProof`
+- `eth_getUncleByBlockHashAndIndex`
+- `eth_getUncleByBlockNumberAndIndex`
+- `eth_getUncleCountByBlockHash`
+- `eth_getUncleCountByBlockNumber`
+- `eth_getWork`
+- `eth_newBlockFilter`
+- `eth_newFilter`
+- `eth_newPendingTransactionFilter`
+- `eth_sign`
+- `eth_simulateV1`
+- `eth_submitWork`
+- `trace_block`
+- `trace_callMany`
+- `trace_filter`
+- `trace_transaction`
+
+## Error codes
+
+Radius uses standard JSON-RPC 2.0 error codes:
+
+| Code     | Message            | Description                 |
+| -------- | ------------------ | --------------------------- |
+| `-32700` | Parse error        | Invalid JSON                |
+| `-32600` | Invalid request    | Invalid request object      |
+| `-32601` | Method not found   | Method does not exist       |
+| `-32602` | Invalid params     | Invalid method parameters   |
+| `-32603` | Internal error     | Internal JSON-RPC error     |
+| `3`      | Execution reverted | Contract execution reverted |
+
+Radius-specific error codes:
+
+| Code     | Message                 | Description                                                  |
+| -------- | ----------------------- | ------------------------------------------------------------ |
+| `-33002` | Block range too wide    | `eth_getLogs` range exceeds 1,000,000 units (~16 min 40 sec) |
+| `-33014` | Address filter required | `eth_getLogs` called without an `address` field              |
+
+## Related pages
+
+- [JSON-RPC overview](/reference/json-rpc)
+- [Network and RPC](/reference/network)
+- [Ethereum compatibility](/reference/ethereum-compatibility)
+- [Fees](/reference/fees)

@@ -1,0 +1,17 @@
+---
+title: Example projects
+description: Runnable radius-sdk examples for selling and buying with x402 on Radius, maintained alongside the SDK.
+---
+
+# Example projects [Runnable radius-sdk examples]
+
+These examples live in the [`radius-cli` repository](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk/examples) under `packages/sdk/examples` and are maintained with [`radius-sdk`](/reference/radius-sdk), so they track the current release.
+
+| Example          | What it shows                                                                                 | Related docs                                            |
+| ---------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `worker-seller`  | A Cloudflare Worker with priced Hono routes                                                   | [Accept payments](/build/accept-payments)               |
+| `worker-plain`   | The same API as a Worker with no framework, using the web-standard handler                    | [Accept payments](/build/accept-payments)               |
+| `express-seller` | The same API on Express through `@x402/express`                                               | [Accept payments](/build/accept-payments)               |
+| `astro-seller`   | An Astro API route that validates the article before charging, then delivers it               | [Content access](/build/examples/pay-per-visit-content) |
+| `agent-buyer`    | Node scripts that pay a URL, including from a fresh SBC-only wallet                           | [Make payments](/build/make-payments)                   |
+| `demo-dapp`      | Both sides in one Worker: a browser buyer with a burner wallet or MetaMask, and priced routes | [Content access](/build/examples/pay-per-visit-content) |

@@ -1,0 +1,277 @@
+---
+title: Tooling configuration
+description: Configure radius-cli, radius-sdk, Foundry, viem, wagmi, Hardhat, and ethers.js for Radius development with production-ready network settings and examples.
+---
+
+import { TESTNET_RPC_URL } from '../../constants';
+
+# Tooling configuration [Set up radius-cli, radius-sdk, Foundry, viem, wagmi, Hardhat, and ethers.js for Radius]
+
+Radius uses a fixed gas price model, which requires specific configuration in some tools. This page covers setup for each major EVM development tool. For background on how Radius differs from Ethereum, see [Ethereum compatibility](/reference/ethereum-compatibility).
+
+## At a glance
+
+| Tool       | Configuration needed                                     | Notes                                            |
+| ---------- | -------------------------------------------------------- | ------------------------------------------------ |
+| radius-cli | `RADIUS_HOME`, `RADIUS_NETWORK`                          | Preferred local wallet and agent execution path  |
+| radius-sdk | `network` option or `RADIUS_NETWORK`                     | x402 payments from TypeScript; defaults to SBC   |
+| Foundry    | `foundry.toml` with `gas_price`, `evm_version`, `via_ir` | `--broadcast` required for `forge create`        |
+| viem       | `defineChain()` — no overrides needed                    | Fee estimation works out of the box              |
+| wagmi      | Use custom Radius chain definition in `createConfig`     | —                                                |
+| Hardhat    | Pin to v2, set `gasPrice` in network config              | v3 installs by default and is incompatible       |
+| ethers.js  | None — works out of the box                              | Handles gas pricing gracefully without overrides |
+
+## radius-cli
+
+Use `radius-cli` for local wallet operations, agent execution, one-off sends, contract reads, transaction inspection, and x402 endpoint consumption. Use a project-scoped `RADIUS_HOME` when an agent creates or operates a wallet.
+
+```bash
+export RADIUS_HOME=.radius
+export RADIUS_NETWORK=testnet
+export RADIUS_RPC_URL={TESTNET_RPC_URL}
+
+radius-cli wallet address
+radius-cli wallet balance --json
+```
+
+Common commands:
+
+```bash
+radius-cli wallet sign "hello"
+radius-cli wallet send 0xRecipientAddress 0.10 SBC
+radius-cli call 0xTokenAddress "balanceOf(address)(uint256)" 0xWalletAddress
+radius-cli receipt 0xTransactionHash --json
+```
+
+For the full command reference, see [radius-cli](/reference/radius-cli).
+
+:::warning
+Do not pass raw private keys as CLI arguments in agent workflows. Prefer the local `radius-cli` keystore, environment-provided secrets for app code, or an operator-approved signer.
+:::
+
+## radius-sdk
+
+Use [`radius-sdk`](/reference/radius-sdk) to accept or make x402 payments from TypeScript. It needs no gas configuration. Set the network explicitly because it defaults to mainnet:
+
+```typescript
+import { createRadiusFetch } from 'radius-sdk/client';
+
+const payFetch = createRadiusFetch({
+  network: 'testnet',
+  signer: process.env.RADIUS_PRIVATE_KEY as `0x${string}`,
+  maxPerRequest: '0.01 SBC',
+});
+```
+
+`radiusEnv()` reads `RADIUS_NETWORK`, `RADIUS_RPC_URL`, and the other variables `radius-cli` uses. Each `RadiusNetwork` carries a viem `Chain` (`radiusTestnet.chain`) for your own clients.
+
+## Foundry
+
+### Recommended `foundry.toml`
+
+Add these settings to your project's `foundry.toml`:
+
+```toml
+[profile.default]
+gas_price = 1000000000
+evm_version = "cancun"
+via_ir = true
+```
+
+| Setting       | Purpose                                                                                                                                           |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gas_price`   | Matches Radius's fixed gas price (~1 gwei). Query `eth_gasPrice` for the exact value. Eliminates the need for `--gas-price` on every CLI command. |
+| `evm_version` | Targets the EVM version Radius supports.                                                                                                          |
+| `via_ir`      | Uses the IR-based code generator. Required for complex deploy scripts with many contracts to avoid "Stack too deep" errors.                       |
+
+### CLI usage
+
+Deploy a contract:
+
+```bash
+forge create src/MyContract.sol:MyContract \
+  --rpc-url https://rpc.testnet.radiustech.xyz \
+  --account radius-deployer \
+  --broadcast
+```
+
+:::tip
+Create the keystore once with `cast wallet import radius-deployer --interactive`. The key is stored encrypted at `~/.foundry/keystores/` and never appears in shell history or process listings.
+:::
+
+:::warning
+Starting with Foundry 1.5.1, `forge create` defaults to dry-run mode. Add the `--broadcast` flag to send the transaction on-chain.
+:::
+
+Send a transaction with `cast`:
+
+```bash
+cast send --gas-price 1000000000 \
+  --rpc-url https://rpc.testnet.radiustech.xyz \
+  --account radius-deployer \
+  {{CONTRACT_ADDRESS}} "transfer(address,uint256)" {{WALLET_ADDRESS}} 1000000
+```
+
+## viem
+
+### Chain definition
+
+Radius uses fixed gas pricing. Standard `defineChain()` works out of the box — viem queries `eth_maxPriorityFeePerGas` and `eth_gasPrice` automatically:
+
+```typescript
+import { defineChain } from 'viem';
+
+export const radiusMainnet = defineChain({
+  id: 723487,
+  name: 'Radius Network',
+  nativeCurrency: { decimals: 18, name: 'RUSD', symbol: 'RUSD' },
+  rpcUrls: {
+    default: { http: ['https://rpc.radiustech.xyz'] },
+  },
+  blockExplorers: {
+    default: {
+      name: 'Radius Explorer',
+      url: 'https://network.radiustech.xyz',
+    },
+  },
+});
+
+export const radiusTestnet = defineChain({
+  id: 72344,
+  name: 'Radius Testnet',
+  nativeCurrency: { decimals: 18, name: 'RUSD', symbol: 'RUSD' },
+  rpcUrls: {
+    default: { http: ['https://rpc.testnet.radiustech.xyz'] },
+  },
+  blockExplorers: {
+    default: {
+      name: 'Radius Testnet Explorer',
+      url: 'https://testnet.radiustech.xyz',
+    },
+  },
+});
+```
+
+Use this chain definition with `createPublicClient` and `createWalletClient`:
+
+```typescript
+import { createPublicClient, createWalletClient, http } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+import { radiusTestnet } from './chain';
+
+const publicClient = createPublicClient({
+  chain: radiusTestnet,
+  transport: http(),
+});
+
+const walletClient = createWalletClient({
+  account: privateKeyToAccount('0x...'),
+  chain: radiusTestnet,
+  transport: http(),
+});
+```
+
+### wagmi integration
+
+Use the custom chain definition with wagmi's `createConfig`:
+
+```typescript
+import { http, createConfig } from 'wagmi';
+import { radiusTestnet } from './chain';
+
+export const config = createConfig({
+  chains: [radiusTestnet],
+  transports: {
+    [radiusTestnet.id]: http(),
+  },
+});
+```
+
+Then use standard wagmi hooks in your React components:
+
+```tsx
+import { useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
+
+function SendPayment() {
+  const { writeContract, data: hash } = useWriteContract();
+  const { isSuccess } = useWaitForTransactionReceipt({ hash });
+
+  return (
+    <button
+      onClick={() =>
+        writeContract({
+          address: contractAddress,
+          abi: contractAbi,
+          functionName: 'transfer',
+          args: [recipient, amount],
+        })
+      }
+    >
+      {isSuccess ? 'Sent' : 'Send'}
+    </button>
+  );
+}
+```
+
+## Hardhat
+
+### Version pinning
+
+Hardhat v3 installs by default and uses ESM, which is incompatible with many existing plugins. Pin to v2:
+
+```bash
+pnpm add -D hardhat@^2.22.0 @nomicfoundation/hardhat-toolbox@hh2
+```
+
+### Network configuration
+
+Add Radius to your `hardhat.config.ts`:
+
+```typescript
+import { HardhatUserConfig } from 'hardhat/config';
+import '@nomicfoundation/hardhat-toolbox';
+
+const config: HardhatUserConfig = {
+  solidity: '0.8.24',
+  networks: {
+    radiusTestnet: {
+      url: 'https://rpc.testnet.radiustech.xyz',
+      chainId: 72344,
+      gasPrice: 1000000000,
+      accounts: [process.env.PRIVATE_KEY!],
+    },
+  },
+};
+
+export default config;
+```
+
+Deploy with:
+
+```bash
+pnpm hardhat run scripts/deploy.ts --network radiusTestnet
+```
+
+## ethers.js
+
+ethers.js handles Radius's gas pricing out of the box with no overrides. When `baseFeePerGas` is `0x0`, ethers.js returns `maxFeePerGas: null` and falls back to legacy `gasPrice` automatically.
+
+```typescript
+import { ethers } from 'ethers';
+
+const provider = new ethers.JsonRpcProvider('https://rpc.testnet.radiustech.xyz');
+const wallet = new ethers.Wallet(process.env.PRIVATE_KEY!, provider);
+
+// Standard transaction — no gas override needed
+const tx = await wallet.sendTransaction({
+  to: recipient,
+  value: ethers.parseEther('1.0'),
+});
+await tx.wait();
+```
+
+## Related pages
+
+- [Ethereum compatibility](/reference/ethereum-compatibility)
+- [Fees](/reference/fees)
+- [Network and RPC](/reference/network)

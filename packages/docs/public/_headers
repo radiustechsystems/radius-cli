@@ -1,0 +1,4 @@
+# Keep workers.dev hosts (production before cutover, and pr-<n> previews) out of search results;
+# only docs.radiustech.xyz should be indexed.
+https://:worker.:account.workers.dev/*
+  X-Robots-Tag: noindex

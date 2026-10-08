@@ -1,0 +1,243 @@
+---
+title: Accept payments
+description: Charge for API routes with radius-sdk in Workers, Hono, Express, or web-standard route handlers, and receive x402 payments settled on Radius.
+---
+
+import { STABLECOIN } from '../../constants';
+
+# Accept payments [Charge for API routes with x402 on Radius]
+
+This guide adds per-request pricing with [`radius-sdk`](/reference/radius-sdk). Use its web-standard handler for Workers or framework route handlers, its Hono middleware, or an upstream x402 adapter for Express and other frameworks. Buyers pay in {STABLECOIN} over [x402](/build/x402), and the Radius facilitator settles each payment on Radius before your handler runs. Your server needs a recipient address, not a private key.
+
+## Before you start
+
+- An HTTP app using web-standard `Request`/`Response`, Hono, or an upstream x402 framework adapter. The SDK handlers perform no I/O at module scope, so they run on Cloudflare Workers.
+- A wallet address to receive payments. See [Create and fund a wallet](/build/wallet).
+- To test payments, a second wallet funded with testnet {STABLECOIN}.
+
+## Install
+
+```bash
+pnpm add radius-sdk
+```
+
+## Web-standard handlers
+
+Import `radiusPayments` from `radius-sdk/server` for a plain Worker, Bun or Deno server, or a Next.js, SvelteKit, Remix, or Astro route handler. It accepts a `Request` and returns a `Response`:
+
+```typescript
+import { radiusPayments } from 'radius-sdk/server';
+
+const pay = radiusPayments({
+  network: 'testnet',
+  payTo: '0xYourWalletAddress',
+  routes: {
+    'GET /api/lookup': { price: '0.001 SBC', description: 'One lookup' },
+  },
+});
+
+export default {
+  fetch: pay.wrap((request, payment) => {
+    if (request.method !== 'GET' || new URL(request.url).pathname !== '/api/lookup') {
+      return new Response('Not found', { status: 404 });
+    }
+    return Response.json({ result: 'ok', paidBy: payment?.payer });
+  }),
+};
+```
+
+Replace `payTo` with your recipient address. `pay.wrap(handler)` returns a fetch handler; call `pay(request, handler)` directly inside an existing route handler. With the default settlement mode, the handler's second argument holds the settled receipt. Dynamic `payTo` and `price` functions receive the `Request`, and `onSettled(receipt, request)` receives the same request.
+
+Route keys are `METHOD /path` and accept `*` wildcards. Requests that match no priced route pass through to your handler for free; use your router to reject unknown routes.
+
+## Hono middleware
+
+For a Hono app, add Hono and import from `radius-sdk/hono`:
+
+```bash
+pnpm add hono
+```
+
+Add `radiusPayments` in front of the routes you want to charge for. This Worker charges 0.001 {STABLECOIN} for `GET /api/lookup` and 0.01 {STABLECOIN} for `POST /api/query`, and pays both to the `PAY_TO` binding:
+
+```typescript
+import { Hono } from 'hono';
+import { radiusPayments, type RadiusPaymentVariables } from 'radius-sdk/hono';
+
+type Env = { Bindings: { PAY_TO: `0x${string}` }; Variables: RadiusPaymentVariables };
+const app = new Hono<Env>();
+
+app.use(
+  '/api/*',
+  radiusPayments<Env>({
+    network: 'testnet',
+    payTo: (c) => c.env.PAY_TO,
+    routes: {
+      'GET /api/lookup': { price: '0.001 SBC', description: 'One lookup' },
+      'POST /api/query': '0.01 SBC',
+    },
+  }),
+);
+
+app.get('/api/lookup', (c) => c.json({ result: 'ok' }));
+app.post('/api/query', (c) => c.json({ results: [] }));
+
+export default app;
+```
+
+Route keys are `METHOD /path` and accept Hono-style `*` wildcards. Requests that match no route pass through for free.
+
+## Express and upstream adapters
+
+Use `createRadiusServer` with an upstream x402 adapter when your application already uses Express or another supported framework:
+
+```bash
+pnpm add radius-sdk @x402/express@2.27.0 express
+```
+
+```typescript
+import express from 'express';
+import { paymentMiddleware } from '@x402/express';
+import { createRadiusServer } from 'radius-sdk/server';
+
+const radius = createRadiusServer({ network: 'testnet' });
+const app = express();
+
+app.use(
+  paymentMiddleware(
+    radius.routes({
+      payTo: '0xYourWalletAddress',
+      routes: { 'GET /api/lookup': '0.001 SBC' },
+    }),
+    radius.server,
+  ),
+);
+app.get('/api/lookup', (_request, response) => response.json({ result: 'ok' }));
+app.listen(8787);
+```
+
+The SDK provides Radius pricing and settlement; the adapter provides the framework integration. `@x402/next` and `@x402/hono` can use the same resource server. Dynamic price and recipient functions receive the x402 request context. See [createRadiusServer](/reference/radius-sdk#createradiusserver) for initialization and callback details.
+
+## Set prices
+
+A price is a string in {STABLECOIN} display units (`'0.001 SBC'` or `'0.001'`) or an object in base units (`{ amount: '1000' }`; {STABLECOIN} has six decimals). To price per request, pass a function of the Hono context:
+
+```typescript
+routes: {
+  'GET /api/report': { price: (c) => (c.req.query('detail') === 'full' ? '0.05 SBC' : '0.01 SBC') },
+},
+```
+
+A route can also override the recipient with its own `payTo`.
+
+## Test on testnet
+
+Run the app locally, for example with `wrangler dev`, and request a protected route without paying:
+
+```bash
+curl -i http://localhost:8787/api/lookup
+```
+
+The response is `402 Payment Required` with a `PAYMENT-REQUIRED` header describing the price. Pay it from a funded testnet wallet with [`radius-cli`](/reference/radius-cli#x402-endpoint-consumption):
+
+```bash
+RADIUS_HOME=.radius RADIUS_NETWORK=testnet \
+  radius-cli wallet x402 get http://localhost:8787/api/lookup \
+  --x402-threshold 0.01 \
+  -y
+```
+
+The CLI prints the response and the settlement transaction. A payer that holds only {STABLECOIN} can pay: the Radius facilitator sponsors the one-time Permit2 approval.
+
+## Read the payment in a handler
+
+For a paid request, `c.get('radiusPayment')` holds the receipt: `transaction`, `payer`, `amount`, and `explorerUrl`. To log every payment in one place, pass `onSettled`:
+
+```typescript
+radiusPayments<Env>({
+  // …
+  onSettled: (receipt, c) => console.log('paid', c.req.path, receipt.payer, receipt.transaction),
+});
+```
+
+`onSettled` runs after settlement, before the handler in the default mode. It does not confirm delivery, and errors it throws are logged rather than failing the request. Record delivery failures separately from settled payments. With `settle: 'after'`, use this callback for the receipt because settlement has not happened while the handler runs.
+
+The middleware also adds a `PAYMENT-RESPONSE` header carrying the transaction hash, so the buyer gets a receipt too.
+
+## Choose when payment settles
+
+By default, the middleware verifies and settles the payment **before** your handler runs, so the handler only runs for money already received. If the handler then fails, the buyer has paid without getting the resource. Log the transaction hash with the failure so you can refund or serve the resource on retry.
+
+Set `settle: 'after'` to verify the payment, run the handler, and settle only when it responds with a status below 400. This is the x402 default flow: buyers are not charged for an error response, but your handler does its work before the payment is final.
+
+### Validate before charging
+
+With the default `settle: 'before'`, validate inputs and check that the resource exists before calling the payment handler. Return errors there without charging, and deliver the prepared result inside the paid callback:
+
+```typescript
+import { radiusPayments } from 'radius-sdk/server';
+
+const articles = new Map([['hello', { title: 'Hello Radius', body: 'Paid content' }]]);
+const pay = radiusPayments({
+  network: 'testnet',
+  payTo: '0xYourWalletAddress',
+  routes: { 'GET /articles/*': '0.001 SBC' },
+});
+
+export async function GET(request: Request): Promise<Response> {
+  const slug = new URL(request.url).pathname.split('/').pop() ?? '';
+  const article = articles.get(slug);
+  if (!article) return new Response('Not found', { status: 404 });
+  return pay(request, () => Response.json(article));
+}
+```
+
+Keep the paid content inside the callback. In Hono, place validation middleware before `radiusPayments`. The [`astro-seller` example](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk/examples/astro-seller) demonstrates this pattern in an API route.
+
+### Stream a paid response
+
+The SDK's web-standard and Hono handlers pass the response body through without buffering with `settle: 'before'`. Return a streaming `Response` for SSE or model output after payment. Settlement covers the request; it does not meter individual chunks or confirm that the buyer received the whole stream.
+
+`settle: 'after'` buffers the body before settlement, so use `'before'` for streaming responses. If a stream fails after payment, reconcile the receipt and delivery outcome before charging again.
+
+### Handle uncertain settlement
+
+The SDK handlers return `502` with `error: 'facilitator_error'` when a facilitator call fails without an authoritative answer. The payment may already have settled. Explicit payment rejections return `402`. Preserve the request details and any transaction hash, and follow [payment recovery](/build/x402#recover-from-failed-or-uncertain-payments) before retrying.
+
+## Go to mainnet
+
+Mainnet needs two configuration changes. Everything else switches with `network`:
+
+| Setting               | Testnet                    | Mainnet                               |
+| --------------------- | -------------------------- | ------------------------------------- |
+| `network`             | `'testnet'`                | `'mainnet'`, or omit it (the default) |
+| `payTo`               | A testnet address          | Your mainnet recipient address        |
+| {STABLECOIN} contract | Selected by `network`      | Selected by `network`                 |
+| Facilitator           | Radius testnet facilitator | Radius mainnet facilitator            |
+| Facilitator API key   | Not needed                 | Not needed                            |
+| Buyers pay with       | Testnet {STABLECOIN}       | Mainnet {STABLECOIN}                  |
+
+```typescript
+app.use(
+  '/api/*',
+  radiusPayments<Env>({
+    network: 'mainnet',
+    payTo: (c) => c.env.PAY_TO,
+    routes: {
+      'GET /api/lookup': { price: '0.001 SBC', description: 'Reputation lookup for one IP address' },
+    },
+  }),
+);
+```
+
+Set the deployed Worker's recipient with `wrangler secret put PAY_TO`, or as a `[vars]` entry in `wrangler.toml`. The server still needs no private key.
+
+The Radius facilitator needs no API key on mainnet or testnet. To use another facilitator that requires one, pass `facilitator: { url, apiKey }`; the key is sent as `x-api-key`. See [Facilitator](/reference/radius-sdk#facilitator) in the reference.
+
+## Next steps
+
+- [Tutorial: sell a data lookup](/build/tutorials/sell-data) — Build and run a paid Worker step by step
+- [radius-sdk reference](/reference/radius-sdk) — Every option for `radiusPayments`
+- [Make payments](/build/make-payments) — Pay x402 endpoints from an app or agent
+- [x402 payments](/build/x402) — How x402 payments work on Radius
+- [`worker-seller` example](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk/examples/worker-seller) — A runnable Worker with free and paid routes

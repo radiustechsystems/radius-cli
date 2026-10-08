@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.wrangler/
+.vocs/
+tmp/
+public/**/*.md
+public/**/*.txt
+public/**/*.xml

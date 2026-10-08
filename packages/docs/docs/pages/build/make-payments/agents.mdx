@@ -1,0 +1,69 @@
+---
+title: Set up an agent to pay
+description: Give an agent Radius payment guidance, a wallet, a payment tool, and spending limits enforced outside the model.
+---
+
+import { STABLECOIN } from '../../../constants';
+
+# Set up an agent to pay [Guidance, a wallet, a payment tool, and limits]
+
+An agent that pays needs three things: guidance on how x402 payments work, a tool that signs and pays, and spending limits that the tool enforces. Skills provide the guidance. [`radius-cli`](/reference/radius-cli) or [`radius-sdk`](/reference/radius-sdk) performs the payment. Neither the model nor its instructions should hold the signing key.
+
+## Add Radius skills
+
+For agents that support the skills installer, run:
+
+```bash
+npx skills add radiustechsystems/radius-cli
+```
+
+Choose your agent in the installer and add the guidance its task needs:
+
+- [x402](https://docs.radiustech.xyz/skills/x402.md): request paid resources and handle payment challenges, signing, and settlement.
+- [dripping-faucet](https://docs.radiustech.xyz/skills/dripping-faucet.md): get testnet funds.
+- [radius-dev](https://docs.radiustech.xyz/skills/radius-dev.md): build an integration, when the agent also writes code.
+
+If your agent does not use the installer, add the linked Markdown files through its instructions or context. Claude Code users can install them as a plugin instead; see [coding assistants](/build/coding-assistants).
+
+Skills do not install a payment tool or enforce a spending limit. Configure those separately, below.
+
+## Choose a payment tool
+
+| The agent runs                  | Use                                                                         | Per-request limit  |
+| ------------------------------- | --------------------------------------------------------------------------- | ------------------ |
+| Shell commands or a tool runner | [`radius-cli wallet x402`](/reference/radius-cli#x402-endpoint-consumption) | `--x402-threshold` |
+| TypeScript you write for it     | [`createRadiusFetch`](/build/make-payments) from `radius-sdk/client`        | `maxPerRequest`    |
+
+Both pay only in {STABLECOIN} on the configured network and refuse an offer above the limit before signing (the CLI with `-y` or without a terminal; otherwise it asks).
+
+## Create a project wallet
+
+For the CLI, keep the wallet in the project and select the network explicitly:
+
+```bash
+export RADIUS_HOME=.radius
+export RADIUS_NETWORK=testnet
+radius-cli wallet address
+radius-cli wallet balance --json
+```
+
+The first command creates the wallet. Keep `.radius/` out of version control, and give the agent only the wallet access it needs. See [project-scoped agent wallet](/reference/radius-cli#project-scoped-agent-wallet) for passwords and other options. For application code, pass the signer to `createRadiusFetch` from a secret store.
+
+Fund the wallet with testnet {STABLECOIN}: see [create and fund a wallet](/build/wallet).
+
+## Set spending limits
+
+Decide which endpoints the agent may pay, and the most it may pay per request.
+
+- **Per request:** `--x402-threshold` with `-y` is a hard cap for the CLI; the CLI refuses a more expensive offer instead of prompting. `maxPerRequest` does the same in `radius-sdk`.
+- **In total:** neither per-request limit caps spending across requests. In application code, enforce a total budget or a seller allowlist in `onPaymentRequired`; see [limit what you pay](/build/make-payments#limit-what-you-pay). With the CLI, enforce it in the tool runner that calls the command.
+
+Enforce limits in the component that signs. Account for concurrent requests, and keep the amount spent across restarts. Software with direct access to the key can bypass limits implemented in another client.
+
+## Connect the agent
+
+Expose the CLI command or your payment function to the agent through its tool runner. Set the network, wallet, allowed endpoints, and limit in the tool, not in the prompt. Use `--json` so the agent can read the result, including the payment. Keep private keys and wallet passwords out of prompts and logs.
+
+Before the first payment, have the agent check the balance and state the endpoint and price it intends to pay. Then follow [pay from a terminal](/build/make-payments#pay-from-a-terminal) for a first paid request.
+
+To have a coding assistant help you build an integration instead, see [coding assistants](/build/coding-assistants).

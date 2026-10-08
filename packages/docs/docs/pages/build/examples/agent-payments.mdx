@@ -1,0 +1,88 @@
+---
+title: Agent Payments
+description: Build agents that can discover services, verify identity, pay on Radius, complete work, and return receipts.
+---
+
+# Agent payments [Make agents discoverable, callable, payable, and auditable]
+
+Agent payments let autonomous software pay for tools, APIs, content, and work without a human checkout step. Radius provides the settlement layer for those transactions: fast finality, stablecoin-native fees, and EVM-compatible wallets.
+
+The goal is not only to move tokens. A useful agent payment flow lets another agent discover what is available, verify who provides it, understand the price, submit payment, receive the result, and keep a receipt.
+
+## Why agent payments need more than settlement
+
+Agents act through web infrastructure. They read metadata, call APIs, retry requests, hold budget, route through proxies, and delegate work. That makes the edge part of the control plane for commerce.
+
+For paid agent traffic, the edge decides whether to block, allow, challenge, route, cache, settle, redact, and observe a request. Radius makes the resulting payment final and auditable.
+
+## Agent-readable web surfaces
+
+The agentic web is pushing sites to publish more machine-readable content. Useful surfaces include:
+
+- `sitemap.xml` for canonical crawl paths
+- `robots.txt` for crawler and agent policy
+- `.well-known/*` URIs for payment, identity, agent cards, OAuth metadata, and MCP metadata
+- `llms.txt` and generated markdown for low-noise model context
+- API catalogs, OpenAPI, OpenRPC, and JSON schemas
+- agent skill manifests and A2A agent cards
+
+Use [isitagentready.com](https://isitagentready.com) to test whether a site is ready for agents to discover, understand, and operate against it.
+
+## Payment flow
+
+A Radius-backed agent payment flow usually has five parts:
+
+1. **Discovery** — Agent A finds Agent B's web endpoint, agent card, skills, wallet, and payment requirements.
+2. **Identity** — Agent A verifies Agent B's DID, wallet binding, A2A endpoint, or registration metadata.
+3. **Quote** — Agent B returns a machine-readable price for a skill, task, API call, or content resource.
+4. **Settlement** — Agent A pays with Radius, either directly, through x402, or through a contract primitive.
+5. **Receipt** — Agent B returns the result with a receipt that binds task, agent identity, wallet, amount, tx hash, and timestamp.
+
+The receipt is the bridge between the web request and on-chain settlement. It gives agents and operators an audit trail they can reason about after the work completes.
+
+## Protocols to understand
+
+Agent payments are not one protocol. Radius can settle value beneath multiple agent-commerce patterns:
+
+| Protocol                                | How it applies                                                                                                                                                                                                          |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [x402](https://www.x402.org/)           | HTTP-native payments for APIs, content, tools, and other resources. A server returns `402 Payment Required`, the agent pays, and the request retries with proof of payment.                                             |
+| [MPP](https://mpp.dev/)                 | Machine-to-machine payments for API requests, tool calls, and content in the same HTTP call. It is useful for paid tools and agent services that need request-level billing.                                            |
+| [UCP](https://ucp.dev/)                 | Universal Commerce Protocol for agentic commerce flows such as discovery, checkout, identity linking, order management, and post-purchase experiences. It applies when agents buy products or services from businesses. |
+| [ACP](https://www.agenticcommerce.dev/) | Agentic Commerce Protocol for programmatic checkout between buyers, AI agents, and businesses. It applies when a business wants existing commerce infrastructure to be callable by compatible agents.                   |
+
+## Workshop repos to study
+
+| Repo                                                                                                      | What it demonstrates                                                                                                       |
+| --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| [`radius-hermes-railway-template`](https://github.com/radius-workshop/radius-hermes-railway-template)     | Radius-ready Hermes agent with wallet state, discovery endpoints, A2A communication, ERC-8004 tools, and published skills. |
+| [`radius-agent-template`](https://github.com/radius-workshop/radius-agent-template)                       | Minimal NEST payment agent that can hold a wallet, check balances, request faucet funds, and send SBC.                     |
+| [`radius-agent-contracts`](https://github.com/radius-workshop/radius-agent-contracts)                     | Agent escrow, bounty board, pay-per-query, and payment-splitting contracts for paid work.                                  |
+| [`radius-keychain`](https://github.com/radius-workshop/radius-keychain)                                   | Delegated sub-keys with spending limits and call scopes for controlled agent wallets.                                      |
+| [`radius-openclaw-railway-template`](https://github.com/radius-workshop/radius-openclaw-railway-template) | OpenClaw deployment template with Radius skills and wallet tooling.                                                        |
+| [`radius-cloudflare-agents`](https://github.com/radius-workshop/radius-cloudflare-agents)                 | Cloudflare Agents fork for durable edge-agent patterns.                                                                    |
+| [`rad-router-proxy`](https://github.com/radius-workshop/rad-router-proxy)                                 | Local AI IDE proxy that pays a model router with x402 on Radius.                                                           |
+
+See [Example projects](/build/examples/workshop-playground) for runnable radius-sdk examples.
+
+## Choosing a payment pattern
+
+| Pattern                | Use when                                                                       |
+| ---------------------- | ------------------------------------------------------------------------------ |
+| Direct wallet transfer | One agent already knows the payee and amount.                                  |
+| x402                   | An agent pays for an HTTP resource, API response, or content item.             |
+| Escrow                 | A buyer agent needs work completed before funds release.                       |
+| Bounty                 | An orchestrator wants multiple agents to discover and claim paid tasks.        |
+| Payment channel        | The service bills continuously or in frequent increments.                      |
+| Delegated key          | An operator wants an agent wallet with scoped permissions and spending limits. |
+
+For x402, `radius-sdk` covers both sides: [Accept payments](/build/accept-payments) to sell a resource, and [Make payments](/build/make-payments) for agent code that pays within a per-request cap and a total budget. Use [radius-cli](/reference/radius-cli) when an agent runs shell commands. [Set up an agent to pay](/build/make-payments/agents) covers skills, wallets, and where limits are enforced, and the [buy a data lookup tutorial](/build/tutorials/buy-data) builds a paid agent tool end to end.
+
+## Next steps
+
+- [Example projects](/build/examples/workshop-playground) — Runnable radius-sdk examples
+- [Set up an agent to pay](/build/make-payments/agents) — Skills, a wallet, and spending limits for an agent
+- [Tutorial: buy a data lookup](/build/tutorials/buy-data) — A paid agent tool with a budget, end to end
+- [Make payments](/build/make-payments) — Pay x402 endpoints from an app or agent
+- [radius-cli](/reference/radius-cli) — Operate a local agent wallet
+- [Contract addresses](/reference/contract-addresses) — Find Radius token and x402 contract addresses
