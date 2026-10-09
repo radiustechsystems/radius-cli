@@ -77,7 +77,7 @@ export async function getOwnAddress(
 
 /**
  * An account whose address is known now but whose key is loaded — password prompt and all — only
- * when something is signed. `wallet x402` hands this to the SDK so a 402 is parsed and matched
+ * when something is signed. `wallet pay` hands this to the SDK so a 402 is parsed and matched
  * (network, asset, scheme, payTo) before the keystore is unlocked; a bad challenge never prompts.
  * With --private-key the key is already in hand. Auto-creates a keystore on first use.
  */
