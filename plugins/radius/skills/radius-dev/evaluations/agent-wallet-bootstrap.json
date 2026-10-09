@@ -8,14 +8,14 @@
         "Sets RADIUS_NETWORK=testnet before wallet, faucet, or x402 operations",
         "Uses radius-cli wallet address to identify the wallet",
         "Prints or reports only non-secret values such as wallet address, network, RPC URL, and RADIUS_HOME",
-        "Routes one-shot x402 consumption to radius-cli wallet x402 with --x402-threshold, --json, and -y",
+        "Routes one-shot x402 consumption to radius-cli wallet pay with --threshold, --json, and -y",
         "Does not use Foundry keystore prompts or helper-generated env wallets for this fresh agent-created testnet wallet"
     ],
     "success_criteria": [
         "Commands include RADIUS_HOME and RADIUS_NETWORK=testnet",
         "Wallet address is derived with radius-cli wallet address",
-        "x402 payment uses radius-cli wallet x402 <verb> <url> with --x402-threshold",
-        "--x402-threshold is described as display units, not raw 6-decimal units",
+        "x402 payment uses radius-cli wallet pay <verb> <url> with --threshold",
+        "--threshold is described as display units, not raw 6-decimal units",
         "The private key is never printed, logged, pasted into chat, hardcoded, or passed as a CLI argument",
         "No command uses --private-key",
         "No command relies on cast wallet import --interactive for the fresh agent-created wallet",
