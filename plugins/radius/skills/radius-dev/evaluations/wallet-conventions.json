@@ -6,7 +6,7 @@
     "expected_behavior": [
         "States the shared Radius wallet convention instead of creating x402-specific or faucet-specific wallet rules",
         "For fresh agent-created testnet wallets: uses radius-cli with RADIUS_HOME=.radius and RADIUS_NETWORK=testnet",
-        "For one-off x402 terminal workflows: uses radius-cli wallet x402 <verb> <url> with --x402-threshold, --json, and -y",
+        "For one-off x402 terminal workflows: uses radius-cli wallet pay <verb> <url> with --threshold, --json, and -y",
         "For Foundry contract deployments: uses Foundry for forge/cast deployment and debugging workflows only",
         "For app-code and viem examples: loads key material from environment variables or a secrets manager",
         "For faucet/address-only cases: distinguishes address ownership from signing access and stops if a signed flow is required but no key material or keystore is available",
@@ -14,8 +14,8 @@
     ],
     "success_criteria": [
         "Includes RADIUS_HOME and radius-cli wallet address for fresh agent-created testnet wallets",
-        "Includes radius-cli wallet x402 <verb> <url> for one-off x402 terminal payment",
-        "Includes --x402-threshold and explains it is in display units",
+        "Includes radius-cli wallet pay <verb> <url> for one-off x402 terminal payment",
+        "Includes --threshold and explains it is in display units",
         "Allows Foundry/cast for smart contract deployment, contract reads, tests, and advanced EVM debugging",
         "Allows environment-backed keys only in app-code examples",
         "Does not use cast or CAST_ACCOUNT as the fresh testnet wallet bootstrap path",

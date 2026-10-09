@@ -367,24 +367,24 @@ async function getPermitNonce(owner: `0x${string}`): Promise<bigint> {
 
 ## One-off CLI access
 
-For an agent or terminal session, prefer `radius-cli wallet x402` from a
+For an agent or terminal session, prefer `radius-cli wallet pay` from a
 project-scoped wallet home:
 
 ```bash
 RADIUS_HOME=.radius RADIUS_NETWORK=testnet \
-  radius-cli wallet x402 get https://example.com/paid \
-  --x402-threshold 0.001 \
+  radius-cli wallet pay get https://example.com/paid \
+  --threshold 0.001 \
   --json \
   -y
 ```
 
-`--x402-threshold` is in display units such as SBC, not raw 6-decimal integer
+`--threshold` is in display units such as SBC, not raw 6-decimal integer
 units. Use it as the non-interactive safety limit for agent runs. `radius-cli`
 also supports headers and request bodies for non-GET endpoints:
 
 ```bash
-radius-cli wallet x402 post https://example.com/paid \
-  --x402-threshold 0.01 \
+radius-cli wallet pay post https://example.com/paid \
+  --threshold 0.01 \
   -H "Content-Type: application/json" \
   -d '{"query":"radius"}' \
   --json \

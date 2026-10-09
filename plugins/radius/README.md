@@ -7,7 +7,7 @@ The `radius-dev` Claude Code plugin provides three skills:
 - `dripping-faucet` for testnet faucet workflows
 
 The SDK examples target `radius-sdk` 0.3.0 or later, and terminal wallet
-examples target `radius-cli` 0.3.0 or later. Install the peer dependency
+examples target `radius-cli` 0.4.0 or later (`wallet pay`). Install the peer dependency
 needed by the SDK entry point you use (`viem` for `/client`, `hono` for `/hono`).
 
 Install it from the [Radius CLI repository](https://github.com/radiustechsystems/radius-cli):

@@ -7,7 +7,7 @@ description: |
   implement EIP-2612 permit + Permit2 payment signing, build pay-per-call services on Radius
   using SBC token, or set up x402 middleware. Covers both server-side (protect your endpoints
   with payment gating) and client-side (sign and pay for x402-protected endpoints). Use
-  `radius-cli wallet x402` for terminal consumption, `radius-sdk/client` for app buyers,
+  `radius-cli wallet pay` for terminal consumption, `radius-sdk/client` for app buyers,
   and `radius-sdk/hono` for Hono sellers.
 published: true
 user-invocable: true
@@ -178,7 +178,7 @@ Radius-operated facilitators support EIP-2612 gas sponsoring for first-time wall
 
 Follow the shared Radius wallet convention from the **radius-dev** skill:
 
-- Fresh one-shot agent demos and terminal access should use `radius-cli wallet x402`.
+- Fresh one-shot agent demos and terminal access should use `radius-cli wallet pay`.
 - App-code clients should use `createRadiusFetch()` with a viem account or wallet client. Store any key material in the application's secrets system.
 - [x402-cli-cast.md](references/x402-cli-cast.md) and `scripts/x402-pay.mjs` are legacy/specialized references for environments that cannot use `radius-cli`.
 - Never request, log, hardcode, or pass raw private keys as CLI arguments such as `--private-key`.
@@ -196,13 +196,13 @@ Follow the shared Radius wallet convention from the **radius-dev** skill:
 
 ### B. "I want to consume a paid x402 API" (client-side)
 
-**Default agent/CLI path:** use `radius-cli wallet x402 <verb> <url>` from a
+**Default agent/CLI path:** use `radius-cli wallet pay <verb> <url>` from a
 wallet scope controlled by `RADIUS_HOME`.
 
 ```bash
 RADIUS_HOME=.radius RADIUS_NETWORK=testnet \
-  radius-cli wallet x402 get https://example.com/paid \
-  --x402-threshold 0.001 \
+  radius-cli wallet pay get https://example.com/paid \
+  --threshold 0.001 \
   --json \
   -y
 ```
@@ -212,7 +212,7 @@ RADIUS_HOME=.radius RADIUS_NETWORK=testnet \
 payload, retry with payment headers, and print the paid response). It is the
 preferred path for agents consuming x402 endpoints.
 
-`--x402-threshold` is expressed in display units such as SBC, not raw 6-decimal
+`--threshold` is expressed in display units such as SBC, not raw 6-decimal
 integer units. Always set it for non-interactive agent runs; the command should
 refuse to pay if the endpoint asks for more than the threshold. Use `-y` only
 after the threshold and target URL are explicit.
@@ -220,8 +220,8 @@ after the threshold and target URL are explicit.
 Common request forms:
 
 ```bash
-radius-cli wallet x402 post https://example.com/paid \
-  --x402-threshold 0.01 \
+radius-cli wallet pay post https://example.com/paid \
+  --threshold 0.01 \
   -H "Content-Type: application/json" \
   -d '{"query":"radius"}' \
   --json \
@@ -293,7 +293,7 @@ network defaults for a local or custom environment.
 - Facilitator API reference: [facilitator-api.md](references/facilitator-api.md)
 
 **Legacy/specialized scripts:**
-- Env-bootstrapped viem payment helper: `scripts/x402-pay.mjs` (prefer `radius-cli wallet x402` for agent CLI use)
+- Env-bootstrapped viem payment helper: `scripts/x402-pay.mjs` (prefer `radius-cli wallet pay` for agent CLI use)
 
 **Cross-references to other skills:**
 - Chain definitions, RPC, wallet conventions, general Radius dev: **radius-dev** skill
