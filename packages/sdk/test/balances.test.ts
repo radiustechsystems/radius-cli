@@ -10,7 +10,7 @@ import { createAccount, createAddressFromString, bytesToHex, hexToBytes } from '
 import { createClient, createPublicClient, custom, decodeFunctionData, encodeAbiParameters, numberToHex, parseAbi, type Address, type Hex } from 'viem';
 import { describe, expect, it } from 'vitest';
 import { defaultTokens, getAggregateBalance, getBalances, getNativeBalance, getTokenBalance, nativeBalanceBytecode, radiusActions, type BalanceToken } from '../src/balances.js';
-import { radiusMainnet, radiusTestnet, SBC } from '../src/networks.js';
+import { radiusMainnet, radiusTestnet, SBC, USDC_BASE, baseSepolia } from '../src/networks.js';
 
 const OWNER = '0x4f2d8a3b1c0e5d9b8e7a6c5d4e3f2a1b0c9d8e7f' as Address;
 const OTHER_TOKEN = '0x1111111111111111111111111111111111111111' as Address;
@@ -209,9 +209,11 @@ describe('getBalances', () => {
     expect(defaultTokens(t)).toEqual([{ address: SBC.address, symbol: 'SBC', decimals: 6, convertible: true }]);
     expect(defaultTokens(m)[0].address).toBe(radiusMainnet.asset.address);
     expect(defaultTokens(bare)[0].address).toBe(SBC.address);
-    expect(defaultTokens(bare, { chainId: 4242, rpcUrl: 'http://rpc', facilitatorUrl: 'http://f', asset: { address: OTHER_TOKEN, symbol: 'USDX', decimals: 18 } })).toEqual([
-      { address: OTHER_TOKEN, symbol: 'USDX', decimals: 18, convertible: true },
-    ]);
+    const usdx = { address: OTHER_TOKEN, symbol: 'USDX', decimals: 18, name: 'USDX', version: '1' } as const;
+    expect(defaultTokens(bare, { chain: radiusTestnet.chain, asset: usdx, radius: true })).toEqual([{ address: OTHER_TOKEN, symbol: 'USDX', decimals: 18, convertible: true }]);
+    // Off Radius the Turnstile does not count the asset in eth_getBalance.
+    expect(defaultTokens(bare, 'base')).toEqual([{ address: USDC_BASE.address, symbol: 'USDC', decimals: 6, convertible: false }]);
+    expect(defaultTokens(createClient({ chain: baseSepolia.chain, transport: fakeNode({ native: 0n, sbc: 0n }).transport }))[0]).toMatchObject({ symbol: 'USDC', convertible: false });
   });
 
   it('uses the native currency of the client chain when formatting', async () => {

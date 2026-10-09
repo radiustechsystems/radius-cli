@@ -10,7 +10,7 @@ import { makePublicClient, makeWalletClient } from '../lib/client.js';
 import { parseAmountArg, parseTokenArg, readBalances } from '../lib/erc20.js';
 import { coerceArg, parseCastSignature } from '../lib/signature.js';
 import { formatUsd, formatUsdShort, jsonStringify } from '../lib/format.js';
-import { registerWalletX402 } from './walletX402.js';
+import { registerWalletPay } from './walletPay.js';
 import type { GlobalOptions } from '../types.js';
 import type { TokenInput } from 'radius-sdk/client';
 
@@ -283,7 +283,7 @@ export function registerWallet(program: Command): void {
       );
     });
 
-  registerWalletX402(wallet);
+  registerWalletPay(wallet);
 }
 
 function parseGasLimit(input: string | undefined): bigint | undefined {

@@ -4,8 +4,8 @@ Tools for the [Radius Network](https://radiustech.xyz), managed as one pnpm work
 
 | Package | What |
 | --- | --- |
-| [`packages/cli`](./packages/cli) | [`radius-cli`](https://www.npmjs.com/package/radius-cli) — CLI wallet for Radius, modeled on Foundry's `cast`; `wallet x402` pays through `radius-sdk` |
-| [`packages/sdk`](./packages/sdk) | [`radius-sdk`](https://www.npmjs.com/package/radius-sdk) — accept and make Radius payments over x402 v2 from any web-standard runtime, Hono, or the upstream x402 framework adapters (Express, Next.js), plus balance and settlement helpers |
+| [`packages/cli`](./packages/cli) | [`radius-cli`](https://www.npmjs.com/package/radius-cli) — CLI wallet for Radius, modeled on Foundry's `cast`; `wallet pay` pays x402 on Radius (and optionally Base) through `radius-sdk` |
+| [`packages/sdk`](./packages/sdk) | [`radius-sdk`](https://www.npmjs.com/package/radius-sdk) — accept and make x402 v2 payments on Radius (and optionally Base or any EVM chain) from any web-standard runtime, Hono, or the upstream x402 framework adapters (Express, Next.js), plus balance and settlement helpers |
 
 ```bash
 npx radius-cli wallet balance     # the CLI

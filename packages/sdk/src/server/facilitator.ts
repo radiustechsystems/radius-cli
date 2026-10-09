@@ -1,9 +1,9 @@
 import { FacilitatorResponseError, HTTPFacilitatorClient, type FacilitatorClient } from '@x402/core/server';
 import { SettleError, VerifyError, type PaymentPayload, type PaymentRequirements, type SettleResponse, type SupportedResponse, type VerifyResponse } from '@x402/core/types';
-import type { RadiusNetwork } from '../networks.js';
+import type { PaymentNetwork } from '../networks.js';
 
 export interface FacilitatorOptions {
-  /** Override the facilitator base URL (defaults to the network's facilitator). */
+  /** Facilitator base URL. Defaults to the network's (Radius's own; x402.org on Base Sepolia); required on Base. */
   url?: string;
   /** Sent as `x-api-key` on verify/settle/supported. */
   apiKey?: string;
@@ -11,14 +11,15 @@ export interface FacilitatorOptions {
    * Default true: `/supported` is fetched from the facilitator on the first paid
    * request after each cold start, so facilitator changes propagate without an SDK
    * update. Set false to use the built-in answer for Radius (no network call before
-   * the first 402; goes stale if the facilitator changes).
+   * the first 402; goes stale if the facilitator changes). Radius networks only.
    */
   live?: boolean;
   timeoutMs?: number;
 }
 
-/** The `/supported` answer the Radius facilitators return for a network (exact / Permit2 / SBC). */
-export function staticSupported(network: RadiusNetwork): SupportedResponse {
+/** The `/supported` answer the Radius facilitators return for a Radius network (exact / Permit2 / SBC). */
+export function staticSupported(network: PaymentNetwork): SupportedResponse {
+  if (!network.radius) throw new Error(`staticSupported: ${network.name} is not a Radius network; its facilitator's /supported must be fetched`);
   return {
     kinds: [
       {
@@ -38,20 +39,23 @@ export function staticSupported(network: RadiusNetwork): SupportedResponse {
 }
 
 /**
- * FacilitatorClient for a hosted x402 facilitator (Radius's by default). Nothing
- * runs at construction; the first `/supported` lookup happens lazily at request time
- * (Cloudflare Workers forbid I/O at module scope).
+ * FacilitatorClient for a hosted x402 facilitator (the network's default: Radius's on Radius,
+ * x402.org on Base Sepolia). Nothing runs at construction; the first `/supported` lookup happens
+ * lazily at request time (Cloudflare Workers forbid I/O at module scope).
  */
 export class RadiusFacilitatorClient implements FacilitatorClient {
   readonly url: string;
   private readonly http: HTTPFacilitatorClient;
   private readonly live: boolean;
-  private readonly network: RadiusNetwork;
+  private readonly network: PaymentNetwork;
 
-  constructor(network: RadiusNetwork, options: FacilitatorOptions = {}) {
+  constructor(network: PaymentNetwork, options: FacilitatorOptions = {}) {
     this.network = network;
-    this.url = (options.url ?? network.facilitatorUrl).replace(/\/+$/, '');
+    const url = options.url ?? network.facilitatorUrl;
+    if (!url) throw new Error(`radius-sdk: no default facilitator for ${network.name}; pass facilitator: { url } (or a FacilitatorClient) for it`);
+    this.url = url.replace(/\/+$/, '');
     this.live = options.live ?? true;
+    if (!this.live && !network.radius) throw new Error(`radius-sdk: facilitator live: false is only available on Radius networks (got ${network.name})`);
     const auth = options.apiKey ? { 'x-api-key': options.apiKey } : undefined;
     this.http = new HTTPFacilitatorClient({
       url: this.url,

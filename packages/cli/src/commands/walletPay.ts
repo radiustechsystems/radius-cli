@@ -1,7 +1,7 @@
 import type { Command } from 'commander';
 import { confirm } from '@inquirer/prompts';
 import { formatUnits, maxUint256, type Address } from 'viem';
-import { describeSupportedSchemes, resolveNetwork } from 'radius-sdk';
+import { describeSupportedSchemes, type PaymentNetwork } from 'radius-sdk';
 import {
   createRadiusFetch,
   getPaymentReceipt,
@@ -11,7 +11,7 @@ import {
   type PaymentReceipt,
   type PaymentRejectedDetails,
 } from 'radius-sdk/client';
-import { resolveConfig } from '../lib/config.js';
+import { PAY_NETWORKS, resolveConfig, resolvePayNetworks } from '../lib/config.js';
 import { deferredAccount } from '../lib/account.js';
 import { jsonStringify } from '../lib/format.js';
 import {
@@ -26,20 +26,23 @@ import {
   type HttpResponse,
   type HttpVerb,
 } from '../lib/http.js';
-import { decidePayment, type PayDecision } from '../lib/x402Policy.js';
+import { decidePayment, type PayDecision } from '../lib/payPolicy.js';
 import type { GlobalOptions } from '../types.js';
 
 interface SubOptions {
   header?: string[];
   data?: string;
-  x402Threshold?: string;
+  networks?: string;
+  threshold?: string;
   yes?: boolean;
   include?: boolean;
-  x402ApprovePermit2?: boolean;
+  approvePermit2?: boolean;
 }
 
 interface PaymentSummary {
   paid: boolean;
+  /** CAIP-2 network the payment was made on. */
+  network: string;
   scheme: string;
   asset: Address;
   assetSymbol: string | null;
@@ -50,18 +53,20 @@ interface PaymentSummary {
   payer?: string;
 }
 
-export function registerWalletX402(wallet: Command): void {
+export function registerWalletPay(wallet: Command): void {
   wallet
-    .command('x402')
+    .command('pay')
     .description(
       [
         'Make an HTTP request and pay an x402 challenge if the server responds with 402.',
+        'Pays on Radius by default; add Base with --networks radius,base (--network testnet pairs Radius testnet with Base Sepolia).',
         `Supports ${describeSupportedSchemes()}.`,
         'Permit2 approvals are gas-sponsored when the server offers eip2612GasSponsoring.',
         '',
-        '  radius-cli wallet x402 get https://example.com/resource',
-        '  radius-cli wallet x402 post https://api.example.com/x -d \'{"a":1}\'',
-        '  radius-cli wallet x402 get https://example.com/r --x402-threshold 0.05',
+        '  radius-cli wallet pay get https://example.com/resource',
+        '  radius-cli wallet pay post https://api.example.com/x -d \'{"a":1}\'',
+        '  radius-cli wallet pay get https://example.com/r --threshold 0.05',
+        '  radius-cli wallet pay get https://example.com/r --networks radius,base',
       ].join('\n'),
     )
     .argument('<verb>', `HTTP verb (${SUPPORTED_VERBS.join(', ')})`)
@@ -69,18 +74,19 @@ export function registerWalletX402(wallet: Command): void {
     .option('-H, --header <h...>', "request header, repeatable: 'Key: Value'")
     .option('-d, --data <body>', "request body (literal, '@path' for file, '-' for stdin)")
     .option(
-      '--x402-threshold <decimal>',
-      "auto-pay if the offered fee ≤ this amount in the asset's display units",
+      '--networks <list>',
+      `networks to pay on, in preference order (${PAY_NETWORKS.join(', ')}; default radius, or RADIUS_PAY_NETWORKS)`,
     )
-    .option('-y, --yes', 'auto-confirm payment without prompting (capped by --x402-threshold when both are given)')
+    .option('--threshold <decimal>', "auto-pay if the offered fee ≤ this amount in the asset's display units (USD for SBC and USDC)")
+    .option('-y, --yes', 'auto-confirm payment without prompting (capped by --threshold when both are given)')
     .option(
-      '--x402-approve-permit2',
+      '--approve-permit2',
       'grant Permit2 an unlimited token approval if one is missing and the server does not sponsor it',
     )
     .option('--include', 'write response status and headers to stderr')
     .action(async (verbArg: string, url: string, subOpts: SubOptions, cmd) => {
       const opts = cmd.optsWithGlobals() as GlobalOptions;
-      await runX402(verbArg, url, subOpts, opts);
+      await runPay(verbArg, url, subOpts, opts);
     });
 }
 
@@ -93,7 +99,7 @@ type Refusal =
   | { kind: 'approval-no-tty' }
   | { kind: 'approval-declined' };
 
-async function runX402(
+async function runPay(
   verbArg: string,
   url: string,
   subOpts: SubOptions,
@@ -120,14 +126,10 @@ async function runX402(
   }
 
   const cfg = resolveConfig(opts);
+  const networks = resolvePayNetworks(cfg, subOpts.networks);
   // The keystore is unlocked only when the SDK signs, i.e. after the 402 has been parsed and
   // matched (network, asset, scheme, payTo) and the payment approved. A bad challenge never prompts.
   const account = await deferredAccount(cfg, opts.privateKey);
-  const network = resolveNetwork(cfg.network, {
-    rpcUrl: cfg.rpcUrl,
-    asset: cfg.sbcAddress ? { address: cfg.sbcAddress } : undefined,
-  });
-  const { decimals, symbol } = network.asset;
 
   // Hand the 402 we already have to the SDK instead of asking the server twice.
   let replayed = false;
@@ -143,17 +145,19 @@ async function runX402(
   let refusal: Refusal | undefined;
 
   const payFetch = createRadiusFetch({
-    network,
+    networks,
     signer: account,
     // The policy (threshold / prompt / refuse) lives in onPaymentRequired; no SDK-side cap.
     maxPerRequest: { amount: maxUint256.toString() },
     fetch: replayFirst,
     onPaymentRequired: async (o) => {
       offer = o;
+      const { decimals, symbol } = o.network.asset;
+      const wallet = payFetch.on(o.network);
       const isUpto = o.requirements.scheme === 'upto';
       const amount = BigInt(o.amount);
       const amountStr = formatUnits(amount, decimals);
-      const balance = await payFetch.balance();
+      const balance = await wallet.balance();
       if (balance.atomic < amount) {
         refusal = { kind: 'insufficient-balance' };
         process.stderr.write(
@@ -171,15 +175,15 @@ async function runX402(
       if (decision === 'refuse-over-threshold') {
         refusal = { kind: 'over-threshold' };
         process.stderr.write(
-          `x402: offer ${isUpto ? 'authorizes up to ' : 'of '}${amountStr} ${symbol} exceeds --x402-threshold ` +
-            `${subOpts.x402Threshold}; not paying. Raise the threshold, or drop it to let --yes pay any amount.\n`,
+          `x402: offer ${isUpto ? 'authorizes up to ' : 'of '}${amountStr} ${symbol} exceeds --threshold ` +
+            `${subOpts.threshold}; not paying. Raise the threshold, or drop it to let --yes pay any amount.\n`,
         );
         return false;
       }
       if (decision === 'prompt') {
         const verbText = isUpto ? `Authorize up to ${amountStr}` : `Pay ${amountStr}`;
         const proceed = await confirm({
-          message: `${verbText} ${symbol} to ${o.payTo}? (balance: ${balance.formatted})`,
+          message: `${verbText} ${symbol} on ${o.network.name} to ${o.payTo}? (balance: ${balance.formatted})`,
           default: false,
         });
         if (!proceed) {
@@ -188,20 +192,21 @@ async function runX402(
           return false;
         }
       }
-      if (subOpts.x402ApprovePermit2 && o.transferMethod === 'permit2') {
+      if (subOpts.approvePermit2 && o.transferMethod === 'permit2') {
         // The flag promises an allowance whether or not the server sponsors approvals (the SDK
         // only checks when it does not), so a facilitator that still answers 412 has a way out.
-        const allowance = await payFetch.permit2Allowance();
+        const allowance = await wallet.permit2Allowance();
         if (allowance < amount) {
-          process.stderr.write(`x402: granting Permit2 an unlimited ${symbol} approval (--x402-approve-permit2)…\n`);
-          const tx = await payFetch.approvePermit2();
+          process.stderr.write(`x402: granting Permit2 an unlimited ${symbol} approval on ${o.network.name} (--approve-permit2)…\n`);
+          const tx = await wallet.approvePermit2();
           process.stderr.write(`x402: approval confirmed (tx ${tx.hash})\n`);
         }
       }
       return true;
     },
     onApprovalRequired: async (req: ApprovalRequest) => {
-      if (subOpts.yes || subOpts.x402ApprovePermit2) return true;
+      if (subOpts.yes || subOpts.approvePermit2) return true;
+      const { decimals, symbol } = req.network.asset;
       // `offer` is set when the SDK is approving for a payment; the CLI only calls approvePermit2()
       // itself under the flags handled above, so the prompt below is always payment-driven.
       const need = req.offer ? `${formatUnits(BigInt(req.offer.amount), decimals)} ${symbol}` : undefined;
@@ -210,7 +215,7 @@ async function runX402(
         refusal = { kind: 'approval-no-tty' };
         process.stderr.write(
           `x402: this payment requires a Permit2 approval for ${symbol} (have ${have}${need ? `, need ${need}` : ''}) ` +
-            'and the server does not sponsor it. Re-run with --x402-approve-permit2 (or -y) to grant ' +
+            'and the server does not sponsor it. Re-run with --approve-permit2 (or -y) to grant ' +
             'a one-time unlimited approval.\n',
         );
         return false;
@@ -244,12 +249,10 @@ async function runX402(
       await reportPaymentError(e, {
         refusal,
         offer,
-        network: network.network,
+        networks,
         payer: account.address,
         challengeBody: initial.body,
         json: !!opts.json,
-        symbol,
-        decimals,
       }),
     );
   }
@@ -264,7 +267,7 @@ async function runX402(
   if (paid.status === 412) {
     process.stderr.write(
       'x402: facilitator rejected the payment — Permit2 allowance required (412). ' +
-        'Re-run with --x402-approve-permit2 to grant it.\n',
+        'Re-run with --approve-permit2 to grant it.\n',
     );
     process.stderr.write(safeBodyPreview(paid.body));
     process.exit(1);
@@ -276,8 +279,8 @@ async function runX402(
     process.exit(1);
   }
 
-  const receipt = getPaymentReceipt(res, network);
-  const summary = summarize(offer, receipt, paid.status, account.address, symbol, decimals);
+  const receipt = getPaymentReceipt(res, offer.network);
+  const summary = summarize(offer, receipt, paid.status, account.address);
 
   if (paid.status >= 200 && paid.status < 300 && !summary.paid) {
     process.stderr.write(
@@ -294,13 +297,13 @@ function summarize(
   receipt: PaymentReceipt | undefined,
   status: number,
   fallbackPayer: Address,
-  symbol: string,
-  decimals: number,
 ): PaymentSummary {
+  const { decimals, symbol } = offer.network.asset;
   // For upto the facilitator reports what it actually charged (validated by the SDK); exact charges the offer.
   const settled = BigInt(receipt?.amount ?? offer.amount);
   return {
     paid: status >= 200 && status < 300 && receipt?.success === true,
+    network: offer.network.network,
     scheme: offer.requirements.scheme,
     asset: offer.asset,
     assetSymbol: symbol,
@@ -315,18 +318,16 @@ function summarize(
 interface ErrorContext {
   refusal: Refusal | undefined;
   offer: PaymentOffer | undefined;
-  network: string;
+  networks: readonly PaymentNetwork[];
   payer: Address;
   /** Body of the server's first 402, for the preview on an unusable challenge. */
   challengeBody: Uint8Array;
   json: boolean;
-  symbol: string;
-  decimals: number;
 }
 
 /** Print a payment failure the way the CLI always has, and return the exit code. */
 async function reportPaymentError(e: RadiusPaymentError, ctx: ErrorContext): Promise<number> {
-  const { refusal, offer, network, payer, json, symbol, decimals } = ctx;
+  const { refusal, offer, networks, payer, json } = ctx;
   const err = process.stderr;
   switch (e.code) {
     case 'invalid_challenge':
@@ -338,7 +339,7 @@ async function reportPaymentError(e: RadiusPaymentError, ctx: ErrorContext): Pro
     case 'unsupported_transfer_method':
     case 'no_compatible_offer':
       err.write(
-        `x402: no compatible payment option for network=${network} / ${symbol}. ` +
+        `x402: no compatible payment option for ${networks.map((n) => `${n.asset.symbol} on ${n.name} (${n.network})`).join(', ')}. ` +
           `Supported: ${describeSupportedSchemes()}. ${e.message}\n`,
       );
       return 1;
@@ -358,7 +359,7 @@ async function reportPaymentError(e: RadiusPaymentError, ctx: ErrorContext): Pro
       if (detail.error) err.write(`reason: ${detail.error}\n`);
       err.write(safeBodyPreview(rejected.body));
       if (json && offer) {
-        console.log(jsonStringify(envelope(rejected, summarize(offer, undefined, 402, payer, symbol, decimals))));
+        console.log(jsonStringify(envelope(rejected, summarize(offer, undefined, 402, payer))));
       }
       return 1;
     }
@@ -385,7 +386,7 @@ function writeChallengeSummary(
     [
       `x402: ${lead}`,
       `      balance: ${balanceStr}`,
-      `      pass --x402-threshold ${amount} (or higher) to auto-pay, or --yes to confirm.`,
+      `      pass --threshold ${amount} (or higher) to auto-pay, or --yes to confirm.`,
       '',
     ].join('\n'),
   );

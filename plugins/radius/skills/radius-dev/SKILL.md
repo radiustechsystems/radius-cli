@@ -88,17 +88,17 @@ wallet handling.
   export RADIUS_NETWORK="${RADIUS_NETWORK:-testnet}"
   radius-cli wallet address
   ```
-- **x402 endpoint consumption from agents:** use `radius-cli wallet x402 <verb>
-  <url>` with `--x402-threshold <amount>` and `-y` for intentional
+- **x402 endpoint consumption from agents:** use `radius-cli wallet pay <verb>
+  <url>` with `--threshold <amount>` and `-y` for intentional
   non-interactive payment.
   ```bash
   RADIUS_HOME=.radius RADIUS_NETWORK=testnet \
-    radius-cli wallet x402 get https://example.com/paid \
-    --x402-threshold 0.001 \
+    radius-cli wallet pay get https://example.com/paid \
+    --threshold 0.001 \
     --json \
     -y
   ```
-  `--x402-threshold` is a display-unit limit such as SBC, not a raw 6-decimal
+  `--threshold` is a display-unit limit such as SBC, not a raw 6-decimal
   integer. Do not omit it in automated agent flows.
 - **App code and embedded integrations:** use `radius-sdk` for its Radius
   payment and token actions, with viem clients where needed. Load keys from

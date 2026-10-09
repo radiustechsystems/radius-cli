@@ -12,7 +12,7 @@ import {
   type RoutesConfig,
 } from '@x402/core/server';
 import type { SettleResponse } from '@x402/core/types';
-import { resolveNetwork, explorerTxUrl, type Address, type NetworkInput, type NetworkOverrides, type RadiusNetwork } from '../networks.js';
+import { resolveNetwork, explorerTxUrl, isNetworkId, overridesOf, type Address, type NetworkInput, type NetworkOverrides, type PaymentNetwork } from '../networks.js';
 import { resolvePrice, type Price } from '../amounts.js';
 import type { PaymentReceipt } from '../receipt.js';
 import { RadiusFacilitatorClient, withUnknownOutcomes, type FacilitatorOptions } from './facilitator.js';
@@ -28,7 +28,10 @@ export type { HTTPRequestContext, RoutesConfig, FacilitatorClient } from '@x402/
 export type PayTo<Ctx> = Address | ((ctx: Ctx) => Address | Promise<Address>);
 
 export interface RouteSpec<Ctx> {
-  /** "$0.01", "0.01", 0.01 (USD == SBC), or { amount: "10000" } atomic units. */
+  /**
+   * "$0.01", "0.01", 0.01 (USD, converted for each network's stablecoin), or { amount: "10000" }
+   * atomic units of each network's asset.
+   */
   price: Price | ((ctx: Ctx) => Price | Promise<Price>);
   description?: string;
   mimeType?: string;
@@ -50,12 +53,26 @@ export interface RoutesOptions<Ctx> {
   routes: RouteSpecs<Ctx>;
 }
 
+/** One network a server accepts payment on, with the facilitator that settles it. */
+export interface ServerNetwork {
+  network: NetworkInput;
+  /** Defaults to the network's facilitator (Radius's on Radius, x402.org on Base Sepolia); required on Base. */
+  facilitator?: FacilitatorOptions | FacilitatorClient;
+}
+
 export interface RadiusServerOptions extends NetworkOverrides {
-  /** 'mainnet' (default), 'testnet', a preset, or a custom instance. */
+  /** The network to accept payment on: 'mainnet' (Radius, default), 'testnet', 'base', 'base-sepolia', or any `PaymentNetwork`. */
   network?: NetworkInput;
   /**
-   * Which facilitator verifies and settles. Defaults to the Radius facilitator for
-   * the network. Pass `{ url, apiKey }` for another hosted facilitator, or your own
+   * Several networks to accept payment on (instead of `network`): every route offers one payment
+   * option per network, in this order. Give a network its own facilitator with
+   * `{ network, facilitator }`; Base has no default, so it needs one. Top-level `facilitator`
+   * and overrides (`rpcUrl`, `asset`, …) apply to the first network.
+   */
+  networks?: readonly (NetworkInput | ServerNetwork)[];
+  /**
+   * Which facilitator verifies and settles. Defaults to the network's (the Radius facilitator on
+   * Radius). Pass `{ url, apiKey }` for another hosted facilitator, or your own
    * `FacilitatorClient` (from `@x402/core/server`) for a self-hosted one.
    */
   facilitator?: FacilitatorOptions | FacilitatorClient;
@@ -111,8 +128,34 @@ function isFacilitatorClient(v: unknown): v is FacilitatorClient {
   return typeof v === 'object' && v !== null && typeof (v as FacilitatorClient).settle === 'function' && typeof (v as FacilitatorClient).getSupported === 'function';
 }
 
+/**
+ * A facilitator that reports only `network`'s kinds. x402 core routes each network to the first
+ * facilitator listing it, so without this a facilitator configured for one network (e.g. a
+ * multi-chain one for Base) could capture another network that has its own.
+ */
+function scopedTo(network: PaymentNetwork, facilitator: FacilitatorClient, failures: Map<PaymentNetwork, string>): FacilitatorClient {
+  return {
+    verify: (payload, requirements) => facilitator.verify(payload, requirements),
+    settle: (payload, requirements) => facilitator.settle(payload, requirements),
+    getSupported: async () => {
+      try {
+        const supported = await facilitator.getSupported();
+        failures.delete(network);
+        return { ...supported, kinds: supported.kinds.filter((k) => k.network === network.network) };
+      } catch (e) {
+        failures.set(network, e instanceof Error ? e.message : String(e));
+        throw e;
+      }
+    },
+  };
+}
+
+function isServerNetwork(v: unknown): v is ServerNetwork {
+  return typeof v === 'object' && v !== null && 'network' in v && !('chain' in v);
+}
+
 /** Turn a facilitator settle result into the receipt handed to application code. */
-export function toReceipt(r: SettleResponse, network: RadiusNetwork, requirements: { amount: string }): PaymentReceipt {
+export function toReceipt(r: SettleResponse, network: PaymentNetwork, requirements: { amount: string }): PaymentReceipt {
   const transaction = r.transaction && r.transaction.length > 0 ? r.transaction : undefined;
   return {
     success: r.success,
@@ -129,8 +172,9 @@ export function toReceipt(r: SettleResponse, network: RadiusNetwork, requirement
 }
 
 /**
- * Radius payments for any HTTP stack. Holds the x402 resource server (Radius scheme,
- * facilitator, gas-sponsoring rules) independently of how requests arrive:
+ * x402 payments for any HTTP stack, on Radius by default and optionally other networks. Holds the
+ * x402 resource server (a scheme and facilitator per network, gas-sponsoring rules) independently
+ * of how requests arrive:
  *
  * - `server` + `routes()` plug into the upstream adapters (`@x402/express`,
  *   `@x402/next`, `@x402/hono`): `paymentMiddleware(radius.routes({...}), radius.server)`.
@@ -138,19 +182,55 @@ export function toReceipt(r: SettleResponse, network: RadiusNetwork, requirement
  *   Deno, Node, route handlers). `radius-sdk/hono` wraps it for Hono.
  */
 export class RadiusServer {
-  readonly network: RadiusNetwork;
-  /** The facilitator, wrapped so calls that fail without its own answer surface as 502 (`withUnknownOutcomes`). */
+  /** The first (or only) network. */
+  readonly network: PaymentNetwork;
+  /** Every network routes offer payment on, in offer order. */
+  readonly networks: readonly PaymentNetwork[];
+  /** The first network's facilitator, wrapped so calls that fail without its own answer surface as 502 (`withUnknownOutcomes`). */
   readonly facilitator: FacilitatorClient;
+  /** The first network's scheme. */
   readonly scheme: RadiusExactScheme;
   /** The x402 resource server, for upstream framework adapters. */
   readonly server: x402ResourceServer;
+  /** Networks whose facilitator's last `/supported` call failed, with the error. */
+  private readonly supportedFailures: Map<PaymentNetwork, string>;
 
   constructor(options: RadiusServerOptions = {}) {
-    this.network = resolveNetwork(options.network, options);
-    this.facilitator = withUnknownOutcomes(isFacilitatorClient(options.facilitator) ? options.facilitator : new RadiusFacilitatorClient(this.network, options.facilitator));
-    this.scheme = new RadiusExactScheme(this.network, options.settle ?? 'before', options.gasSponsoring ?? 'auto');
-    this.server = new x402ResourceServer(this.facilitator).register(this.network.network, this.scheme);
+    if (options.network !== undefined && options.networks !== undefined) throw new Error('radius-sdk: pass network or networks, not both');
+    if (options.networks !== undefined && options.networks.length === 0) throw new Error('radius-sdk: networks is empty');
+    const entries: ServerNetwork[] = (options.networks ?? [options.network]).map((e) => (isServerNetwork(e) ? e : { network: e as NetworkInput }));
+    const supportedFailures = (this.supportedFailures = new Map());
+    const configured = entries.map((entry, i) => {
+      const network = i === 0 ? resolveNetwork(entry.network, overridesOf(options)) : resolveNetwork(entry.network);
+      const choice = entry.facilitator ?? (i === 0 ? options.facilitator : undefined);
+      const facilitator = scopedTo(network, withUnknownOutcomes(isFacilitatorClient(choice) ? choice : new RadiusFacilitatorClient(network, choice)), supportedFailures);
+      const scheme = new RadiusExactScheme(network, options.settle ?? 'before', options.gasSponsoring ?? 'auto');
+      return { network, facilitator, scheme };
+    });
+    const chains = new Set(configured.map((c) => c.network.chainId));
+    if (chains.size !== configured.length) throw new Error('radius-sdk: a network is listed twice');
+    const schemes = configured.map((c) => c.scheme);
+    for (const scheme of schemes) scheme.peers = schemes;
+
+    this.networks = configured.map((c) => c.network);
+    const [first] = configured;
+    this.network = first.network;
+    this.facilitator = first.facilitator;
+    this.scheme = first.scheme;
+    this.server = new x402ResourceServer(configured.map((c) => c.facilitator));
+    for (const { network, scheme } of configured) this.server.register(network.network, scheme);
     if (options.onSettled) this.onSettled(options.onSettled);
+  }
+
+  /** Why some networks' facilitators could not be reached for `/supported`, if any did not answer. @internal */
+  unsupportedNetworks(): string | undefined {
+    if (this.supportedFailures.size === 0) return undefined;
+    return [...this.supportedFailures].map(([n, error]) => `${n.name}: ${error}`).join('; ');
+  }
+
+  /** The configured network a CAIP-2 id (or x402 v1 name) refers to; the first network if none matches. */
+  networkFor(id: string | undefined): PaymentNetwork {
+    return (id !== undefined ? this.networks.find((n) => isNetworkId(n, id)) : undefined) ?? this.network;
   }
 
   /** Register a settlement listener (see `RadiusServerOptions.onSettled`). */
@@ -158,15 +238,15 @@ export class RadiusServer {
     this.server.onAfterSettle(async (ctx) => {
       if (!ctx.result.success) return;
       const transport = ctx.transportContext as { request?: HTTPRequestContext } | undefined;
-      await hook(toReceipt(ctx.result as SettleResponse, this.network, ctx.requirements), transport?.request);
+      await hook(toReceipt(ctx.result as SettleResponse, this.networkFor(ctx.requirements.network), ctx.requirements), transport?.request);
     });
     return this;
   }
 
   /**
-   * x402 `RoutesConfig` with Radius pricing (USD/SBC display units or atomic amounts)
-   * and the gas-sponsoring declaration. Dynamic `payTo`/`price` receive the x402
-   * request context.
+   * x402 `RoutesConfig`: one payment option per network (USD prices converted for each network's
+   * asset, or atomic amounts) and the gas-sponsoring declaration. Dynamic `payTo`/`price` receive
+   * the x402 request context.
    */
   routes(options: RoutesOptions<HTTPRequestContext>): RoutesConfig {
     return this.buildRoutes(options, (ctx) => ctx);
@@ -174,22 +254,29 @@ export class RadiusServer {
 
   /** `routes()` with dynamic functions receiving a framework-specific context. @internal */
   buildRoutes<Ctx>(options: RoutesOptions<Ctx>, contextOf: (ctx: HTTPRequestContext) => Ctx): RoutesConfig {
-    const network = this.network;
+    const { networks } = this;
     const resolvePayTo = (spec: PayTo<Ctx>) => (typeof spec === 'function' ? (ctx: HTTPRequestContext) => spec(contextOf(ctx)) : spec);
-    const normalise = (p: Price) => resolvePrice(p, network.asset);
+    const normalise = (p: Price, network: PaymentNetwork) => {
+      if (networks.length > 1 && typeof p === 'object' && p !== null && p.asset !== undefined) {
+        throw new Error('radius-sdk: a price naming an asset cannot apply to several networks; give a USD price or an atomic amount without asset');
+      }
+      return resolvePrice(p, network.asset);
+    };
     const routes: RoutesConfig = {};
     for (const [pattern, specOrPrice] of Object.entries(options.routes)) {
       const spec: RouteSpec<Ctx> =
         typeof specOrPrice === 'object' && specOrPrice !== null && 'price' in specOrPrice ? (specOrPrice as RouteSpec<Ctx>) : { price: specOrPrice as Price };
       const price = spec.price;
+      const payTo = resolvePayTo(spec.payTo ?? options.payTo);
+      const accepts = networks.map((network) => ({
+        scheme: 'exact',
+        network: network.network,
+        payTo,
+        price: typeof price === 'function' ? async (ctx: HTTPRequestContext) => normalise(await price(contextOf(ctx)), network) : normalise(price, network),
+        maxTimeoutSeconds: spec.maxTimeoutSeconds ?? 300,
+      }));
       const route: RouteConfig & { extensions?: Record<string, unknown> } = {
-        accepts: {
-          scheme: 'exact',
-          network: network.network,
-          payTo: resolvePayTo(spec.payTo ?? options.payTo),
-          price: typeof price === 'function' ? async (ctx: HTTPRequestContext) => normalise(await price(contextOf(ctx))) : normalise(price),
-          maxTimeoutSeconds: spec.maxTimeoutSeconds ?? 300,
-        },
+        accepts: accepts.length === 1 ? accepts[0] : accepts,
         description: spec.description,
         mimeType: spec.mimeType,
         extensions: { ...GAS_SPONSORING_DECLARATION },
@@ -237,8 +324,8 @@ export interface RadiusPaymentsOptions extends Omit<RadiusServerOptions, 'onSett
 }
 
 /**
- * Charge for routes with Radius x402 payments, for any runtime that speaks
- * web-standard `Request`/`Response`:
+ * Charge for routes with x402 payments (Radius by default; add networks with `networks`), for any
+ * runtime that speaks web-standard `Request`/`Response`:
  *
  * ```ts
  * const pay = radiusPayments({ network: 'testnet', payTo: '0x…', routes: { 'GET /api/lookup': '$0.001' } });
@@ -293,16 +380,18 @@ function mutable(res: Response, body: BodyInit | null = res.body): Response {
 
 /** Web-standard handler for an already-built x402 `RoutesConfig` (see `RadiusServer.buildRoutes`). @internal */
 export function createPaymentHandler(radius: RadiusServer, routes: RoutesConfig): PaymentHandler {
-  const { network } = radius;
   const httpServer = new x402HTTPResourceServer(radius.server, routes);
 
-  // Lazy, request-time initialisation: Workers forbid I/O at module scope, and the
-  // static facilitator answer means this is normally just bookkeeping anyway.
+  // Lazy, request-time initialisation: Workers forbid I/O at module scope, and the static
+  // facilitator answer means this is normally just bookkeeping anyway. A failure is not cached: the
+  // next request tries again. When it failed because a facilitator's /supported did (x402 core
+  // reports that as a route configuration error), answer 502 rather than 500.
   let initPromise: Promise<void> | undefined;
   const ensureInitialized = () =>
     (initPromise ??= httpServer.initialize().catch((e) => {
       initPromise = undefined;
-      throw e;
+      const unreachable = radius.unsupportedNetworks();
+      throw unreachable ? Object.assign(new FacilitatorResponseError(unreachable), { cause: e }) : e;
     }));
 
   const handle = async (request: Request, next: NextHandler): Promise<Response> => {
@@ -326,7 +415,7 @@ export function createPaymentHandler(radius: RadiusServer, routes: RoutesConfig)
     if (result.type === 'payment-error') return instructionsToResponse(result.response);
 
     const { cancellationDispatcher, beforeHandlerSettlement, paymentPayload, paymentRequirements, declaredExtensions } = result;
-    const payment = beforeHandlerSettlement ? toReceipt(beforeHandlerSettlement.result, network, paymentRequirements) : undefined;
+    const payment = beforeHandlerSettlement ? toReceipt(beforeHandlerSettlement.result, radius.networkFor(paymentRequirements.network), paymentRequirements) : undefined;
 
     let res: Response;
     try {

@@ -1,9 +1,9 @@
-import { createPublicClient, createWalletClient, decodeFunctionData, encodeAbiParameters, encodeEventTopics, erc20Abi, maxUint256, numberToHex, type Address, type Hex } from 'viem';
+import { createPublicClient, createWalletClient, decodeFunctionData, defineChain, encodeAbiParameters, encodeEventTopics, erc20Abi, maxUint256, numberToHex, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { describe, expect, it, vi } from 'vitest';
 import { approve, erc20Actions, formatTokenAmount, getAllowance, getTokenMetadata, getTransfers, MAX_LOG_RANGE, toTokenAtomic, transfer, transferFrom, transferKey, watchTransfers, type TokenTransfer } from '../src/erc20.js';
 import { createRadiusFetch, type ApprovalRequest } from '../src/client/index.js';
-import { defineRadiusNetwork, PERMIT2_ADDRESS, radiusMainnet, radiusTestnet, SBC } from '../src/networks.js';
+import { definePaymentNetwork, PERMIT2_ADDRESS, radiusMainnet, radiusTestnet, SBC } from '../src/networks.js';
 import { RadiusPaymentError } from '../src/errors.js';
 import { fakeNode } from './fakeNode.js';
 
@@ -294,10 +294,10 @@ describe('erc20Actions', () => {
   });
   it('has no default token on a custom chain: token or network must be given', async () => {
     const node = erc20Node();
-    const custom = defineRadiusNetwork({ chainId: 4242, rpcUrl: 'http://rpc', facilitatorUrl: 'http://f', asset: { address: USDX, decimals: 18, symbol: 'USDX' } });
+    const custom = definePaymentNetwork({ chain: defineChain({ id: 4242, name: 'custom', nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, rpcUrls: { default: { http: ['http://rpc'] } } }), facilitatorUrl: 'http://f', asset: { address: USDX, decimals: 18, symbol: 'USDX', name: 'USDX', version: '1' } });
     const bare = createPublicClient({ chain: custom.chain, transport: node.transport });
     await expect(getTokenMetadata(bare)).rejects.toMatchObject({ code: 'config' });
-    await expect(getTokenMetadata(bare)).rejects.toThrow(/getTokenMetadata: no token given and chain 4242 is not a Radius preset/);
+    await expect(getTokenMetadata(bare)).rejects.toThrow(/getTokenMetadata: no token given and chain 4242 is not a preset network/);
     await expect(getAllowance(bare, { owner: OWNER.address, spender: SPENDER })).rejects.toThrow(/getAllowance:/);
     await expect(transfer(createWalletClient({ account: OWNER, chain: custom.chain, transport: node.transport }), { to: OTHER, amount: 1n })).rejects.toThrow(/transfer:/);
     expect(node.sent).toHaveLength(0);
@@ -309,7 +309,7 @@ describe('erc20Actions', () => {
   it('rejects a network that is not the chain the client is on, and a client with no chain', async () => {
     const node = erc20Node();
     const testnet = createPublicClient({ chain: radiusTestnet.chain, transport: node.transport });
-    expect(() => testnet.extend(erc20Actions({ network: 'mainnet' }))).toThrow(/network mainnet is chain 723487 but the client is on chain 72344/);
+    expect(() => testnet.extend(erc20Actions({ network: 'mainnet' }))).toThrow(/network radius is chain 723487 but the client is on chain 72344/);
     const chainless = createPublicClient({ transport: node.transport });
     await expect(getTokenMetadata(chainless)).rejects.toThrow(/a client with no chain/);
     expect((await getTokenMetadata(chainless, { token: SBC })).symbol).toBe('SBC');
@@ -319,7 +319,7 @@ describe('erc20Actions', () => {
 describe('createRadiusFetch helpers', () => {
   it('allowance() and approve() act on the payment asset for the signer, through onApprovalRequired', async () => {
     const node = erc20Node();
-    const network = defineRadiusNetwork({ chain: radiusTestnet.chain, facilitatorUrl: 'http://127.0.0.1:1' });
+    const network = radiusTestnet;
     const requests: ApprovalRequest[] = [];
     let allow = true;
     const payFetch = createRadiusFetch({ network, signer: PK, maxPerRequest: '$0.01', onApprovalRequired: (r) => { requests.push(r); return allow; } });
@@ -342,12 +342,12 @@ describe('createRadiusFetch helpers', () => {
       expect((await payFetch.approve(OTHER, maxUint256)).status).toBe('success');
       expect(decodeSent(node, 1).args).toEqual([OTHER, maxUint256]);
       expect(requests).toEqual([
-        { reason: 'approve', asset: SBC.address, spender: SPENDER, amount: 1_000_000n, currentAllowance: 42n },
-        { reason: 'approve', asset: SBC.address, spender: OTHER, amount: maxUint256, currentAllowance: 0n },
+        { reason: 'approve', network, asset: SBC.address, spender: SPENDER, amount: 1_000_000n, currentAllowance: 42n },
+        { reason: 'approve', network, asset: SBC.address, spender: OTHER, amount: maxUint256, currentAllowance: 0n },
       ]);
       // approvePermit2() is gated the same way, and a veto sends nothing.
       await payFetch.approvePermit2();
-      expect(requests[2]).toEqual({ reason: 'approvePermit2', asset: SBC.address, spender: PERMIT2_ADDRESS, amount: maxUint256, currentAllowance: 0n });
+      expect(requests[2]).toEqual({ reason: 'approvePermit2', network, asset: SBC.address, spender: PERMIT2_ADDRESS, amount: maxUint256, currentAllowance: 0n });
       expect(decodeSent(node, 2).args).toEqual([PERMIT2_ADDRESS, maxUint256]);
       allow = false;
       await expect(payFetch.approve(SPENDER, '2')).rejects.toMatchObject({ code: 'declined', details: { reason: 'approve', spender: SPENDER, amount: 2_000_000n } });

@@ -1,4 +1,4 @@
-import { createPublicClient, createWalletClient, decodeFunctionData, encodeAbiParameters, erc20Abi, hashStruct, hashTypedData, keccak256, maxUint160, maxUint256, numberToHex, recoverTypedDataAddress, toHex, type Address, type Hex } from 'viem';
+import { createPublicClient, createWalletClient, decodeFunctionData, defineChain, encodeAbiParameters, erc20Abi, hashStruct, hashTypedData, keccak256, maxUint160, maxUint256, numberToHex, recoverTypedDataAddress, toHex, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { describe, expect, it } from 'vitest';
 import {
@@ -23,7 +23,7 @@ import {
   signPermit2Transfer,
   type Permit2Witness,
 } from '../src/permit2.js';
-import { defineRadiusNetwork, PERMIT2_ADDRESS, radiusTestnet, SBC, X402_EXACT_PERMIT2_PROXY } from '../src/networks.js';
+import { definePaymentNetwork, PERMIT2_ADDRESS, radiusTestnet, SBC, X402_EXACT_PERMIT2_PROXY } from '../src/networks.js';
 import { fakeNode } from './fakeNode.js';
 
 const OWNER_PK = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as Hex;
@@ -268,13 +268,13 @@ describe('spender side', () => {
 describe('default token', () => {
   it('has none on a custom chain until token or network is given', async () => {
     const n = node();
-    const custom = defineRadiusNetwork({ chainId: 4242, rpcUrl: 'http://rpc', facilitatorUrl: 'http://f', asset: { address: '0x2222222222222222222222222222222222222222', decimals: 6, symbol: 'USDX' } });
+    const custom = definePaymentNetwork({ chain: defineChain({ id: 4242, name: 'custom', nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, rpcUrls: { default: { http: ['http://rpc'] } } }), facilitatorUrl: 'http://f', asset: { address: '0x2222222222222222222222222222222222222222', decimals: 6, symbol: 'USDX', name: 'USDX', version: '1' } });
     const client = createWalletClient({ account: OWNER, chain: custom.chain, transport: n.transport });
     await expect(getPermit2Approval(client, { owner: OWNER.address })).rejects.toMatchObject({ code: 'config' });
-    await expect(approvePermit2(client)).rejects.toThrow(/approvePermit2: no token given and chain 4242 is not a Radius preset/);
+    await expect(approvePermit2(client)).rejects.toThrow(/approvePermit2: no token given and chain 4242 is not a preset network/);
     await expect(signPermit2Transfer(client, { spender: SPENDER.address, amount: 1n })).rejects.toThrow(/signPermit2Transfer:/);
     expect(n.sent).toHaveLength(0);
-    expect(() => client.extend(permit2Actions({ network: 'testnet' }))).toThrow(/network testnet is chain 72344 but the client is on chain 4242/);
+    expect(() => client.extend(permit2Actions({ network: 'testnet' }))).toThrow(/network radius-testnet is chain 72344 but the client is on chain 4242/);
     // With the network (or an explicit token) the custom asset is used.
     const signed = await client.extend(permit2Actions({ network: custom })).signPermit2Transfer({ spender: SPENDER.address, amount: 1n, nonce: 1n, deadline: BigInt(NOW + 60) });
     expect(signed.permit.permitted.token).toBe(custom.asset.address);

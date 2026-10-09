@@ -19,12 +19,12 @@
 
 import { formatUnits, hexToBigInt, isAddress, numberToHex, type Address, type BlockTag, type Chain, type Client, type Hex, type Transport } from 'viem';
 import { getBalance, readContract } from 'viem/actions';
-import { radiusMainnet, radiusNetworkForChainId, resolveNetwork, SBC, type NetworkInput, type RadiusAsset } from './networks.js';
+import { presetForChainId, radiusMainnet, resolveNetwork, SBC, type NetworkInput, type PaymentNetwork } from './networks.js';
 
 /** Any viem client (public, wallet, or bare) whose transport reaches a Radius node. */
 export type BalanceClient = Client<Transport, Chain | undefined>;
 
-/** An ERC-20 to include in a balance query. `RadiusAsset` values (e.g. `SBC`) work as-is. */
+/** An ERC-20 to include in a balance query. `PaymentAsset` values (e.g. `SBC`) work as-is. */
 export interface BalanceToken {
   address: Address;
   symbol: string;
@@ -283,10 +283,14 @@ export function radiusActions(config: RadiusActionsConfig = {}) {
   });
 }
 
-/** Tokens `getBalances` reads by default: the network's payment asset, marked convertible. */
+/**
+ * Tokens `getBalances` reads by default: the network's payment asset, marked convertible on
+ * Radius networks (where the Turnstile counts it in `eth_getBalance`) and not elsewhere.
+ */
 export function defaultTokens(client: BalanceClient, network?: NetworkInput): BalanceToken[] {
-  const asset: RadiusAsset = network !== undefined ? resolveNetwork(network).asset : (radiusNetworkForChainId(client.chain?.id)?.asset ?? SBC);
-  return [{ address: asset.address, symbol: asset.symbol, decimals: asset.decimals, convertible: true }];
+  const net: PaymentNetwork | undefined = network !== undefined ? resolveNetwork(network) : presetForChainId(client.chain?.id);
+  const asset = net?.asset ?? SBC;
+  return [{ address: asset.address, symbol: asset.symbol, decimals: asset.decimals, convertible: net?.radius ?? true }];
 }
 
 function isConvertible(token: BalanceToken): boolean {
