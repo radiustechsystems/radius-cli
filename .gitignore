@@ -5,3 +5,4 @@ dist/
 *.log
 plugins/radius/evals/results/
 plugins/radius/results.json
+evaluations/agent-payments/results/
