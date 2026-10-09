@@ -8,8 +8,12 @@
  *   retry + `Authorization: Payment <b64url JSON {challenge, payload, source}>`
  *   200 + `Payment-Receipt: <b64url JSON {method, reference, status, timestamp}>`
  *
- * Matches mppx 0.13 (the reference implementation, interop-tested). Shared by the client and the
- * server, so it has no viem: hashing is @noble/hashes, HMAC is WebCrypto.
+ * Follows draft-httpauth-payment-00 and the `evm` method as mppx implements it. mppx is the
+ * reference: test/mpp*.test.ts check this module against the pinned mppx in both directions,
+ * test/e2e/mpp.test.ts settles all three pairings on a live network, and the weekly
+ * `MPP interop` workflow reruns the interop tests against the newest mppx. When either changes,
+ * update this file, `server/mpp.ts` and the pin together. Shared by the client and the server,
+ * so it has no viem: hashing is @noble/hashes, HMAC is WebCrypto.
  */
 
 import { keccak_256 } from '@noble/hashes/sha3';

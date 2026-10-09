@@ -1,0 +1,72 @@
+name: MPP interop
+
+# radius-sdk implements MPP itself and pins mppx (the reference implementation) only for its interop
+# tests, so a change in mppx would go unnoticed until someone bumped the pin. Every week, rerun those
+# tests against the newest mppx and the viem it needs. A failure here means the wire format, the
+# challenge binding or mppx's client/server behaviour moved: check the mppx changelog and the
+# draft-httpauth-payment spec, then update src/mpp.ts / src/server/mpp.ts and the pin together.
+# A failure opens (or comments on) an issue titled "MPP interop: drift from the latest mppx".
+on:
+  schedule:
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  mppx-latest:
+    name: Against the latest mppx
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write # report a failure as an issue
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6 # reads the version from package.json#packageManager
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Switch to the latest mppx and viem
+        id: versions
+        run: |
+          mppx=$(npm view mppx version)
+          viem=$(npm view viem version)
+          echo "mppx=$mppx" >> "$GITHUB_OUTPUT"
+          echo "viem=$viem" >> "$GITHUB_OUTPUT"
+          echo "Testing against mppx $mppx with viem $viem (pinned: mppx $(node -p "require('./packages/sdk/package.json').devDependencies.mppx"))" >> "$GITHUB_STEP_SUMMARY"
+          npm pkg set "pnpm.overrides.mppx>viem=$viem"
+          pnpm --filter radius-sdk add -D "mppx@$mppx"
+
+      - name: MPP interop tests
+        run: pnpm --filter radius-sdk run test:mpp
+
+      - name: Open or update an issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MPPX: ${{ steps.versions.outputs.mppx }}
+          VIEM: ${{ steps.versions.outputs.viem }}
+        run: |
+          title="MPP interop: drift from the latest mppx"
+          body="The weekly MPP interop tests failed against mppx \`${MPPX:-unknown}\` (viem \`${VIEM:-unknown}\`): $RUN_URL
+
+          radius-sdk implements MPP itself (\`packages/sdk/src/mpp.ts\`, \`src/server/mpp.ts\`) and pins mppx for its interop tests. Check the mppx changelog and the draft-httpauth-payment spec, then update the implementation and the pin together."
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "Still failing: $RUN_URL (mppx \`${MPPX:-unknown}\`)"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
