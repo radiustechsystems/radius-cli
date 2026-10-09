@@ -1,7 +1,7 @@
 import { x402Client, x402HTTPClient } from '@x402/core/client';
 import type { PaymentPayloadResult, PaymentRequired, PaymentRequirements, PaymentRequirementsV1, SchemeNetworkClient } from '@x402/core/types';
-import { ExactEvmScheme, UptoEvmScheme, toClientEvmSigner, type ClientEvmSigner } from '@x402/evm';
-import { createPublicClient, createWalletClient, http, isAddress, maxUint256, type Account, type PublicClient, type WalletClient } from 'viem';
+import { ExactEvmScheme, UptoEvmScheme, authorizationTypes, toClientEvmSigner, type ClientEvmSigner } from '@x402/evm';
+import { createPublicClient, createWalletClient, getAddress, http, isAddress, maxUint256, type Account, type PublicClient, type WalletClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { formatAmount, resolvePrice, type Price } from '../amounts.js';
 import { getBalances, type AccountBalances } from '../balances.js';
@@ -9,7 +9,8 @@ import { toTokenAtomic, type TokenAmount, type TxResult } from '../erc20.js';
 import { RadiusPaymentError } from '../errors.js';
 import { describeSupportedSchemes } from '../schemes.js';
 import { PERMIT2_ADDRESS, explorerTxUrl, isNetworkId, overridesOf, resolveNetwork, type Address, type NetworkInput, type NetworkName, type NetworkOverrides, type PaymentNetwork } from '../networks.js';
-import { decodePaymentReceipt, parseUptoSettlementAmount, type PaymentReceipt } from '../receipt.js';
+import { decodeMppReceipt, decodePaymentReceipt, parseUptoSettlementAmount, type PaymentReceipt } from '../receipt.js';
+import { MPP_INTENT, MPP_METHOD, MPP_RECEIPT_HEADER, mppChallengeNonce, mppSource, parseMppChallenges, serializeMppCredential, type MppChallenge } from '../mpp.js';
 import { getSettlement, type Settlement } from '../settlement.js';
 
 /**
@@ -24,11 +25,12 @@ export type PaymentScheme = 'exact' | 'upto';
 /** A challenge entry from either protocol version (v1 prices in `maxAmountRequired`, v2 in `amount`). */
 export type AnyPaymentRequirements = PaymentRequirements | PaymentRequirementsV1;
 
-/** What a server is asking for, presented to `onPaymentRequired` before anything is signed. */
-export interface PaymentOffer {
-  /** x402 protocol version of the challenge: v1 pays with `X-PAYMENT`, v2 with `PAYMENT-SIGNATURE`. */
-  x402Version: 1 | 2;
-  /** `exact`: pay exactly `amount`. `upto`: authorise up to `amount`; the facilitator charges what was used. */
+/** Payment protocols this client speaks: x402, and MPP (the HTTP `Payment` auth scheme, `evm` charges). */
+export type PaymentProtocol = 'x402' | 'mpp';
+
+/** What every offer says, whichever protocol it came from. */
+interface OfferBase {
+  /** `exact`: pay exactly `amount` (an MPP `charge` is `exact`). `upto`: authorise up to `amount`; the facilitator charges what was used. */
   scheme: PaymentScheme;
   /** Atomic amount, e.g. "10000". For `upto` this is the authorised maximum, not what will be charged. */
   amount: string;
@@ -39,13 +41,32 @@ export interface PaymentOffer {
   /** The network the offer pays on (one of the client's `networks`); `network.asset` has the symbol and decimals. */
   network: PaymentNetwork;
   resource: { url: string; description?: string; mimeType?: string };
-  /** Untouched requirement chosen from the 402 (a v1 entry when `x402Version` is 1). */
-  requirements: AnyPaymentRequirements;
   /** How the asset moves: `permit2` needs a one-time ERC-20 approval (unless sponsored), `eip3009` does not. */
   transferMethod: 'permit2' | 'eip3009';
   /** True when the server's facilitator will sponsor the one-time Permit2 approval. */
   gasSponsored: boolean;
 }
+
+/** An x402 offer: an entry of the 402's `accepts`. */
+export interface X402Offer extends OfferBase {
+  protocol: 'x402';
+  /** x402 protocol version of the challenge: v1 pays with `X-PAYMENT`, v2 with `PAYMENT-SIGNATURE`. */
+  x402Version: 1 | 2;
+  /** Untouched requirement chosen from the 402 (a v1 entry when `x402Version` is 1). */
+  requirements: AnyPaymentRequirements;
+}
+
+/** An MPP offer: a `WWW-Authenticate: Payment` challenge for an `evm` charge, paid by EIP-3009 authorization. */
+export interface MppOffer extends OfferBase {
+  protocol: 'mpp';
+  scheme: 'exact';
+  transferMethod: 'eip3009';
+  /** The challenge as received, echoed back in the credential. */
+  challenge: MppChallenge;
+}
+
+/** What a server is asking for, presented to `onPaymentRequired` before anything is signed. */
+export type PaymentOffer = X402Offer | MppOffer;
 
 /**
  * An allowance change the client is about to make, handed to `onApprovalRequired` before anything
@@ -71,7 +92,7 @@ export interface ApprovalRequest {
 /** `details` of a `payment_rejected` error: the server's second 402, unread. */
 export interface PaymentRejectedDetails {
   response: Response;
-  /** `error` from the decoded `PAYMENT-REQUIRED` header, when the server sent one. */
+  /** `error` from the decoded `PAYMENT-REQUIRED` header, when the server sent one (x402). */
   error?: string;
   challenge?: PaymentRequired;
 }
@@ -93,6 +114,11 @@ export interface RadiusFetchOptions extends NetworkOverrides {
    * network, server order decides. Top-level overrides (`rpcUrl`, `asset`, …) apply to the first.
    */
   networks?: readonly NetworkInput[];
+  /**
+   * Protocols to pay with, in preference order (default `['x402', 'mpp']`). When a 402 carries
+   * both, the first protocol with a compatible offer wins; within it, networks in your order.
+   */
+  protocols?: readonly PaymentProtocol[];
   signer: RadiusSigner;
   /**
    * Hard ceiling per request, e.g. "$0.05" or { amount: "50000" }. Required. A USD price is
@@ -184,6 +210,7 @@ const ERC20_ABI = [
 ] as const;
 
 const SPONSORING_KEYS = ['eip2612GasSponsoring', 'erc20ApprovalGasSponsoring'];
+
 /**
  * Longest signing window we will authorise, and the default when a challenge omits
  * `maxTimeoutSeconds`. An authorisation the facilitator fails to settle stays redeemable until
@@ -261,6 +288,10 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
   }
   if (options.maxPerRequest === undefined || options.maxPerRequest === null) {
     throw new RadiusPaymentError('config', 'createRadiusFetch: maxPerRequest is required (e.g. "$0.05")');
+  }
+  const protocols = [...new Set(options.protocols ?? (['x402', 'mpp'] as const))];
+  if (protocols.length === 0 || protocols.some((p) => p !== 'x402' && p !== 'mpp')) {
+    throw new RadiusPaymentError('config', `createRadiusFetch: protocols must list 'x402' and/or 'mpp' (got ${JSON.stringify(options.protocols)})`);
   }
 
   // Who signs. A private key or local account can send transactions on every network; a
@@ -440,7 +471,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
   const describeNetworks = () => rails.map(({ network }) => `${network.network} (${network.name})`).join(', ');
   const describeAssets = () => rails.map(({ network }) => `${network.asset.symbol} (${network.asset.address}) on ${network.network}`).join(', ');
 
-  const chooseOffer = (pr: PaymentRequired, requestUrl: string): PaymentOffer => {
+  const chooseOffer = (pr: PaymentRequired, requestUrl: string): X402Offer => {
     const version = pr.x402Version;
     if (version !== 1 && version !== 2) throw new RadiusPaymentError('invalid_challenge', `Unsupported x402 version ${String(version)}`);
     const accepts = pr.accepts as AnyPaymentRequirements[] | undefined;
@@ -504,6 +535,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     const v1 = req as Partial<PaymentRequirementsV1>;
     const resource = version === 2 && pr.resource ? pr.resource : { url: requestUrl, description: v1.description, mimeType: v1.mimeType };
     return {
+      protocol: 'x402',
       x402Version: version,
       scheme,
       amount: amount.toString(),
@@ -524,7 +556,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
    * `extra.facilitator` alias radius-cli accepts for `facilitatorAddress`. Only the signer sees this;
    * the untouched requirement is what gets echoed back to the server.
    */
-  const forSigning = (offer: PaymentOffer): PaymentRequirements => {
+  const forSigning = (offer: X402Offer): PaymentRequirements => {
     const req = offer.requirements;
     const extra: Record<string, unknown> = { name: offer.network.asset.name, version: offer.network.asset.version, ...req.extra };
     if (extra.facilitatorAddress === undefined && typeof extra.facilitator === 'string') extra.facilitatorAddress = extra.facilitator;
@@ -544,6 +576,122 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
       throw new RadiusPaymentError('approval_required', `Permit2 allowance ${current} is below ${offer.amount} and the facilitator does not sponsor approvals; call approvePermit2() or set permit2Approval: 'auto'`, request);
     }
     await wallet.sendApproval(request, 'Permit2 approval');
+  };
+
+  /**
+   * The first payable MPP challenge: networks in the client's order, server order within each.
+   * Only `evm` charges in the network's asset, authorizable by EIP-3009, are payable. The credential
+   * only ever goes in `Authorization`: a challenge naming another header is skipped (a server must
+   * not steer a signed payment into `Cookie` or a forbidden header), and so is every challenge when
+   * the request already carries its own `Authorization`, which is never overwritten.
+   */
+  const chooseMppOffer = (challenges: MppChallenge[], request: Request): MppOffer => {
+    const usable = challenges.filter((c) => (c.header === undefined || c.header.toLowerCase() === 'authorization') && !request.headers.has('authorization'));
+    const charges = usable.filter((c) => c.method === MPP_METHOD && c.intent === MPP_INTENT);
+    if (charges.length === 0) {
+      const offered = [...new Set(challenges.map((c) => `${c.method}/${c.intent}`))].join(', ');
+      const why = usable.length < challenges.length ? ' (challenges are skipped when the request already sets Authorization, or name another credential header)' : '';
+      throw new RadiusPaymentError('no_compatible_offer', `Server offers MPP ${offered}; this client pays MPP evm/charge${why}`, challenges);
+    }
+    const detailsOf = (c: MppChallenge) => (c.request.methodDetails ?? {}) as { chainId?: unknown; credentialTypes?: unknown; splits?: unknown };
+    const onNetwork = rails.flatMap((rail) => charges.filter((c) => detailsOf(c).chainId === rail.network.chainId).map((c) => ({ rail, c })));
+    if (onNetwork.length === 0) {
+      const offered = [...new Set(charges.map((c) => `eip155:${String(detailsOf(c).chainId)}`))].join(', ');
+      throw new RadiusPaymentError('network_mismatch', `Server accepts ${offered}; this client pays on ${describeNetworks()}`, charges);
+    }
+    const sameAsset = onNetwork.filter(({ rail, c }) => typeof c.request.currency === 'string' && c.request.currency.toLowerCase() === rail.network.asset.address.toLowerCase());
+    if (sameAsset.length === 0) throw new RadiusPaymentError('asset_mismatch', `Server does not accept ${describeAssets()}`, onNetwork.map((o) => o.c));
+    const payable = sameAsset.filter(({ c }) => {
+      const { credentialTypes, splits } = detailsOf(c);
+      return Array.isArray(credentialTypes) && credentialTypes.includes('authorization') && !(Array.isArray(splits) && splits.length > 0);
+    });
+    if (payable.length === 0) {
+      throw new RadiusPaymentError('unsupported_transfer_method', 'Server requires an MPP evm credential other than an EIP-3009 authorization, or payment splits', sameAsset.map((o) => o.c));
+    }
+    const priced = payable.map((o) => {
+      const raw = o.c.request.amount;
+      if (typeof raw !== 'string' || !ATOMIC_AMOUNT.test(raw)) throw new RadiusPaymentError('invalid_challenge', `MPP request amount must be a non-negative integer string (got ${JSON.stringify(raw)})`, o.c);
+      return { ...o, amount: BigInt(raw) };
+    });
+    const affordable = priced.find((p) => p.amount <= p.rail.cap);
+    if (!affordable) {
+      const { amount, rail } = priced[0];
+      const { decimals, symbol } = rail.network.asset;
+      throw new RadiusPaymentError('price_above_limit', `Offer ${formatAmount(amount, decimals, symbol)} exceeds maxPerRequest ${formatAmount(rail.cap, decimals, symbol)}`, priced.map((p) => p.c));
+    }
+    const { c, amount, rail } = affordable;
+    const { network } = rail;
+    if (typeof c.request.recipient !== 'string' || !isAddress(c.request.recipient)) {
+      throw new RadiusPaymentError('invalid_challenge', `MPP request recipient is not an address (got ${JSON.stringify(c.request.recipient)})`, c);
+    }
+    return {
+      protocol: 'mpp',
+      scheme: 'exact',
+      amount: amount.toString(),
+      amountFormatted: formatAmount(amount, network.asset.decimals, network.asset.symbol),
+      asset: c.request.currency as Address,
+      payTo: c.request.recipient as Address,
+      network,
+      resource: { url: request.url, description: c.description },
+      transferMethod: 'eip3009',
+      gasSponsored: false,
+      challenge: c,
+    };
+  };
+
+  /**
+   * The MPP credential for an offer: an EIP-3009 `transferWithAuthorization` to the recipient, its
+   * nonce bound to the challenge (keccak256 of `[id, realm]`), valid until the challenge expires
+   * (capped like x402's signing window).
+   */
+  const mppCredential = async (offer: MppOffer): Promise<[string, string]> => {
+    const c = offer.challenge;
+    const { asset, chainId } = offer.network;
+    const now = Math.floor(Date.now() / 1000);
+    const expires = c.expires !== undefined ? Math.floor(Date.parse(c.expires) / 1000) : Number.NaN;
+    const validBefore = Number.isFinite(expires) ? Math.min(expires, now + MAX_TIMEOUT_SECONDS) : now + 300;
+    if (validBefore <= now) throw new RadiusPaymentError('invalid_challenge', `MPP challenge expired at ${c.expires}`, c);
+    const from = getAddress(account.address);
+    const to = getAddress(offer.payTo);
+    const nonce = mppChallengeNonce(c);
+    const signature = await account.signTypedData({
+      domain: { name: asset.name, version: asset.version, chainId, verifyingContract: asset.address },
+      types: authorizationTypes,
+      primaryType: 'TransferWithAuthorization',
+      message: { from, to, value: BigInt(offer.amount), validAfter: 0n, validBefore: BigInt(validBefore), nonce },
+    } as Parameters<ClientEvmSigner['signTypedData']>[0]);
+    const payload = { type: 'authorization' as const, from, to, value: offer.amount, validAfter: '0', validBefore: String(validBefore), nonce, signature };
+    return ['Authorization', serializeMppCredential(c, payload, mppSource(chainId, from))];
+  };
+
+  /**
+   * Pick the offer to pay from a 402, across protocols in preference order. Each protocol's own
+   * error is kept: when none has a compatible offer, the most-preferred protocol present explains why.
+   */
+  const selectOffer = async (first: Response, request: Request): Promise<{ offer: PaymentOffer; x402?: PaymentRequired }> => {
+    const mppChallenges = protocols.includes('mpp') ? parseMppChallenges(first.headers.get('www-authenticate')) : [];
+    let x402: PaymentRequired | undefined;
+    let x402Error: unknown;
+    if (protocols.includes('x402')) {
+      try {
+        x402 = await readChallenge(first);
+      } catch (e) {
+        x402Error = e;
+      }
+    }
+    const errors: RadiusPaymentError[] = [];
+    for (const protocol of protocols) {
+      try {
+        if (protocol === 'x402' && x402) return { offer: chooseOffer(x402, request.url), x402 };
+        if (protocol === 'mpp' && mppChallenges.length > 0) return { offer: chooseMppOffer(mppChallenges, request) };
+      } catch (e) {
+        if (!(e instanceof RadiusPaymentError)) throw e;
+        errors.push(e);
+      }
+    }
+    if (errors.length > 0) throw errors[0];
+    if (x402Error) throw x402Error;
+    throw new RadiusPaymentError('invalid_challenge', `The 402 carries no ${protocols.join(' or ')} challenge`, { response: first, cause: undefined });
   };
 
   /**
@@ -574,7 +722,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
    * non-negative integer no greater than the signed maximum, else `invalid_receipt`. `exact` receipts
    * are decoded leniently (a malformed one just means no receipt).
    */
-  const decodeReceipt = (header: string, offer: PaymentOffer): PaymentReceipt | undefined => {
+  const decodeReceipt = (header: string, offer: X402Offer): PaymentReceipt | undefined => {
     let receipt: PaymentReceipt;
     try {
       receipt = decodePaymentReceipt(header, offer.network);
@@ -596,7 +744,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
 
   const paidFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = new Request(input, init);
-    if (request.headers.has('payment-signature') || request.headers.has('x-payment')) {
+    if (request.headers.has('payment-signature') || request.headers.has('x-payment') || /^payment\s/i.test(request.headers.get('authorization') ?? '')) {
       return baseFetch(request);
     }
     // The paid retry never follows redirects: a 3xx must not carry the payment header to another origin.
@@ -604,21 +752,25 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     const first = await baseFetch(request);
     if (first.status !== 402) return first;
 
-    const paymentRequired = await readChallenge(first);
-    const offer = chooseOffer(paymentRequired, request.url);
+    const { offer, x402 } = await selectOffer(first, request);
     if (options.onPaymentRequired && !(await options.onPaymentRequired(offer))) {
       throw new RadiusPaymentError('declined', `Payment of ${offer.amountFormatted} to ${offer.payTo} declined`, offer);
     }
-    await ensureAllowance(offer);
 
-    // Narrow the challenge to the chosen offer so the upstream selector cannot pick another.
-    const narrowed: PaymentRequired = { ...paymentRequired, accepts: [forSigning(offer)] };
-    const payload = await client.createPaymentPayload(narrowed);
-    // v2 servers match `accepted` against the requirement they sent (core fields equal, their `extra`
-    // a subset of ours), so echo it untouched rather than the filled-in signing copy.
-    if (payload.x402Version === 2) payload.accepted = offer.requirements as PaymentRequirements;
-    for (const [k, v] of Object.entries(httpClient.encodePaymentSignatureHeader(payload))) retry.headers.set(k, v);
-    retry.headers.set('Access-Control-Expose-Headers', 'PAYMENT-RESPONSE,X-PAYMENT-RESPONSE');
+    if (offer.protocol === 'x402') {
+      await ensureAllowance(offer);
+      // Narrow the challenge to the chosen offer so the upstream selector cannot pick another.
+      const narrowed: PaymentRequired = { ...x402!, accepts: [forSigning(offer)] };
+      const payload = await client.createPaymentPayload(narrowed);
+      // v2 servers match `accepted` against the requirement they sent (core fields equal, their `extra`
+      // a subset of ours), so echo it untouched rather than the filled-in signing copy.
+      if (payload.x402Version === 2) payload.accepted = offer.requirements as PaymentRequirements;
+      for (const [k, v] of Object.entries(httpClient.encodePaymentSignatureHeader(payload))) retry.headers.set(k, v);
+    } else {
+      const [name, value] = await mppCredential(offer);
+      retry.headers.set(name, value);
+    }
+    retry.headers.set('Access-Control-Expose-Headers', 'PAYMENT-RESPONSE,X-PAYMENT-RESPONSE,Payment-Receipt');
 
     const second = await baseFetch(retry);
     if (REDIRECT_STATUSES.has(second.status)) {
@@ -639,29 +791,50 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
       // Same-origin: handed back unfollowed. Re-requesting the target is the caller's call (it may cost another payment).
       return second;
     }
-    const header = second.headers.get('payment-response') ?? second.headers.get('x-payment-response');
     if (second.status === 402) {
-      // The body is left unread: `details.response` is the server's answer for the caller to inspect.
+      // `details.response` is the server's answer, left unread for the caller to inspect; the reason
+      // comes from x402's PAYMENT-REQUIRED header, or MPP's problem body (read from a clone).
       let challenge: PaymentRequired | undefined;
+      let error: string | undefined;
       try {
-        challenge = httpClient.getPaymentRequiredResponse((n) => second.headers.get(n));
-      } catch {
-        /* no decodable PAYMENT-REQUIRED header */
-      }
-      const details: PaymentRejectedDetails = { response: second, error: challenge?.error, challenge };
-      throw new RadiusPaymentError('payment_rejected', `Server rejected the payment (${challenge?.error ?? 'no reason given'})`, details);
-    }
-    if (header) {
-      const receipt = decodeReceipt(header, offer);
-      if (receipt && options.onPaid) {
-        try {
-          await options.onPaid(receipt, offer);
-        } catch (e) {
-          console.error('radius-sdk onPaid hook failed:', e);
+        if (offer.protocol === 'x402') {
+          challenge = httpClient.getPaymentRequiredResponse((n) => second.headers.get(n));
+          error = challenge.error;
+        } else {
+          const problem = (await second.clone().json()) as { detail?: unknown };
+          if (typeof problem.detail === 'string') error = problem.detail;
         }
+      } catch {
+        /* no decodable reason */
+      }
+      const details: PaymentRejectedDetails = { response: second, error, challenge };
+      throw new RadiusPaymentError('payment_rejected', `Server rejected the payment (${error ?? 'no reason given'})`, details);
+    }
+    const receipt = offer.protocol === 'x402' ? x402Receipt(second, offer) : mppReceipt(second, offer);
+    if (receipt && options.onPaid) {
+      try {
+        await options.onPaid(receipt, offer);
+      } catch (e) {
+        console.error('radius-sdk onPaid hook failed:', e);
       }
     }
     return second;
+  };
+
+  const x402Receipt = (res: Response, offer: X402Offer): PaymentReceipt | undefined => {
+    const header = res.headers.get('payment-response') ?? res.headers.get('x-payment-response');
+    return header ? decodeReceipt(header, offer) : undefined;
+  };
+
+  /** `Payment-Receipt` of an MPP payment, completed with what the payer knows: itself, and the amount (a charge settles exactly that). */
+  const mppReceipt = (res: Response, offer: MppOffer): PaymentReceipt | undefined => {
+    const header = res.headers.get(MPP_RECEIPT_HEADER);
+    if (!header) return undefined;
+    try {
+      return { ...decodeMppReceipt(header, offer.network), payer: getAddress(account.address), amount: offer.amount };
+    } catch {
+      return undefined;
+    }
   };
 
   const on = (id: string | PaymentNetwork): NetworkWallet => {
@@ -772,7 +945,8 @@ export type {
   Permit2PermitParameters,
   Permit2AllowanceTransferFromParameters,
 } from '../permit2.js';
-export { getPaymentReceipt, decodePaymentReceipt, parseUptoSettlementAmount } from '../receipt.js';
+export { getPaymentReceipt, decodePaymentReceipt, decodeMppReceipt, parseUptoSettlementAmount } from '../receipt.js';
+export type { MppChallenge } from '../mpp.js';
 export type { PaymentReceipt } from '../receipt.js';
 export { RadiusPaymentError } from '../errors.js';
 export { radiusEnv } from '../env.js';

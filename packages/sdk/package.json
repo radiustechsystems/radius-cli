@@ -1,7 +1,7 @@
 {
   "name": "radius-sdk",
   "version": "0.4.0",
-  "description": "Accept and make Radius payments over x402 v2 \u2014 any web-standard runtime, Hono, or the upstream x402 framework adapters",
+  "description": "Accept and make Radius payments over x402 v2 — any web-standard runtime, Hono, or the upstream x402 framework adapters",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -39,6 +39,7 @@
     "test:imports": "pnpm run build && node --test scripts/imports.test.mjs"
   },
   "dependencies": {
+    "@noble/hashes": "^1.8.0",
     "@x402/core": "2.27.0",
     "@x402/evm": "2.27.0"
   },
@@ -63,6 +64,7 @@
     "@x402/express": "2.27.0",
     "express": "^5.2.1",
     "hono": "^4.13.7",
+    "mppx": "0.13.4",
     "typescript": "^5.9.0",
     "viem": "^2.48.11",
     "vitest": "^3.2.0",

@@ -1,9 +1,12 @@
 import { decodePaymentResponseHeader } from '@x402/core/http';
 import { explorerTxUrl, type PaymentNetwork } from './networks.js';
+import { MPP_RECEIPT_HEADER, parseMppReceipt } from './mpp.js';
 
-/** Decoded `PAYMENT-RESPONSE` header: what the facilitator reported after settlement. */
+/** Decoded `PAYMENT-RESPONSE` (x402) or `Payment-Receipt` (MPP) header: what was settled. */
 export interface PaymentReceipt {
   success: boolean;
+  /** Which protocol paid. */
+  protocol?: 'x402' | 'mpp';
   /** Settlement transaction hash (empty/undefined when settlement failed). */
   transaction?: string;
   /** CAIP-2 network the settlement happened on. */
@@ -45,6 +48,7 @@ export function decodePaymentReceipt(headerValue: string, network?: PaymentNetwo
   const transaction = typeof r.transaction === 'string' && r.transaction.length > 0 ? r.transaction : undefined;
   return {
     success: r.success === true,
+    protocol: 'x402',
     transaction,
     network: typeof r.network === 'string' ? r.network : '',
     payer: typeof r.payer === 'string' ? r.payer : undefined,
@@ -55,14 +59,31 @@ export function decodePaymentReceipt(headerValue: string, network?: PaymentNetwo
   };
 }
 
-/** Read the payment receipt from a Response (or Headers), if the server attached one. */
+/**
+ * Read the payment receipt from a Response (or Headers), if the server attached one: x402's
+ * `PAYMENT-RESPONSE`, else MPP's `Payment-Receipt` (which names no payer or network; `network`
+ * fills the latter).
+ */
 export function getPaymentReceipt(source: Response | Headers, network?: PaymentNetwork): PaymentReceipt | undefined {
   const headers = source instanceof Headers ? source : source.headers;
   const v = headers.get(PAYMENT_RESPONSE_HEADER) ?? headers.get('x-payment-response');
-  if (!v) return undefined;
   try {
-    return decodePaymentReceipt(v, network);
+    if (v) return decodePaymentReceipt(v, network);
+    const mpp = headers.get(MPP_RECEIPT_HEADER);
+    return mpp ? decodeMppReceipt(mpp, network) : undefined;
   } catch {
     return undefined;
   }
+}
+
+/** Decode a `Payment-Receipt` (MPP). It names the transaction only; `network` fills in the network and explorer link. */
+export function decodeMppReceipt(headerValue: string, network?: PaymentNetwork): PaymentReceipt {
+  const r = parseMppReceipt(headerValue);
+  return {
+    success: true,
+    protocol: 'mpp',
+    transaction: r.reference || undefined,
+    network: network?.network ?? '',
+    explorerUrl: r.reference && network ? explorerTxUrl(network, r.reference) : undefined,
+  };
 }
