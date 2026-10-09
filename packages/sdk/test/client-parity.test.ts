@@ -9,11 +9,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { maxUint256, recoverTypedDataAddress, toHex, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { createRadiusFetch, RadiusPaymentError, type InvalidChallengeDetails, type PaymentOffer, type PaymentReceipt, type PaymentRejectedDetails, type RadiusFetchOptions } from '../src/client/index.js';
-import { defineRadiusNetwork, PERMIT2_ADDRESS, X402_EXACT_PERMIT2_PROXY } from '../src/networks.js';
+import { PERMIT2_ADDRESS, X402_EXACT_PERMIT2_PROXY, resolveNetwork } from '../src/networks.js';
 
 const PK = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as Hex;
 const SIGNER = privateKeyToAccount(PK);
-const ASSET = '0x33ad9e4BD16B69B5BFdED37D8B5D9fF9aba014Fb' as Address;
+const ASSET = '0x036CbD53842c5426634e7929541eC2318f3dCF7e' as Address;
 const PAY_TO = '0x000000000000000000000000000000000000dEaD' as Address;
 const FACILITATOR = '0x00000000000000000000000000000000fac11107' as Address;
 const X402_UPTO_PERMIT2_PROXY = '0x4020A4f3b7b90ccA423B9fabCc0CE57C6C240002';
@@ -21,13 +21,8 @@ const CHAIN_ID = 84532;
 const NETWORK_ID = `eip155:${CHAIN_ID}`;
 const RESOURCE_URL = 'https://api.example.com/r';
 
-// The SDK is single-network; mirror the CLI tests' chain 84532 / USDC with a custom instance.
-const NETWORK = defineRadiusNetwork({
-  chainId: CHAIN_ID,
-  rpcUrl: 'http://127.0.0.1:1',
-  facilitatorUrl: 'http://127.0.0.1:1',
-  asset: { address: ASSET, symbol: 'USDC', decimals: 6, name: 'USDC', version: '2' },
-});
+// The CLI tests' chain 84532 / USDC is the Base Sepolia preset; the RPC goes nowhere (stubbed where needed).
+const NETWORK = resolveNetwork('base-sepolia', { rpcUrl: 'http://127.0.0.1:1' });
 
 // EIP-712 type sets exactly as the CLI defines them (Witness member order is load-bearing).
 const PERMIT2_UPTO_TYPES = {

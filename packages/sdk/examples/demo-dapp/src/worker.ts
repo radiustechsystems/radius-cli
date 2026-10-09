@@ -27,9 +27,11 @@ const app = new Hono<Env>();
 
 // Free: describes the seller so the page can render the endpoint list.
 app.get('/api/info', (c) => {
-  const network = resolveNetwork(c.env.RADIUS_NETWORK ?? 'testnet');
+  const name = c.env.RADIUS_NETWORK ?? 'testnet';
+  const network = resolveNetwork(name);
   return c.json({
-    network: network.name,
+    // The page's network picker uses the 'mainnet' / 'testnet' aliases.
+    network: name,
     caip2: network.network,
     payTo: c.env.PAY_TO,
     asset: network.asset,

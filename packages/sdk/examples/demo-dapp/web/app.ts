@@ -1,7 +1,7 @@
 // Buyer side of the demo. Everything payment-related goes through radius-sdk/client;
 // this file is only wiring between buttons, inputs and result boxes.
 import { createRadiusFetch, getPaymentReceipt, RadiusPaymentError, type PaymentOffer, type RadiusFetch } from 'radius-sdk/client';
-import { radiusMainnet, radiusTestnet, type RadiusNetwork } from 'radius-sdk';
+import { radiusMainnet, radiusTestnet, type PaymentNetwork } from 'radius-sdk';
 import { createWalletClient, custom, type WalletClient } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 
@@ -17,12 +17,12 @@ function loadPrefs(): Prefs { try { return JSON.parse(localStorage.getItem(PREFS
 function savePrefs(patch: Prefs) { localStorage.setItem(PREFS_STORAGE, JSON.stringify({ ...loadPrefs(), ...patch })); }
 
 // ---- state -------------------------------------------------------------------
-const networks: Record<string, RadiusNetwork> = { testnet: radiusTestnet, mainnet: radiusMainnet };
+const networks: Record<string, PaymentNetwork> = { testnet: radiusTestnet, mainnet: radiusMainnet };
 const netSel = $<HTMLSelectElement>('network');
 const modeSel = $<HTMLSelectElement>('signerMode');
 let metamask: WalletClient | undefined;
 
-function network(): RadiusNetwork { return networks[netSel.value]; }
+function network(): PaymentNetwork { return networks[netSel.value]; }
 function burnerKey(): `0x${string}` {
   let k = localStorage.getItem(KEY_STORAGE) as `0x${string}` | null;
   if (!k) { k = generatePrivateKey(); localStorage.setItem(KEY_STORAGE, k); log('generated a new burner key (stored in localStorage)'); }

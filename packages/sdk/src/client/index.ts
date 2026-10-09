@@ -8,7 +8,7 @@ import { getBalances, type AccountBalances } from '../balances.js';
 import { toTokenAtomic, type TokenAmount, type TxResult } from '../erc20.js';
 import { RadiusPaymentError } from '../errors.js';
 import { describeSupportedSchemes } from '../schemes.js';
-import { PERMIT2_ADDRESS, resolveNetwork, type Address, type NetworkInput, type NetworkOverrides, type RadiusNetwork } from '../networks.js';
+import { PERMIT2_ADDRESS, resolveNetwork, type Address, type NetworkInput, type NetworkOverrides, type PaymentNetwork } from '../networks.js';
 import { decodePaymentReceipt, parseUptoSettlementAmount, type PaymentReceipt } from '../receipt.js';
 import { getSettlement, type Settlement } from '../settlement.js';
 
@@ -125,7 +125,7 @@ export interface FaucetResult {
 export interface RadiusFetch {
   (input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   readonly address: Address;
-  readonly network: RadiusNetwork;
+  readonly network: PaymentNetwork;
   /** Atomic cap per request. */
   readonly maxPerRequest: bigint;
   /** Payment-asset (SBC) balance of the signer: a raw ERC-20 `balanceOf`, nothing aggregated. */

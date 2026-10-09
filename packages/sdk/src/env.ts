@@ -1,4 +1,4 @@
-import type { Address, NetworkInput } from './networks.js';
+import { NETWORK_NAMES, type Address, type NetworkInput, type NetworkName } from './networks.js';
 
 /**
  * Configuration read from environment-style variables, using the same names as
@@ -7,7 +7,7 @@ import type { Address, NetworkInput } from './networks.js';
  *
  * | Variable                     | Maps to                     |
  * | ---------------------------- | --------------------------- |
- * | RADIUS_NETWORK               | network ('mainnet' default) |
+ * | RADIUS_NETWORK               | network: a preset id ('mainnet' default) |
  * | RADIUS_RPC_URL               | rpcUrl                      |
  * | RADIUS_FACILITATOR_URL       | facilitatorUrl              |
  * | RADIUS_FACILITATOR_API_KEY   | facilitator.apiKey          |
@@ -30,10 +30,10 @@ export interface RadiusEnvConfig {
 
 export function radiusEnv(env: Record<string, string | undefined> = defaultEnv()): RadiusEnvConfig {
   const network = env.RADIUS_NETWORK ?? 'mainnet';
-  if (network !== 'mainnet' && network !== 'testnet') {
-    throw new Error(`RADIUS_NETWORK must be 'mainnet' or 'testnet' (got '${network}')`);
+  if (!NETWORK_NAMES.includes(network as NetworkName)) {
+    throw new Error(`RADIUS_NETWORK must be one of ${NETWORK_NAMES.join(', ')} (got '${network}')`);
   }
-  const out: RadiusEnvConfig = { network };
+  const out: RadiusEnvConfig = { network: network as NetworkName };
   if (env.RADIUS_RPC_URL) out.rpcUrl = env.RADIUS_RPC_URL;
   if (env.RADIUS_FACILITATOR_URL) out.facilitatorUrl = env.RADIUS_FACILITATOR_URL;
   if (env.RADIUS_FACILITATOR_API_KEY) out.facilitator = { apiKey: env.RADIUS_FACILITATOR_API_KEY };

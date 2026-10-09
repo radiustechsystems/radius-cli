@@ -12,7 +12,7 @@ import {
   type RoutesConfig,
 } from '@x402/core/server';
 import type { SettleResponse } from '@x402/core/types';
-import { resolveNetwork, explorerTxUrl, type Address, type NetworkInput, type NetworkOverrides, type RadiusNetwork } from '../networks.js';
+import { resolveNetwork, explorerTxUrl, type Address, type NetworkInput, type NetworkOverrides, type PaymentNetwork } from '../networks.js';
 import { resolvePrice, type Price } from '../amounts.js';
 import type { PaymentReceipt } from '../receipt.js';
 import { RadiusFacilitatorClient, withUnknownOutcomes, type FacilitatorOptions } from './facilitator.js';
@@ -112,7 +112,7 @@ function isFacilitatorClient(v: unknown): v is FacilitatorClient {
 }
 
 /** Turn a facilitator settle result into the receipt handed to application code. */
-export function toReceipt(r: SettleResponse, network: RadiusNetwork, requirements: { amount: string }): PaymentReceipt {
+export function toReceipt(r: SettleResponse, network: PaymentNetwork, requirements: { amount: string }): PaymentReceipt {
   const transaction = r.transaction && r.transaction.length > 0 ? r.transaction : undefined;
   return {
     success: r.success,
@@ -138,7 +138,7 @@ export function toReceipt(r: SettleResponse, network: RadiusNetwork, requirement
  *   Deno, Node, route handlers). `radius-sdk/hono` wraps it for Hono.
  */
 export class RadiusServer {
-  readonly network: RadiusNetwork;
+  readonly network: PaymentNetwork;
   /** The facilitator, wrapped so calls that fail without its own answer surface as 502 (`withUnknownOutcomes`). */
   readonly facilitator: FacilitatorClient;
   readonly scheme: RadiusExactScheme;
