@@ -1,11 +1,15 @@
 /**
- * Paying on several networks: Radius plus Base Sepolia. Nothing touches a chain: sellers are mock fetches.
+ * Paying and charging on several networks: Radius plus Base Sepolia. Nothing touches a chain or a
+ * real facilitator: sellers are mock fetches, facilitator HTTP is stubbed on the global fetch.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { recoverTypedDataAddress, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { decodePaymentRequiredHeader, encodePaymentSignatureHeader } from '@x402/core/http';
 import { createRadiusFetch, RadiusPaymentError, type PaymentOffer, type RadiusFetchOptions } from '../src/client/index.js';
 import { baseMainnet, baseSepolia, radiusTestnet, SBC, USDC_BASE_SEPOLIA } from '../src/networks.js';
+import { getPaymentReceipt } from '../src/receipt.js';
+import { radiusPayments, RadiusServer } from '../src/server/index.js';
 
 const PK = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as Hex;
 const SIGNER = privateKeyToAccount(PK);
@@ -161,6 +165,9 @@ describe('createRadiusFetch on several networks', () => {
     expect(payFetch.on('base-sepolia').network).toBe(baseSepolia);
     expect(payFetch.on('eip155:84532').network).toBe(baseSepolia);
     expect(payFetch.on(radiusTestnet).network).toBe(radiusTestnet);
+    expect(payFetch.on('testnet').network).toBe(radiusTestnet);
+    expect(payFetch.on('radius-testnet').network).toBe(radiusTestnet);
+    expect(createRadiusFetch({ signer: PK, maxPerRequest: '$0.01' }).on('mainnet').network.name).toBe('radius');
     expect(() => payFetch.on('base')).toThrow(/base is not one of this client's networks/);
     expect(() => payFetch.on(baseMainnet)).toThrow(/not one of this client's networks/);
   });
@@ -178,10 +185,136 @@ describe('createRadiusFetch on several networks', () => {
     expect(() => createRadiusFetch({ ...base, networks: ['testnet', 'radius-testnet'] })).toThrow(/listed twice/);
   });
 
+  it('refuses an injected wallet for networks other than the one it is connected to', async () => {
+    const { createWalletClient, http } = await import('viem');
+    const injected = createWalletClient({ account: SIGNER.address, chain: radiusTestnet.chain, transport: http('http://127.0.0.1:1') });
+    expect(() => createRadiusFetch({ networks: ['testnet', 'base-sepolia'], signer: injected, maxPerRequest: '$0.01' })).toThrow(/injected wallet signs only for the chain it is connected to \(72344\); base-sepolia/);
+    expect(createRadiusFetch({ network: 'testnet', signer: injected, maxPerRequest: '$0.01' }).network).toBe(radiusTestnet);
+  });
+
   it('sends transactions on a WalletClient signer only on the chain it is connected to', async () => {
     const { createWalletClient, http } = await import('viem');
     const wc = createWalletClient({ account: SIGNER, chain: radiusTestnet.chain, transport: http('http://127.0.0.1:1') });
     const payFetch = createRadiusFetch({ networks: ['testnet', 'base-sepolia'], signer: wc, maxPerRequest: '$0.01' });
     await expect(payFetch.on('base-sepolia').send(PAY_TO, '0.01')).rejects.toThrow(/connected to chain 72344, not base-sepolia/);
+  });
+});
+
+// -- seller -------------------------------------------------------------------------------------
+
+const X402_ORG = 'https://x402.org/facilitator';
+
+/** Stub the Base Sepolia facilitator (x402.org): `/supported` lists exact without a transfer method, like the real one. */
+function mockBaseFacilitator(extensions: string[] = []) {
+  const calls: string[] = [];
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = String(input instanceof Request ? input.url : input);
+    calls.push(url);
+    if (!url.startsWith(X402_ORG)) throw new Error(`unexpected fetch ${url}`);
+    if (url.endsWith('/supported')) return Response.json({ kinds: [{ x402Version: 2, scheme: 'exact', network: baseSepolia.network }], extensions, signers: {} });
+    if (url.endsWith('/verify')) return Response.json({ isValid: true, payer: SIGNER.address });
+    if (url.endsWith('/settle')) return Response.json({ success: true, transaction: TX, network: baseSepolia.network, payer: SIGNER.address });
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  return calls;
+}
+
+function twoNetworkSeller(onSettled?: (r: { network: string; explorerUrl?: string }) => void) {
+  return radiusPayments({
+    networks: [{ network: 'testnet', facilitator: { live: false } }, 'base-sepolia'],
+    payTo: PAY_TO,
+    routes: { 'GET /api/lookup': '$0.001' },
+    onSettled,
+  });
+}
+
+describe('radiusPayments on several networks', () => {
+  it('offers one payment option per network, in order, each in its own asset and transfer method', async () => {
+    mockBaseFacilitator();
+    const res = await twoNetworkSeller()(new Request('http://seller.test/api/lookup'), () => Response.json({ leaked: true }));
+    expect(res.status).toBe(402);
+    const pr = decodePaymentRequiredHeader(res.headers.get('payment-required')!);
+    expect(pr.accepts).toHaveLength(2);
+    expect(pr.accepts[0]).toMatchObject({ network: 'eip155:72344', asset: SBC.address, amount: '1000', payTo: PAY_TO, extra: { assetTransferMethod: 'permit2', name: 'Stable Coin', version: '1' } });
+    expect(pr.accepts[1]).toMatchObject({ network: 'eip155:84532', asset: USDC_BASE_SEPOLIA.address, amount: '1000', payTo: PAY_TO, extra: { assetTransferMethod: 'eip3009', name: 'USDC', version: '2' } });
+    // Radius's facilitator sponsors Permit2 approvals; Base Sepolia's does not, and the declaration stays.
+    expect(pr.extensions).toHaveProperty('eip2612GasSponsoring');
+  });
+
+  it("settles a Base payment through that network's facilitator and reports it on that network", async () => {
+    const calls = mockBaseFacilitator();
+    const settled: { network: string; explorerUrl?: string }[] = [];
+    const app = twoNetworkSeller((r) => settled.push(r)).wrap((_req, payment) => Response.json({ payment }));
+    const pr = decodePaymentRequiredHeader((await app(new Request('http://seller.test/api/lookup'))).headers.get('payment-required')!);
+    const accepted = pr.accepts[1];
+    const { paymentFlow: _pf, ...extra } = accepted.extra as Record<string, unknown>;
+    const header = encodePaymentSignatureHeader({ x402Version: 2, resource: pr.resource, accepted: { ...accepted, extra }, payload: { signature: '0xsig', authorization: {} } });
+    const res = await app(new Request('http://seller.test/api/lookup', { headers: { 'PAYMENT-SIGNATURE': header } }));
+    expect(res.status).toBe(200);
+    expect(calls.filter((u) => u.endsWith('/settle'))).toEqual([`${X402_ORG}/settle`]);
+    expect(getPaymentReceipt(res, baseSepolia)).toMatchObject({ success: true, network: 'eip155:84532' });
+    expect((await res.json()).payment).toMatchObject({ network: 'eip155:84532', explorerUrl: `https://sepolia.basescan.org/tx/${TX}` });
+    expect(settled).toEqual([expect.objectContaining({ network: 'eip155:84532', explorerUrl: `https://sepolia.basescan.org/tx/${TX}` })]);
+  });
+
+  it('answers 502 and retries when a facilitator lists nothing for its network, instead of caching a partial setup', async () => {
+    let down = true;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.endsWith('/supported')) return down ? new Response('bad gateway', { status: 502 }) : Response.json({ kinds: [{ x402Version: 2, scheme: 'exact', network: baseSepolia.network }], extensions: [], signers: {} });
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const seller = twoNetworkSeller();
+    const first = await seller(new Request('http://seller.test/api/lookup'), () => Response.json({}));
+    expect(first.status).toBe(502);
+    expect(await first.json()).toMatchObject({ error: 'facilitator_error', message: expect.stringMatching(/base-sepolia/) });
+    down = false;
+    const second = await seller(new Request('http://seller.test/api/lookup'), () => Response.json({}));
+    expect(second.status).toBe(402);
+    expect(decodePaymentRequiredHeader(second.headers.get('payment-required')!).accepts).toHaveLength(2);
+  });
+
+  it("routes each network to its own facilitator even when another one lists it too", async () => {
+    // x402.org (configured for Base Sepolia, listed first) also claims Radius testnet.
+    const calls: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input instanceof Request ? input.url : input);
+      calls.push(url);
+      if (url === `${X402_ORG}/supported`) {
+        return Response.json({ kinds: [baseSepolia.network, radiusTestnet.network].map((network) => ({ x402Version: 2, scheme: 'exact', network, extra: { assetTransferMethod: 'eip3009' } })), extensions: [], signers: {} });
+      }
+      if (url.endsWith('/verify')) return Response.json({ isValid: true, payer: SIGNER.address });
+      if (url.endsWith('/settle')) return Response.json({ success: true, transaction: TX, network: radiusTestnet.network, payer: SIGNER.address });
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    const app = radiusPayments({ networks: ['base-sepolia', { network: 'testnet', facilitator: { live: false } }], payTo: PAY_TO, routes: { 'GET /api/lookup': '$0.001' } }).wrap(() => Response.json({}));
+    const pr = decodePaymentRequiredHeader((await app(new Request('http://seller.test/api/lookup'))).headers.get('payment-required')!);
+    const accepted = pr.accepts.find((a) => a.network === radiusTestnet.network)!;
+    const { paymentFlow: _pf, ...extra } = accepted.extra as Record<string, unknown>;
+    const header = encodePaymentSignatureHeader({ x402Version: 2, resource: pr.resource, accepted: { ...accepted, extra }, payload: { signature: '0xsig', authorization: {} } });
+    expect((await app(new Request('http://seller.test/api/lookup', { headers: { 'PAYMENT-SIGNATURE': header } }))).status).toBe(200);
+    expect(calls.filter((u) => u.endsWith('/settle'))).toEqual([`${radiusTestnet.facilitatorUrl}/settle`]);
+  });
+
+  it('requires a facilitator for Base mainnet, which has no default', () => {
+    expect(() => new RadiusServer({ networks: ['testnet', 'base'] })).toThrow(/no default facilitator for base/);
+    expect(new RadiusServer({ networks: ['testnet', { network: 'base', facilitator: { url: 'https://facilitator.example' } }] }).networks.map((n) => n.name)).toEqual(['radius-testnet', 'base']);
+  });
+
+  it('keeps the built-in /supported answer to Radius networks', () => {
+    expect(() => new RadiusServer({ network: 'base-sepolia', facilitator: { live: false } })).toThrow(/only available on Radius networks/);
+  });
+
+  it('rejects a price that names one asset for several networks', () => {
+    const server = new RadiusServer({ networks: [{ network: 'testnet', facilitator: { live: false } }, 'base-sepolia'] });
+    expect(() => server.routes({ payTo: PAY_TO, routes: { 'GET /x': { price: { amount: '1', asset: SBC.address } } } })).toThrow(/cannot apply to several networks/);
+    expect(server.routes({ payTo: PAY_TO, routes: { 'GET /x': { price: { amount: '1' } } } })['GET /x'].accepts).toHaveLength(2);
+  });
+
+  it('rejects ambiguous or duplicate network configuration', () => {
+    expect(() => new RadiusServer({ network: 'testnet', networks: ['base-sepolia'] })).toThrow(/network or networks, not both/);
+    expect(() => new RadiusServer({ networks: [] })).toThrow(/networks is empty/);
+    expect(() => new RadiusServer({ networks: ['base-sepolia', 'base-sepolia'] })).toThrow(/listed twice/);
   });
 });

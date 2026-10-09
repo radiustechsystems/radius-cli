@@ -9,12 +9,14 @@ export type GasSponsoringMode = 'auto' | boolean;
 export const EIP2612_GAS_SPONSORING = 'eip2612GasSponsoring';
 
 /**
- * Server-side `exact` scheme for Radius: prices in USD/SBC, Permit2 or EIP-3009 transfer method,
- * no dependency on @x402/evm (the facilitator does all the cryptography).
+ * Server-side `exact` scheme for one network: prices in USD or its asset's atomic units, Permit2
+ * or EIP-3009 transfer method, no dependency on @x402/evm (the facilitator does all the
+ * cryptography). The transfer method is whichever the facilitator lists first for the network,
+ * else EIP-3009 (x402's default, and what Base facilitators settle for USDC).
  */
 export class RadiusExactScheme implements SchemeNetworkServer {
   readonly scheme = 'exact';
-  readonly defaultAssetTransferMethod = 'permit2';
+  readonly defaultAssetTransferMethod = 'eip3009';
   readonly paymentFlows: SchemeNetworkServer['paymentFlows'];
   /**
    * `paymentFlow` is a server-side hint (when to settle relative to the handler).
@@ -24,14 +26,19 @@ export class RadiusExactScheme implements SchemeNetworkServer {
   readonly dynamicExtraFields = ['paymentFlow'];
 
   private facilitatorExtensions: string[] | undefined;
+  /**
+   * Schemes of every network the server offers (this one included). The gas-sponsoring
+   * declaration is shared by all offers in a 402, so it stays while any of them declares it.
+   */
+  peers: readonly RadiusExactScheme[] = [this];
 
   constructor(
     private readonly network: PaymentNetwork,
     settle: SettleMode = 'before',
     private readonly gasSponsoring: GasSponsoringMode = 'auto',
   ) {
-    // Both transfer methods the Radius facilitator may list; it names the one it
-    // prefers first and that is what the 402 advertises.
+    // Both transfer methods a facilitator may list; the one it names first for the network
+    // is what the 402 advertises.
     const flows: SchemeNetworkServer['paymentFlows'][string] = {
       supported: ['authorization', 'upfront'],
       default: settle === 'before' ? 'upfront' : 'authorization',
@@ -54,7 +61,7 @@ export class RadiusExactScheme implements SchemeNetworkServer {
     return {
       ...paymentRequirements,
       extra: {
-        assetTransferMethod: kindExtra.assetTransferMethod ?? 'permit2',
+        assetTransferMethod: kindExtra.assetTransferMethod ?? 'eip3009',
         name: kindExtra.name ?? this.network.asset.name,
         version: kindExtra.version ?? this.network.asset.version,
         ...paymentRequirements.extra,
@@ -75,7 +82,7 @@ export class RadiusExactScheme implements SchemeNetworkServer {
    */
   enrichPaymentRequiredResponse = async (ctx: SchemePaymentRequiredContext): Promise<void> => {
     const ext = ctx.paymentRequiredResponse.extensions;
-    if (ext && EIP2612_GAS_SPONSORING in ext && !this.declaresGasSponsoring()) {
+    if (ext && EIP2612_GAS_SPONSORING in ext && !this.peers.some((p) => p.declaresGasSponsoring())) {
       delete ext[EIP2612_GAS_SPONSORING];
       if (Object.keys(ext).length === 0) delete ctx.paymentRequiredResponse.extensions;
     }
