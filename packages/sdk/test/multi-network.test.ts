@@ -235,7 +235,7 @@ describe('radiusPayments on several networks', () => {
     expect(res.status).toBe(402);
     const pr = decodePaymentRequiredHeader(res.headers.get('payment-required')!);
     expect(pr.accepts).toHaveLength(2);
-    expect(pr.accepts[0]).toMatchObject({ network: 'eip155:72344', asset: SBC.address, amount: '1000', payTo: PAY_TO, extra: { assetTransferMethod: 'permit2', name: 'Stable Coin', version: '1' } });
+    expect(pr.accepts[0]).toMatchObject({ network: 'eip155:72344', asset: SBC.address, amount: '1000', payTo: PAY_TO, extra: { assetTransferMethod: 'eip3009', name: 'Stable Coin', version: '1' } });
     expect(pr.accepts[1]).toMatchObject({ network: 'eip155:84532', asset: USDC_BASE_SEPOLIA.address, amount: '1000', payTo: PAY_TO, extra: { assetTransferMethod: 'eip3009', name: 'USDC', version: '2' } });
     // Radius's facilitator sponsors Permit2 approvals; Base Sepolia's does not, and the declaration stays.
     expect(pr.extensions).toHaveProperty('eip2612GasSponsoring');

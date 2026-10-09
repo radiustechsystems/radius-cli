@@ -17,22 +17,19 @@ export interface FacilitatorOptions {
   timeoutMs?: number;
 }
 
-/** The `/supported` answer the Radius facilitators return for a Radius network (exact / Permit2 / SBC). */
+/**
+ * The `/supported` answer the Radius facilitators return for a Radius network: `exact` in SBC by
+ * EIP-3009 (listed first, so offers use it) or Permit2, and sponsored EIP-2612 approvals.
+ */
 export function staticSupported(network: PaymentNetwork): SupportedResponse {
   if (!network.radius) throw new Error(`staticSupported: ${network.name} is not a Radius network; its facilitator's /supported must be fetched`);
   return {
-    kinds: [
-      {
-        x402Version: 2,
-        scheme: 'exact',
-        network: network.network,
-        extra: {
-          assetTransferMethod: 'permit2',
-          name: network.asset.name,
-          version: network.asset.version,
-        },
-      },
-    ],
+    kinds: (['eip3009', 'permit2'] as const).map((assetTransferMethod) => ({
+      x402Version: 2,
+      scheme: 'exact',
+      network: network.network,
+      extra: { assetTransferMethod, name: network.asset.name, version: network.asset.version },
+    })),
     extensions: ['eip2612GasSponsoring'],
     signers: {},
   };

@@ -22,7 +22,10 @@
     "onlyBuiltDependencies": [
       "esbuild",
       "workerd"
-    ]
+    ],
+    "overrides": {
+      "mppx>viem": "2.57.1"
+    }
   },
   "devDependencies": {
     "@changesets/cli": "^3.0.3"

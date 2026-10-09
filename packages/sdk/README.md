@@ -1,6 +1,7 @@
 # radius-sdk
 
-Accept and make [Radius](https://radiustech.xyz) payments over standard [x402 v2](https://x402.org).
+Accept and make [Radius](https://radiustech.xyz) payments over standard [x402 v2](https://x402.org),
+and optionally [MPP](https://mpp.dev) (see [Protocols](#protocols-x402-and-mpp)).
 Sellers run on any stack that speaks web-standard `Request`/`Response` (Cloudflare Workers, Bun,
 Deno, Node, Next.js and SvelteKit route handlers), on Hono, or on Express / Next.js through the
 upstream x402 adapters. Radius mainnet and SBC are the defaults; Base (USDC) and any other EVM
@@ -155,6 +156,9 @@ Any x402 v2 client can pay it: verified with `radius-cli wallet pay` (which uses
 against `examples/worker-plain` under `wrangler dev`, `examples/express-seller` on Node, and the
 Hono `examples/worker-seller`, all on testnet.
 
+Add `mpp: { secretKey }` and the same routes also accept MPP payments; see
+[Protocols](#protocols-x402-and-mpp).
+
 ## Make payments (buyer / agent)
 
 ```ts
@@ -171,6 +175,7 @@ const res = await payFetch('https://seller.example/api/lookup?ip=1.2.3.4');
 const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transaction, payer, explorerUrl, … }
 ```
 
+- Pays x402 and [MPP](#protocols-x402-and-mpp) challenges, x402 first when a server offers both.
 - Pays only on the configured network(s), each in its asset; anything else throws a
   `RadiusPaymentError` with a `code` (`network_mismatch`, `asset_mismatch`, `no_compatible_offer`,
   `price_above_limit`, `declined`, `payment_rejected`, …) before anything is signed. Of the
@@ -439,17 +444,59 @@ faster cold start, but stale if the facilitator changes), or `facilitator: myCli
 hosted facilitator). With `networks`, top-level `facilitator` and overrides apply to the first
 network; give the others theirs in `{ network, facilitator }`.
 
+## Protocols: x402 and MPP
+
+Besides x402, the SDK speaks [MPP](https://mpp.dev) (the Machine Payments Protocol: the HTTP
+`Payment` authentication scheme, [draft-httpauth-payment](https://paymentauth.org)) for its `evm`
+charge method. Both end in the same thing, an EIP-3009 `transferWithAuthorization` of the network's
+stablecoin, settled by the same x402 facilitator; only the envelope differs:
+
+| | x402 | MPP |
+| --- | --- | --- |
+| 402 | `PAYMENT-REQUIRED` (offers in `accepts`) | `WWW-Authenticate: Payment …` (one challenge per network) |
+| Paid retry | `PAYMENT-SIGNATURE` | `Authorization: Payment …` |
+| Receipt | `PAYMENT-RESPONSE` | `Payment-Receipt` |
+| Payment methods | `exact` (EIP-3009 or Permit2), `upto` | `evm` charge (EIP-3009) |
+
+**Buyers** pay either. `protocols` (default `['x402', 'mpp']`) is the preference order when a 402
+offers both; the protocol picked first, then networks in your order. `offer.protocol` says which
+one an offer came from (an MPP offer carries its `challenge`), and receipts carry `protocol` too.
+The credential goes in `Authorization`, so a request that already sends its own `Authorization`
+header is not paid over MPP. MPP payments need no approval and no gas.
+
+**Sellers** opt in per server:
+
+```ts
+const pay = radiusPayments({
+  networks: ['mainnet', { network: 'base', facilitator: { url: 'https://your-base-facilitator.example' } }],
+  payTo: '0xYourWallet',
+  routes: { 'GET /api/lookup': '$0.001' },
+  mpp: { secretKey: env.MPP_SECRET_KEY },   // ≥ 32 random characters: `openssl rand -base64 32`
+});
+```
+
+Every 402 then also carries an MPP challenge per network, mirroring the x402 offers (same price,
+asset, recipient and expiry). A credential is checked without stored state, its challenge id
+being an HMAC of the challenge's parameters under `secretKey`, so every instance serving the same
+routes needs the same key. The check covers the realm (`mpp.realm`, default the request's host),
+expiry, the route's current price, and the authorization's nonce, which is bound to the challenge;
+the facilitator then verifies and settles it as an x402 `exact` EIP-3009 payment, before or after
+the handler as `settle` says. The handler's `payment` and `onSettled` receive the receipt with
+`protocol: 'mpp'`, and the response carries `Payment-Receipt`. MPP is served by
+`radiusPayments()` (web-standard and Hono); routes mounted through the upstream x402 adapters only
+see x402. Interop is tested against `mppx`, the reference implementation, in both directions.
+
 ## Layout
 
 | Path | What |
 | --- | --- |
-| `src/` | `networks`, `balances`, `erc20`, `permit2`, `amounts`, `receipt`, `settlement`, `schemes`, `env`, `errors`; `server/` (seller core: web-standard handler, x402 resource server, facilitator, scheme); `hono/` (Hono wrapper); `client/` (buyer) |
+| `src/` | `networks`, `balances`, `erc20`, `permit2`, `amounts`, `receipt`, `settlement`, `schemes`, `env`, `errors`, `mpp` (MPP wire format); `server/` (seller core: web-standard handler, x402 resource server, facilitator, scheme, MPP payments); `hono/` (Hono wrapper); `client/` (buyer) |
 | `examples/worker-plain` | Worker with no framework, the web-standard handler: free `/`, paid `/api/lookup` and `/api/query` (`pnpm --filter radius-worker-plain dev`, port 8788) |
 | `examples/worker-seller` | Same API on Hono (`pnpm --filter radius-worker-seller dev`) |
 | `examples/express-seller` | Same API on Express through `@x402/express` (`pnpm --filter radius-express-seller start`, port 8789) |
 | `examples/astro-seller` | Astro API route: validate the article before charging, then deliver it paid (`pnpm --filter radius-astro-seller dev`, port 8790) |
 | `examples/agent-buyer` | `buy.mjs` (pay a URL), `fresh-wallet.mjs` (gasless proof from a new wallet), `permit2-pull.mjs` (sign a Permit2 transfer off-chain, pull it from another account) |
 | `examples/demo-dapp` | Test-dapp style page exercising both sides in the browser (burner wallet or MetaMask) |
-| `test/` | unit tests (facilitator and RPC mocked; `client-parity.test.ts` pins the wire format against radius-cli's; `balances.test.ts` runs the native-balance init code in a real EVM; `erc20.semantics.test.ts` runs the ERC-20 actions against `evmNode.ts`, a JSON-RPC node backed by @ethereumjs/evm executing the forge-compiled `fixtures/TestToken` (rebuild with `fixtures/build.sh` after editing the .sol; the artifact is committed because CI has no forge)); `test/e2e` real settlement, balance reconciliation and ERC-20 round trips on testnet or mainnet (`RADIUS_E2E=1 RADIUS_PRIVATE_KEY=… [RADIUS_NETWORK=mainnet] pnpm test:e2e`) |
+| `test/` | unit tests (facilitator and RPC mocked; `client-parity.test.ts` pins the wire format against radius-cli's; `balances.test.ts` runs the native-balance init code in a real EVM; `erc20.semantics.test.ts` runs the ERC-20 actions against `evmNode.ts`, a JSON-RPC node backed by @ethereumjs/evm executing the forge-compiled `fixtures/TestToken` (rebuild with `fixtures/build.sh` after editing the .sol; the artifact is committed because CI has no forge); `mpp*.test.ts` check MPP against `mppx`, the reference implementation, in both directions); `test/e2e` real settlement, balance reconciliation and ERC-20 round trips on testnet or mainnet (`RADIUS_E2E=1 RADIUS_PRIVATE_KEY=… [RADIUS_NETWORK=mainnet] pnpm test:e2e`) |
 
-Built on `@x402/core` (server and client), `@x402/evm` (client signing only) and viem.
+Built on `@x402/core` (server and client), `@x402/evm` (client signing only), viem, and `@noble/hashes` (MPP's keccak-256 on the viem-free server).

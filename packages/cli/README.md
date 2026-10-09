@@ -57,9 +57,9 @@ radius-cli wallet send 0xToken "transfer(address,uint256)" 0xTo 100   # arbitrar
 
 `--private-key 0xHEX` overrides the keystore on any command.
 
-## x402 HTTP payments (`wallet pay`)
+## HTTP payments: x402 and MPP (`wallet pay`)
 
-Make an HTTP request and, if the server responds with `402 Payment Required` and an [x402](https://x402.org) challenge, pay it from the local wallet and retry. The protocol side is handled by [`radius-sdk`](../sdk) (`createRadiusFetch`), the same code applications and agents use; the CLI adds the wallet, prompts and output.
+Make an HTTP request and, if the server responds with `402 Payment Required` and an x402 or MPP challenge, pay it from the local wallet and retry. The protocol side is handled by [`radius-sdk`](../sdk) (`createRadiusFetch`), the same code applications and agents use; the CLI adds the wallet, prompts and output.
 
 ```bash
 radius-cli wallet pay get https://example.com/protected
@@ -67,6 +67,7 @@ radius-cli wallet pay post https://api.example.com/x -d '{"a":1}' -H 'Authorizat
 radius-cli wallet pay get https://example.com/r --threshold 0.05          # auto-pay up to 0.05 of the asset
 radius-cli wallet pay get https://example.com/r -y                        # auto-pay any amount
 radius-cli wallet pay get https://example.com/r --networks radius,base    # also pay in USDC on Base
+radius-cli wallet pay get https://example.com/r --protocol mpp            # pay over MPP only
 radius-cli wallet pay get https://example.com/r --json                    # envelope with status/headers/body/payment
 ```
 
@@ -76,7 +77,7 @@ Verbs: `get`, `post`, `put`, `patch`, `delete`, `head`, `options`.
 
 `--threshold <decimal>` is in the asset's display units (e.g. `0.05` means 0.05 SBC or 0.05 USDC, which is $0.05 since both are USD-pegged). When the offered fee is at or below the threshold, the request pays without prompting — designed for AI agents and other non-interactive use. For the `upto` scheme the threshold is compared against the authorized maximum. Above the threshold the CLI prompts on a TTY and refuses (exit 2) without one; with `--yes` as well it refuses rather than pays, so the threshold stays a hard cap and `--yes` only means "don't ask". With no threshold, `--yes` pays any amount, and with neither flag a non-TTY run refuses (exit 2) rather than hang.
 
-Payments are made on Radius in SBC by default. `--networks radius,base` (or `RADIUS_PAY_NETWORKS`, or `payNetworks` in the config file) adds Base, paying in USDC; the list is a preference order, and `--network testnet` pairs Radius testnet with Base Sepolia. The same key signs on every network. Offers on other networks or in other assets are refused before anything is signed, and the keystore is only unlocked once an offer has been accepted. `--sbc` / `RADIUS_SBC_ADDRESS` relocate the SBC contract (for another deployment of the same token); the CLI still assumes SBC's symbol, 6 decimals and EIP-712 domain behind that address. When a server lists several compatible offers, the first network in your list wins, then the first offer on it in the server's order. Both x402 v1 and v2 are supported, selected automatically from the server's advertised `x402Version`:
+Payments are made on Radius in SBC by default. `--networks radius,base` (or `RADIUS_PAY_NETWORKS`, or `payNetworks` in the config file) adds Base, paying in USDC; the list is a preference order, and `--network testnet` pairs Radius testnet with Base Sepolia. The same key signs on every network. Offers on other networks or in other assets are refused before anything is signed, and the keystore is only unlocked once an offer has been accepted. `--sbc` / `RADIUS_SBC_ADDRESS` relocate the SBC contract (for another deployment of the same token); the CLI still assumes SBC's symbol, 6 decimals and EIP-712 domain behind that address. When a server lists several compatible offers, the first network in your list wins, then the first offer on it in the server's order. Two protocols are spoken: [x402](https://x402.org) and [MPP](https://mpp.dev) (`WWW-Authenticate: Payment` challenges, `evm` charges paid by an EIP-3009 authorization, no approval or gas). With `--protocol auto` (the default) a server offering both is paid over x402; `--protocol x402` or `--protocol mpp` restricts it to one. The JSON `payment` object says which (`protocol`). A request that sets its own `Authorization` header is not paid over MPP, whose credential goes in that header. Both x402 v1 and v2 are supported, selected automatically from the server's advertised `x402Version`:
 
 - **`exact`** — a fixed price. v1 and v2 support EIP-3009 `transferWithAuthorization`; v2 also supports any ERC-20 advertised with `assetTransferMethod: "permit2"`, signing a Uniswap Permit2 `permitWitnessTransferFrom` authorization through `x402ExactPermit2Proxy`.
 - **`upto`** (v2, Uniswap Permit2 `permitWitnessTransferFrom` via the `x402UptoPermit2Proxy`) — the client signs a Permit2 authorization up to a maximum and the facilitator settles the actual usage (which may be less, or zero).

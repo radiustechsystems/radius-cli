@@ -18,10 +18,12 @@ import type { PaymentReceipt } from '../receipt.js';
 import { RadiusFacilitatorClient, withUnknownOutcomes, type FacilitatorOptions } from './facilitator.js';
 import { RadiusExactScheme, type GasSponsoringMode, type SettleMode } from './scheme.js';
 import { requestContext, requestOf } from './adapter.js';
+import { MPP_RECEIPT_HEADER, MppPayments, type MppServerOptions } from './mpp.js';
 
 export { RadiusFacilitatorClient, staticSupported, withUnknownOutcomes, type FacilitatorOptions } from './facilitator.js';
 export { RadiusExactScheme, type GasSponsoringMode, type SettleMode } from './scheme.js';
 export { RequestAdapter, requestContext, requestOf } from './adapter.js';
+export { MppPayments, type MppServerOptions } from './mpp.js';
 export type { HTTPRequestContext, RoutesConfig, FacilitatorClient } from '@x402/core/server';
 
 /** Recipient address, or a function of the request. */
@@ -82,6 +84,14 @@ export interface RadiusServerOptions extends NetworkOverrides {
    * 'after': verify, run the handler, settle if it succeeded (x402 default flow).
    */
   settle?: SettleMode;
+  /**
+   * Also accept MPP (the HTTP `Payment` auth scheme, draft-httpauth-payment) for its `evm` charge
+   * method: every 402 then carries a `WWW-Authenticate: Payment` challenge per network next to the
+   * x402 offers, and a payer's EIP-3009 authorization is settled through the same facilitator.
+   * Served by `radiusPayments()` (web-standard and Hono); the upstream framework adapters only
+   * see x402.
+   */
+  mpp?: MppServerOptions;
   /**
    * Whether 402s declare `eip2612GasSponsoring` (lets first-time wallets pay without an
    * approval transaction). 'auto' (default): only when the facilitator supports it.
@@ -159,6 +169,7 @@ export function toReceipt(r: SettleResponse, network: PaymentNetwork, requiremen
   const transaction = r.transaction && r.transaction.length > 0 ? r.transaction : undefined;
   return {
     success: r.success,
+    protocol: 'x402',
     transaction,
     network: r.network,
     payer: r.payer,
@@ -194,6 +205,12 @@ export class RadiusServer {
   readonly server: x402ResourceServer;
   /** Networks whose facilitator's last `/supported` call failed, with the error. */
   private readonly supportedFailures: Map<PaymentNetwork, string>;
+  /** MPP alongside x402, when `mpp` is configured. */
+  readonly mpp?: MppPayments;
+  /** Settle 'before' or 'after' the handler. */
+  readonly settleMode: SettleMode;
+  private readonly facilitators: ReadonlyMap<PaymentNetwork, FacilitatorClient>;
+  private readonly settledHooks: NonNullable<RadiusServerOptions['onSettled']>[] = [];
 
   constructor(options: RadiusServerOptions = {}) {
     if (options.network !== undefined && options.networks !== undefined) throw new Error('radius-sdk: pass network or networks, not both');
@@ -217,6 +234,9 @@ export class RadiusServer {
     this.network = first.network;
     this.facilitator = first.facilitator;
     this.scheme = first.scheme;
+    this.facilitators = new Map(configured.map((c) => [c.network, c.facilitator]));
+    this.settleMode = options.settle ?? 'before';
+    if (options.mpp) this.mpp = new MppPayments(this, options.mpp);
     this.server = new x402ResourceServer(configured.map((c) => c.facilitator));
     for (const { network, scheme } of configured) this.server.register(network.network, scheme);
     if (options.onSettled) this.onSettled(options.onSettled);
@@ -235,12 +255,34 @@ export class RadiusServer {
 
   /** Register a settlement listener (see `RadiusServerOptions.onSettled`). */
   onSettled(hook: NonNullable<RadiusServerOptions['onSettled']>): this {
-    this.server.onAfterSettle(async (ctx) => {
-      if (!ctx.result.success) return;
-      const transport = ctx.transportContext as { request?: HTTPRequestContext } | undefined;
-      await hook(toReceipt(ctx.result as SettleResponse, this.networkFor(ctx.requirements.network), ctx.requirements), transport?.request);
-    });
+    if (this.settledHooks.length === 0) {
+      this.server.onAfterSettle(async (ctx) => {
+        if (!ctx.result.success) return;
+        const transport = ctx.transportContext as { request?: HTTPRequestContext } | undefined;
+        const receipt = toReceipt(ctx.result as SettleResponse, this.networkFor(ctx.requirements.network), ctx.requirements);
+        await this.notifySettled(receipt, transport?.request);
+      });
+    }
+    this.settledHooks.push(hook);
     return this;
+  }
+
+  /** Run every settlement listener, each isolated: one that throws is logged and the rest still run. @internal */
+  async notifySettled(receipt: PaymentReceipt, context: HTTPRequestContext | undefined): Promise<void> {
+    for (const hook of this.settledHooks) {
+      try {
+        await hook(receipt, context);
+      } catch (e) {
+        console.error('radius-sdk onSettled hook failed:', e);
+      }
+    }
+  }
+
+  /** The facilitator (wrapped, see `facilitator`) that settles payments on `network`. */
+  facilitatorFor(network: PaymentNetwork): FacilitatorClient {
+    const f = this.facilitators.get(network);
+    if (!f) throw new Error(`radius-sdk: ${network.name} is not one of this server's networks`);
+    return f;
   }
 
   /**
@@ -394,6 +436,45 @@ export function createPaymentHandler(radius: RadiusServer, routes: RoutesConfig)
       throw unreachable ? Object.assign(new FacilitatorResponseError(unreachable), { cause: e }) : e;
     }));
 
+  const { mpp } = radius;
+
+  /** Pay with an MPP credential: verify against the route's x402 offers, settle per `settle`, attach `Payment-Receipt`. */
+  const handleMpp = async (request: Request, context: HTTPRequestContext, x402Challenge: Response, next: NextHandler): Promise<Response> => {
+    const m = mpp!;
+    const failed = (f: { status: 402 | 502; reason: string }) =>
+      f.status === 502 ? jsonResponse({ error: 'facilitator_error', message: f.reason }, 502) : m.rejection(request, x402Challenge, f.reason);
+    const verified = await m.verify(request, x402Challenge);
+    if (!verified.ok) return failed(verified);
+
+    const withReceipt = (res: Response, receipt: PaymentReceipt): Response => {
+      const out = mutable(res);
+      out.headers.set(MPP_RECEIPT_HEADER, m.receiptHeader(receipt));
+      out.headers.set('Cache-Control', withPrivateCacheControl(out.headers.get('Cache-Control')));
+      return out;
+    };
+
+    if (radius.settleMode === 'before') {
+      const settled = await m.settle(verified);
+      if (!settled.ok) return failed(settled);
+      await radius.notifySettled(settled.receipt, context);
+      let res: Response;
+      try {
+        res = await next(request, settled.receipt);
+      } catch (error) {
+        // Paid but undelivered: the receipt goes back with the error so the buyer can reconcile.
+        return withReceipt(internalErrorResponse(error), settled.receipt);
+      }
+      return withReceipt(res, settled.receipt);
+    }
+
+    const res = await next(request);
+    if (res.status >= 400) return res;
+    const settled = await m.settle(verified);
+    if (!settled.ok) return failed(settled);
+    await radius.notifySettled(settled.receipt, context);
+    return withReceipt(res, settled.receipt);
+  };
+
   const handle = async (request: Request, next: NextHandler): Promise<Response> => {
     const context = requestContext(request);
     if (!httpServer.requiresPayment(context)) return next(request);
@@ -412,7 +493,14 @@ export function createPaymentHandler(radius: RadiusServer, routes: RoutesConfig)
     }
 
     if (result.type === 'no-payment-required') return next(request);
-    if (result.type === 'payment-error') return instructionsToResponse(result.response);
+    if (result.type === 'payment-error') {
+      const res = instructionsToResponse(result.response);
+      if (!mpp || res.status !== 402) return res;
+      // No x402 payment: an MPP credential is checked against the offers this 402 lists; otherwise
+      // the 402 also offers MPP.
+      if (!context.paymentHeader && /^payment\s/i.test(request.headers.get('authorization') ?? '')) return handleMpp(request, context, res, next);
+      return mpp.addChallenges(request, res);
+    }
 
     const { cancellationDispatcher, beforeHandlerSettlement, paymentPayload, paymentRequirements, declaredExtensions } = result;
     const payment = beforeHandlerSettlement ? toReceipt(beforeHandlerSettlement.result, radius.networkFor(paymentRequirements.network), paymentRequirements) : undefined;

@@ -8,6 +8,7 @@ import {
   RadiusPaymentError,
   type ApprovalRequest,
   type PaymentOffer,
+  type PaymentProtocol,
   type PaymentReceipt,
   type PaymentRejectedDetails,
 } from 'radius-sdk/client';
@@ -33,6 +34,7 @@ interface SubOptions {
   header?: string[];
   data?: string;
   networks?: string;
+  protocol?: string;
   threshold?: string;
   yes?: boolean;
   include?: boolean;
@@ -41,6 +43,7 @@ interface SubOptions {
 
 interface PaymentSummary {
   paid: boolean;
+  protocol: PaymentProtocol;
   /** CAIP-2 network the payment was made on. */
   network: string;
   scheme: string;
@@ -58,7 +61,7 @@ export function registerWalletPay(wallet: Command): void {
     .command('pay')
     .description(
       [
-        'Make an HTTP request and pay an x402 challenge if the server responds with 402.',
+        'Make an HTTP request and pay if the server responds with 402: x402, or MPP (WWW-Authenticate: Payment, evm charges).',
         'Pays on Radius by default; add Base with --networks radius,base (--network testnet pairs Radius testnet with Base Sepolia).',
         `Supports ${describeSupportedSchemes()}.`,
         'Permit2 approvals are gas-sponsored when the server offers eip2612GasSponsoring.',
@@ -77,6 +80,7 @@ export function registerWalletPay(wallet: Command): void {
       '--networks <list>',
       `networks to pay on, in preference order (${PAY_NETWORKS.join(', ')}; default radius, or RADIUS_PAY_NETWORKS)`,
     )
+    .option('--protocol <name>', "payment protocol: auto (x402 when offered, else MPP), x402 or mpp", 'auto')
     .option('--threshold <decimal>', "auto-pay if the offered fee ≤ this amount in the asset's display units (USD for SBC and USDC)")
     .option('-y, --yes', 'auto-confirm payment without prompting (capped by --threshold when both are given)')
     .option(
@@ -88,6 +92,14 @@ export function registerWalletPay(wallet: Command): void {
       const opts = cmd.optsWithGlobals() as GlobalOptions;
       await runPay(verbArg, url, subOpts, opts);
     });
+}
+
+/** `--protocol` → the SDK's preference list. */
+function protocolsFor(flag = 'auto'): PaymentProtocol[] {
+  if (flag === 'auto') return ['x402', 'mpp'];
+  if (flag === 'x402' || flag === 'mpp') return [flag];
+  process.stderr.write(`pay: --protocol must be auto, x402 or mpp (got '${flag}')\n`);
+  process.exit(2);
 }
 
 /** Why a payment did not go ahead; decides the exit code and message. */
@@ -107,7 +119,7 @@ async function runPay(
 ): Promise<void> {
   const verb = verbArg.toLowerCase();
   if (!isSupportedVerb(verb)) {
-    process.stderr.write(`x402: unsupported verb '${verbArg}' (use one of ${SUPPORTED_VERBS.join(', ')})\n`);
+    process.stderr.write(`pay: unsupported verb '${verbArg}' (use one of ${SUPPORTED_VERBS.join(', ')})\n`);
     process.exit(2);
   }
   const method = verb.toUpperCase();
@@ -127,6 +139,7 @@ async function runPay(
 
   const cfg = resolveConfig(opts);
   const networks = resolvePayNetworks(cfg, subOpts.networks);
+  const protocols = protocolsFor(subOpts.protocol);
   // The keystore is unlocked only when the SDK signs, i.e. after the 402 has been parsed and
   // matched (network, asset, scheme, payTo) and the payment approved. A bad challenge never prompts.
   const account = await deferredAccount(cfg, opts.privateKey);
@@ -146,6 +159,7 @@ async function runPay(
 
   const payFetch = createRadiusFetch({
     networks,
+    protocols,
     signer: account,
     // The policy (threshold / prompt / refuse) lives in onPaymentRequired; no SDK-side cap.
     maxPerRequest: { amount: maxUint256.toString() },
@@ -154,14 +168,14 @@ async function runPay(
       offer = o;
       const { decimals, symbol } = o.network.asset;
       const wallet = payFetch.on(o.network);
-      const isUpto = o.requirements.scheme === 'upto';
+      const isUpto = o.scheme === 'upto';
       const amount = BigInt(o.amount);
       const amountStr = formatUnits(amount, decimals);
       const balance = await wallet.balance();
       if (balance.atomic < amount) {
         refusal = { kind: 'insufficient-balance' };
         process.stderr.write(
-          `x402: insufficient balance. Need ${isUpto ? 'up to ' : ''}${amountStr} ${symbol}, ` +
+          `pay: insufficient balance. Need ${isUpto ? 'up to ' : ''}${amountStr} ${symbol}, ` +
             `have ${balance.formatted}.\n`,
         );
         return false;
@@ -175,7 +189,7 @@ async function runPay(
       if (decision === 'refuse-over-threshold') {
         refusal = { kind: 'over-threshold' };
         process.stderr.write(
-          `x402: offer ${isUpto ? 'authorizes up to ' : 'of '}${amountStr} ${symbol} exceeds --threshold ` +
+          `pay: offer ${isUpto ? 'authorizes up to ' : 'of '}${amountStr} ${symbol} exceeds --threshold ` +
             `${subOpts.threshold}; not paying. Raise the threshold, or drop it to let --yes pay any amount.\n`,
         );
         return false;
@@ -188,7 +202,7 @@ async function runPay(
         });
         if (!proceed) {
           refusal = { kind: 'declined' };
-          process.stderr.write('x402: payment declined.\n');
+          process.stderr.write('pay: payment declined.\n');
           return false;
         }
       }
@@ -197,9 +211,9 @@ async function runPay(
         // only checks when it does not), so a facilitator that still answers 412 has a way out.
         const allowance = await wallet.permit2Allowance();
         if (allowance < amount) {
-          process.stderr.write(`x402: granting Permit2 an unlimited ${symbol} approval on ${o.network.name} (--approve-permit2)…\n`);
+          process.stderr.write(`pay: granting Permit2 an unlimited ${symbol} approval on ${o.network.name} (--approve-permit2)…\n`);
           const tx = await wallet.approvePermit2();
-          process.stderr.write(`x402: approval confirmed (tx ${tx.hash})\n`);
+          process.stderr.write(`pay: approval confirmed (tx ${tx.hash})\n`);
         }
       }
       return true;
@@ -214,7 +228,7 @@ async function runPay(
       if (!process.stdin.isTTY) {
         refusal = { kind: 'approval-no-tty' };
         process.stderr.write(
-          `x402: this payment requires a Permit2 approval for ${symbol} (have ${have}${need ? `, need ${need}` : ''}) ` +
+          `pay: this payment requires a Permit2 approval for ${symbol} (have ${have}${need ? `, need ${need}` : ''}) ` +
             'and the server does not sponsor it. Re-run with --approve-permit2 (or -y) to grant ' +
             'a one-time unlimited approval.\n',
         );
@@ -229,7 +243,7 @@ async function runPay(
       });
       if (!proceed) {
         refusal = { kind: 'approval-declined' };
-        process.stderr.write('x402: Permit2 approval declined.\n');
+        process.stderr.write('pay: Permit2 approval declined.\n');
       }
       return proceed;
     },
@@ -266,7 +280,7 @@ async function runPay(
 
   if (paid.status === 412) {
     process.stderr.write(
-      'x402: facilitator rejected the payment — Permit2 allowance required (412). ' +
+      'pay: facilitator rejected the payment — Permit2 allowance required (412). ' +
         'Re-run with --approve-permit2 to grant it.\n',
     );
     process.stderr.write(safeBodyPreview(paid.body));
@@ -275,7 +289,7 @@ async function runPay(
 
   if (!offer) {
     // The SDK only retries after onPaymentRequired approved an offer.
-    process.stderr.write('x402: internal error: response returned without an approved offer.\n');
+    process.stderr.write('pay: internal error: response returned without an approved offer.\n');
     process.exit(1);
   }
 
@@ -284,7 +298,7 @@ async function runPay(
 
   if (paid.status >= 200 && paid.status < 300 && !summary.paid) {
     process.stderr.write(
-      'x402: HTTP request succeeded, but payment settlement was not confirmed by a successful payment response.\n',
+      'pay: HTTP request succeeded, but payment settlement was not confirmed by a successful payment response.\n',
     );
   }
 
@@ -304,7 +318,8 @@ function summarize(
   return {
     paid: status >= 200 && status < 300 && receipt?.success === true,
     network: offer.network.network,
-    scheme: offer.requirements.scheme,
+    protocol: offer.protocol,
+    scheme: offer.scheme,
     asset: offer.asset,
     assetSymbol: symbol,
     amount: formatUnits(settled, decimals),
@@ -331,7 +346,7 @@ async function reportPaymentError(e: RadiusPaymentError, ctx: ErrorContext): Pro
   const err = process.stderr;
   switch (e.code) {
     case 'invalid_challenge':
-      err.write(`x402: server returned 402 but the body is not a valid challenge: ${e.message}\n`);
+      err.write(`pay: server returned 402 but the body is not a valid challenge: ${e.message}\n`);
       err.write(safeBodyPreview(ctx.challengeBody));
       return 2;
     case 'network_mismatch':
@@ -339,7 +354,7 @@ async function reportPaymentError(e: RadiusPaymentError, ctx: ErrorContext): Pro
     case 'unsupported_transfer_method':
     case 'no_compatible_offer':
       err.write(
-        `x402: no compatible payment option for ${networks.map((n) => `${n.asset.symbol} on ${n.name} (${n.network})`).join(', ')}. ` +
+        `pay: no compatible payment option for ${networks.map((n) => `${n.asset.symbol} on ${n.name} (${n.network})`).join(', ')}. ` +
           `Supported: ${describeSupportedSchemes()}. ${e.message}\n`,
       );
       return 1;
@@ -355,7 +370,7 @@ async function reportPaymentError(e: RadiusPaymentError, ctx: ErrorContext): Pro
         body: await readCappedBody(detail.response),
         contentType: detail.response.headers.get('content-type'),
       };
-      err.write('x402: server still returned 402 after payment.\n');
+      err.write('pay: server still returned 402 after payment.\n');
       if (detail.error) err.write(`reason: ${detail.error}\n`);
       err.write(safeBodyPreview(rejected.body));
       if (json && offer) {
@@ -364,10 +379,10 @@ async function reportPaymentError(e: RadiusPaymentError, ctx: ErrorContext): Pro
       return 1;
     }
     case 'redirect_refused':
-      err.write('x402: server redirected the paid request cross-origin; refusing to replay the payment header.\n');
+      err.write('pay: server redirected the paid request cross-origin; refusing to replay the payment header.\n');
       return 1;
     default:
-      err.write(`x402: ${e.message}\n`);
+      err.write(`pay: ${e.message}\n`);
       return 1;
   }
 }
@@ -384,9 +399,9 @@ function writeChallengeSummary(
     : `payment required (${amount} ${symbol} to ${offer.payTo}).`;
   process.stderr.write(
     [
-      `x402: ${lead}`,
-      `      balance: ${balanceStr}`,
-      `      pass --threshold ${amount} (or higher) to auto-pay, or --yes to confirm.`,
+      `pay: ${lead}`,
+      `     balance: ${balanceStr}`,
+      `     pass --threshold ${amount} (or higher) to auto-pay, or --yes to confirm.`,
       '',
     ].join('\n'),
   );
@@ -405,7 +420,7 @@ function emit(res: HttpResponse, payment: PaymentSummary | null, json: boolean, 
   if (payment?.paid) {
     const tag = payment.assetSymbol ?? payment.asset;
     const tx = payment.txHash ? ` (tx ${payment.txHash})` : '';
-    process.stderr.write(`x402: paid ${payment.amount} ${tag}${tx}\n`);
+    process.stderr.write(`pay: paid ${payment.amount} ${tag}${tx}\n`);
   }
   process.stdout.write(res.body);
 }
