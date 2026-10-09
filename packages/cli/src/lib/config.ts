@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { isAddress, type Address } from 'viem';
-import { radiusMainnetChain, radiusTestnetChain, SBC } from 'radius-sdk';
+import { radiusMainnetChain, radiusTestnetChain, resolveNetwork, SBC, type PaymentNetwork } from 'radius-sdk';
 import type { GlobalOptions, NetworkName, ResolvedConfig } from '../types.js';
 
 const RADIUS_DIR = process.env.RADIUS_HOME ?? join(homedir(), '.radius');
@@ -16,6 +16,10 @@ interface FileConfig {
   rusdAddress?: string;
   cachedAddress?: string;
   passwordless?: boolean;
+  /** Networks `wallet pay` pays on, in preference order (default ['radius']). */
+  payNetworks?: string[];
+  /** RPC URLs for non-Radius networks, by preset id: { "base": "https://…", "base-sepolia": "https://…" }. */
+  rpcUrls?: { base?: string; 'base-sepolia'?: string };
 }
 
 function readFileConfig(): FileConfig {
@@ -57,6 +61,34 @@ export function resolveConfig(opts: GlobalOptions): ResolvedConfig {
   const password = process.env.RADIUS_PASSWORD;
 
   return { network, chain, rpcUrl, sbcAddress, rusdAddress, keystorePath, password };
+}
+
+/** Networks `wallet pay` can pay on. `--network` picks mainnet or testnet for all of them. */
+export const PAY_NETWORKS = ['radius', 'base'] as const;
+export type PayNetworkName = (typeof PAY_NETWORKS)[number];
+
+/**
+ * The networks `wallet pay` pays on, in preference order: `--networks`, else RADIUS_PAY_NETWORKS,
+ * else `payNetworks` in the config file, else Radius only. Radius takes `--rpc-url` / `--sbc`;
+ * Base takes RADIUS_BASE_RPC_URL or `rpcUrls.base`, Base Sepolia RADIUS_BASE_SEPOLIA_RPC_URL or
+ * `rpcUrls["base-sepolia"]`: separate settings, so a mainnet RPC is never used for testnet.
+ */
+export function resolvePayNetworks(cfg: ResolvedConfig, flag?: string): PaymentNetwork[] {
+  const file = readFileConfig();
+  const raw = flag ?? process.env.RADIUS_PAY_NETWORKS ?? file.payNetworks?.join(',') ?? 'radius';
+  const names = [...new Set(raw.split(',').map((n) => n.trim().toLowerCase()).filter(Boolean))];
+  if (names.length === 0) throw new Error('--networks needs at least one network');
+  return names.map((name) => {
+    if (name === 'radius') {
+      return resolveNetwork(cfg.network, { rpcUrl: cfg.rpcUrl, asset: cfg.sbcAddress ? { address: cfg.sbcAddress } : undefined });
+    }
+    if (name === 'base') {
+      const testnet = cfg.network === 'testnet';
+      const rpcUrl = testnet ? (process.env.RADIUS_BASE_SEPOLIA_RPC_URL ?? file.rpcUrls?.['base-sepolia']) : (process.env.RADIUS_BASE_RPC_URL ?? file.rpcUrls?.base);
+      return resolveNetwork(testnet ? 'base-sepolia' : 'base', rpcUrl ? { rpcUrl } : undefined);
+    }
+    throw new Error(`--networks: unknown network '${name}' (use ${PAY_NETWORKS.join(', ')})`);
+  });
 }
 
 export function configPath(): string {

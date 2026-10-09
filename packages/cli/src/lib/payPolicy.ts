@@ -2,7 +2,7 @@ import { parseUnits } from 'viem';
 
 export interface PayPolicyFlags {
   yes?: boolean;
-  x402Threshold?: string;
+  threshold?: string;
 }
 
 export type PayDecision = 'auto-pay' | 'prompt' | 'refuse-no-tty' | 'refuse-over-threshold';
@@ -11,7 +11,7 @@ export type PayDecision = 'auto-pay' | 'prompt' | 'refuse-no-tty' | 'refuse-over
  * Decide how to treat an x402 offer: pay silently, ask, or refuse. `amount` is the atomic
  * amount (the authorized maximum for `upto`).
  *
- * `--x402-threshold` is a cap: at or below it the offer is paid without asking. Above it,
+ * `--threshold` is a cap: at or below it the offer is paid without asking. Above it,
  * `--yes` refuses rather than pays (the flag means "don't ask", not "ignore the cap"); without
  * `--yes` a TTY is asked and a non-TTY run refuses. With no threshold, `--yes` pays anything.
  */
@@ -21,12 +21,12 @@ export function decidePayment(
   decimals: number,
   isTTY: boolean,
 ): PayDecision {
-  if (flags.x402Threshold !== undefined) {
+  if (flags.threshold !== undefined) {
     let limit: bigint;
     try {
-      limit = parseUnits(flags.x402Threshold, decimals);
+      limit = parseUnits(flags.threshold, decimals);
     } catch {
-      throw new Error(`--x402-threshold must be a decimal number, got: ${flags.x402Threshold}`);
+      throw new Error(`--threshold must be a decimal number, got: ${flags.threshold}`);
     }
     if (limit >= amount) return 'auto-pay';
     if (flags.yes) return 'refuse-over-threshold';
