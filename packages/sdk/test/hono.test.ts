@@ -50,7 +50,7 @@ describe('radiusPayments 402 challenge', () => {
     expect(res.status).toBe(200);
   });
 
-  it('returns a standard x402 v2 challenge for SBC via Permit2 with gas sponsoring declared', async () => {
+  it('returns a standard x402 v2 challenge for SBC via EIP-3009 (listed first by the facilitator) with gas sponsoring declared', async () => {
     const res = await makeApp().request('http://seller.test/api/lookup?q=1');
     expect(res.status).toBe(402);
     const header = res.headers.get('payment-required');
@@ -67,7 +67,7 @@ describe('radiusPayments 402 challenge', () => {
       asset: '0x33ad9e4BD16B69B5BFdED37D8B5D9fF9aba014Fb',
       payTo: PAY_TO,
       maxTimeoutSeconds: 300,
-      extra: { assetTransferMethod: 'permit2', name: 'Stable Coin', version: '1', paymentFlow: 'upfront' },
+      extra: { assetTransferMethod: 'eip3009', name: 'Stable Coin', version: '1', paymentFlow: 'upfront' },
     });
     expect(pr.extensions).toHaveProperty('eip2612GasSponsoring');
   });

@@ -6,6 +6,7 @@ import { RadiusServer, createPaymentHandler, requestOf, type PayTo as ServerPayT
 export { RadiusFacilitatorClient, staticSupported, withUnknownOutcomes, type FacilitatorOptions } from '../server/facilitator.js';
 export { RadiusExactScheme, type GasSponsoringMode, type SettleMode } from '../server/scheme.js';
 export { RadiusServer, createRadiusServer, RequestAdapter, toReceipt, type RadiusServerOptions, type ServerNetwork } from '../server/index.js';
+export { MppPayments, type MppServerOptions } from '../server/mpp.js';
 
 export type PayTo<E extends Env> = ServerPayTo<Context<E>>;
 export type RouteSpec<E extends Env = Env> = ServerRouteSpec<Context<E>>;
