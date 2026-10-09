@@ -5,7 +5,7 @@ import { RadiusServer, createPaymentHandler, requestOf, type PayTo as ServerPayT
 
 export { RadiusFacilitatorClient, staticSupported, withUnknownOutcomes, type FacilitatorOptions } from '../server/facilitator.js';
 export { RadiusExactScheme, type GasSponsoringMode, type SettleMode } from '../server/scheme.js';
-export { RadiusServer, createRadiusServer, RequestAdapter, toReceipt, type RadiusServerOptions } from '../server/index.js';
+export { RadiusServer, createRadiusServer, RequestAdapter, toReceipt, type RadiusServerOptions, type ServerNetwork } from '../server/index.js';
 
 export type PayTo<E extends Env> = ServerPayTo<Context<E>>;
 export type RouteSpec<E extends Env = Env> = ServerRouteSpec<Context<E>>;
@@ -26,7 +26,7 @@ export interface RadiusPaymentsOptions<E extends Env = Env> extends Omit<RadiusS
 export type RadiusPaymentVariables = { radiusPayment?: PaymentReceipt };
 
 /**
- * Hono middleware that charges for routes with Radius x402 payments. A thin wrapper
+ * Hono middleware that charges for routes with x402 payments (Radius by default). A thin wrapper
  * over the web-standard handler in `radius-sdk/server`: dynamic `payTo`/`price` and
  * `onSettled` receive the Hono context, and paid handlers can read the receipt with
  * `c.get('radiusPayment')` (when `settle` is 'before', the default).
