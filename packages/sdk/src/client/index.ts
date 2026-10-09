@@ -8,7 +8,7 @@ import { getBalances, type AccountBalances } from '../balances.js';
 import { toTokenAtomic, type TokenAmount, type TxResult } from '../erc20.js';
 import { RadiusPaymentError } from '../errors.js';
 import { describeSupportedSchemes } from '../schemes.js';
-import { PERMIT2_ADDRESS, resolveNetwork, type Address, type NetworkInput, type NetworkOverrides, type PaymentNetwork } from '../networks.js';
+import { PERMIT2_ADDRESS, explorerTxUrl, isNetworkId, overridesOf, resolveNetwork, type Address, type NetworkInput, type NetworkName, type NetworkOverrides, type PaymentNetwork } from '../networks.js';
 import { decodePaymentReceipt, parseUptoSettlementAmount, type PaymentReceipt } from '../receipt.js';
 import { getSettlement, type Settlement } from '../settlement.js';
 
@@ -36,7 +36,8 @@ export interface PaymentOffer {
   amountFormatted: string;
   asset: Address;
   payTo: Address;
-  network: string;
+  /** The network the offer pays on (one of the client's `networks`); `network.asset` has the symbol and decimals. */
+  network: PaymentNetwork;
   resource: { url: string; description?: string; mimeType?: string };
   /** Untouched requirement chosen from the 402 (a v1 entry when `x402Version` is 1). */
   requirements: AnyPaymentRequirements;
@@ -56,6 +57,8 @@ export interface PaymentOffer {
 export interface ApprovalRequest {
   /** Which call is asking. */
   reason: 'payment' | 'approvePermit2' | 'approve';
+  /** The network the approval transaction is sent on. */
+  network: PaymentNetwork;
   asset: Address;
   spender: Address;
   /** Amount to approve: unlimited for Permit2 (the x402 "one-time gas approval" model), the caller's amount for `approve`. */
@@ -82,11 +85,19 @@ export interface InvalidChallengeDetails {
 }
 
 export interface RadiusFetchOptions extends NetworkOverrides {
-  /** 'mainnet' (default), 'testnet', a preset, or a custom instance. */
+  /** The network to pay on: 'mainnet' (Radius, default), 'testnet', 'base', 'base-sepolia', or any `PaymentNetwork`. */
   network?: NetworkInput;
+  /**
+   * Several networks to pay on, in preference order (instead of `network`). When a server offers
+   * more than one, the first network in this list that it accepts wins; among offers on that
+   * network, server order decides. Top-level overrides (`rpcUrl`, `asset`, …) apply to the first.
+   */
+  networks?: readonly NetworkInput[];
   signer: RadiusSigner;
   /**
-   * Hard ceiling per request, e.g. "$0.05" or { amount: "50000" }. Required.
+   * Hard ceiling per request, e.g. "$0.05" or { amount: "50000" }. Required. A USD price is
+   * converted for each network's asset (all presets are USD stablecoins); an atomic amount
+   * applies as-is to each asset.
    * This is NOT a cumulative budget: an agent looping over requests can exceed
    * any total unless you enforce one outside the SDK.
    */
@@ -96,8 +107,9 @@ export interface RadiusFetchOptions extends NetworkOverrides {
   /**
    * Permit2 needs a one-time ERC-20 approval. When the server's facilitator sponsors it
    * (`eip2612GasSponsoring`) nothing is sent on-chain. Otherwise: 'auto' (default) sends an
-   * unlimited approval transaction from the signer (gas via Turnstile from SBC, so the wallet
-   * needs ~0.01 SBC spare on Radius); 'never' throws `approval_required` instead.
+   * unlimited approval transaction from the signer (gas: on Radius via the Turnstile from SBC, so
+   * the wallet needs ~0.01 SBC spare; elsewhere the chain's native token, e.g. ETH on Base);
+   * 'never' throws `approval_required` instead.
    */
   permit2Approval?: 'auto' | 'never';
   /**
@@ -122,11 +134,10 @@ export interface FaucetResult {
   raw: unknown;
 }
 
-export interface RadiusFetch {
-  (input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
-  readonly address: Address;
+/** Wallet helpers bound to one network. `RadiusFetch` itself is the one for its first network. */
+export interface NetworkWallet {
   readonly network: PaymentNetwork;
-  /** Atomic cap per request. */
+  /** Atomic cap per request in this network's asset. */
   readonly maxPerRequest: bigint;
   /** Payment-asset (SBC) balance of the signer: a raw ERC-20 `balanceOf`, nothing aggregated. */
   balance(): Promise<{ atomic: bigint; formatted: string }>;
@@ -150,8 +161,17 @@ export interface RadiusFetch {
   approve(spender: Address, amount: TokenAmount): Promise<TxResult>;
   /** Reconcile a settlement transaction on-chain (undefined while unknown to the node). */
   getSettlement(txHash: `0x${string}`): Promise<Settlement | undefined>;
-  /** Request a faucet drip for this wallet (testnet ~0.5 SBC; mainnet ~0.01 SBC/day). */
+  /** Request a faucet drip for this wallet (Radius testnet ~0.5 SBC; mainnet ~0.01 SBC/day). */
   fund(): Promise<FaucetResult>;
+}
+
+export interface RadiusFetch extends NetworkWallet {
+  (input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+  readonly address: Address;
+  /** Every network this fetch pays on, in preference order; `network` is the first. */
+  readonly networks: readonly PaymentNetwork[];
+  /** Wallet helpers for one of `networks`, by preset id, CAIP-2 id, or the network itself. */
+  on(network: string | PaymentNetwork): NetworkWallet;
   /** Escape hatch to the underlying x402 client. */
   readonly client: x402Client;
 }
@@ -190,89 +210,137 @@ function isTxAccount(v: unknown): v is Account {
   return typeof v === 'object' && v !== null && typeof (v as Account).signTransaction === 'function';
 }
 
-/**
- * Create a `fetch` that pays Radius x402 challenges automatically, within a
- * per-request ceiling, on one network, in one asset.
- */
-export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
-  const network = resolveNetwork(options.network, options);
-  if (options.maxPerRequest === undefined || options.maxPerRequest === null) {
-    throw new RadiusPaymentError('config', 'createRadiusFetch: maxPerRequest is required (e.g. "$0.05")');
-  }
-  const cap = BigInt(resolvePrice(options.maxPerRequest, network.asset).amount);
-  const chain = network.chain;
-  const publicClient: PublicClient = createPublicClient({ chain, transport: http(network.rpcUrl) });
-  let account: ClientEvmSigner;
-  let walletClient: WalletClient | undefined;
-  if (typeof options.signer === 'string') {
-    const local = privateKeyToAccount(options.signer);
-    account = local as unknown as ClientEvmSigner;
-    walletClient = createWalletClient({ account: local, chain, transport: http(network.rpcUrl) });
-  } else if (isWalletClient(options.signer)) {
-    const wc = options.signer;
-    const wcAccount = wc.account;
-    if (!wcAccount) throw new RadiusPaymentError('config', 'createRadiusFetch: the WalletClient has no account; create it with { account }');
-    account = {
-      address: wcAccount.address,
-      signTypedData: (msg) => wc.signTypedData({ ...(msg as Omit<Parameters<WalletClient['signTypedData']>[0], 'account'>), account: wcAccount } as Parameters<WalletClient['signTypedData']>[0]),
-      signMessage: (a: { message: string }) => wc.signMessage({ account: wcAccount, message: a.message }),
-    } as ClientEvmSigner;
-    walletClient = wc;
-  } else {
-    account = options.signer;
-    if (!isSigner(account)) throw new RadiusPaymentError('config', 'createRadiusFetch: signer must be a private key, a WalletClient with an account, or an object with address + signTypedData');
-    if (isTxAccount(account)) walletClient = createWalletClient({ account, chain, transport: http(network.rpcUrl) });
-  }
-  // readContract on the signer lets @x402/evm sign the EIP-2612 permit for gas sponsoring.
-  const signer = toClientEvmSigner(account, publicClient as never);
+/** Per-network state: clients, x402 signer, cap. Built once, up front; nothing here does I/O. */
+interface Rail {
+  network: PaymentNetwork;
+  cap: bigint;
+  publicClient: PublicClient;
+  /** Absent when the signer cannot send transactions on this chain. */
+  walletClient?: WalletClient;
+  /** Why `walletClient` is absent, for the error message. */
+  noWalletReason?: string;
+  signer: ClientEvmSigner;
+}
 
-  const exactScheme = new ExactEvmScheme(signer, { rpcUrl: network.rpcUrl });
-  // x402 v1 `exact` is EIP-3009 only. @x402/evm's own ExactEvmSchemeV1 resolves the chain id from a
-  // table of named v1 networks (base-sepolia, …) and rejects `eip155:<chainId>`, which is how Radius
-  // appears in v1 challenges. ExactEvmScheme's EIP-3009 signing is version-agnostic (same EIP-712
-  // domain/types, `validAfter: 0`), so delegate to it with the v1 price field normalised and wrap the
-  // result in the v1 envelope `{ x402Version, scheme, network, payload }`.
-  const exactV1Scheme: SchemeNetworkClient = {
+/**
+ * x402 v1 `exact` is EIP-3009 only. @x402/evm's own ExactEvmSchemeV1 resolves the chain id from a
+ * table of named v1 networks and rejects `eip155:<chainId>`, which is how Radius appears in v1
+ * challenges. ExactEvmScheme's EIP-3009 signing is version-agnostic (same EIP-712 domain/types,
+ * `validAfter: 0`), so delegate to it with the v1 price field and network normalised, and wrap the
+ * result in the v1 envelope `{ x402Version, scheme, network, payload }` with the server's network.
+ */
+function exactV1Scheme(exact: ExactEvmScheme, network: PaymentNetwork): SchemeNetworkClient {
+  return {
     scheme: 'exact',
     async createPaymentPayload(x402Version, requirements) {
       const v1 = requirements as unknown as PaymentRequirementsV1;
       const { assetTransferMethod: _v2Only, ...extra } = v1.extra ?? {};
-      const result = await exactScheme.createPaymentPayload(x402Version, { ...v1, amount: v1.maxAmountRequired, extra } as PaymentRequirements);
+      const result = await exact.createPaymentPayload(x402Version, { ...v1, network: network.network, amount: v1.maxAmountRequired, extra } as PaymentRequirements);
       return { x402Version, scheme: v1.scheme, network: v1.network, payload: result.payload } as PaymentPayloadResult;
     },
   };
-  const client = new x402Client()
-    .register(network.network, exactScheme)
-    .register(network.network, new UptoEvmScheme(signer, { rpcUrl: network.rpcUrl }))
-    .registerV1(network.network, exactV1Scheme)
-    // Backstop; the primary checks live in `chooseOffer` so errors are typed.
-    .setSpendControls({
-      maxAmountPerPayment: false,
-      allowedAssets: [{ network: network.network, asset: network.asset.address, maxAmountPerPayment: cap.toString() }],
-    });
+}
+
+/**
+ * Create a `fetch` that pays x402 challenges automatically, within a per-request ceiling, on one
+ * network (Radius mainnet by default) or several in preference order, each in its payment asset.
+ */
+export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
+  if (options.network !== undefined && options.networks !== undefined) {
+    throw new RadiusPaymentError('config', 'createRadiusFetch: pass network or networks, not both');
+  }
+  if (options.networks !== undefined && options.networks.length === 0) {
+    throw new RadiusPaymentError('config', 'createRadiusFetch: networks is empty');
+  }
+  const inputs = options.networks ?? [options.network];
+  const networks = inputs.map((input, i) => (i === 0 ? resolveNetwork(input, overridesOf(options)) : resolveNetwork(input)));
+  const seen = new Set<number>();
+  for (const n of networks) {
+    if (seen.has(n.chainId)) throw new RadiusPaymentError('config', `createRadiusFetch: chain ${n.chainId} (${n.name}) is listed twice`);
+    seen.add(n.chainId);
+  }
+  if (options.maxPerRequest === undefined || options.maxPerRequest === null) {
+    throw new RadiusPaymentError('config', 'createRadiusFetch: maxPerRequest is required (e.g. "$0.05")');
+  }
+
+  // Who signs. A private key or local account can send transactions on every network; a
+  // WalletClient only on the chain it is connected to.
+  let account: ClientEvmSigner;
+  let walletFor: (network: PaymentNetwork) => { walletClient?: WalletClient; noWalletReason?: string };
+  const signer = options.signer;
+  if (typeof signer === 'string') {
+    const local = privateKeyToAccount(signer);
+    account = local as unknown as ClientEvmSigner;
+    walletFor = (n) => ({ walletClient: createWalletClient({ account: local, chain: n.chain, transport: http(n.rpcUrl) }) });
+  } else if (isWalletClient(signer)) {
+    const wcAccount = signer.account;
+    if (!wcAccount) throw new RadiusPaymentError('config', 'createRadiusFetch: the WalletClient has no account; create it with { account }');
+    account = {
+      address: wcAccount.address,
+      signTypedData: (msg) => signer.signTypedData({ ...(msg as Omit<Parameters<WalletClient['signTypedData']>[0], 'account'>), account: wcAccount } as Parameters<WalletClient['signTypedData']>[0]),
+      signMessage: (a: { message: string }) => signer.signMessage({ account: wcAccount, message: a.message }),
+    } as ClientEvmSigner;
+    const connected = signer.chain?.id ?? networks[0].chainId;
+    // An injected wallet (MetaMask & co.) refuses typed data whose domain names another chain than
+    // the one it is on, so it cannot pay elsewhere either: say so now rather than fail mid-payment.
+    const elsewhere = networks.filter((n) => n.chainId !== connected);
+    if (wcAccount.type === 'json-rpc' && elsewhere.length > 0) {
+      throw new RadiusPaymentError(
+        'config',
+        `createRadiusFetch: an injected wallet signs only for the chain it is connected to (${connected}); ${elsewhere.map((n) => n.name).join(', ')} need a client of their own`,
+      );
+    }
+    walletFor = (n) =>
+      n.chainId === connected ? { walletClient: signer } : { noWalletReason: `the WalletClient is connected to chain ${connected}, not ${n.name} (${n.chainId})` };
+  } else {
+    account = signer;
+    if (!isSigner(account)) throw new RadiusPaymentError('config', 'createRadiusFetch: signer must be a private key, a WalletClient with an account, or an object with address + signTypedData');
+    const txAccount = isTxAccount(account) ? account : undefined;
+    walletFor = (n) =>
+      txAccount
+        ? { walletClient: createWalletClient({ account: txAccount, chain: n.chain, transport: http(n.rpcUrl) }) }
+        : { noWalletReason: 'this signer can only sign typed data' };
+  }
+
+  const rails = networks.map((network): Rail => {
+    const publicClient: PublicClient = createPublicClient({ chain: network.chain, transport: http(network.rpcUrl) });
+    return {
+      network,
+      cap: BigInt(resolvePrice(options.maxPerRequest, network.asset).amount),
+      publicClient,
+      ...walletFor(network),
+      // readContract on the signer lets @x402/evm sign the EIP-2612 permit for gas sponsoring.
+      signer: toClientEvmSigner(account, publicClient as never),
+    };
+  });
+  /** The rail for a network: the network itself, its preset id (or `mainnet` / `testnet` alias), name, CAIP-2 id or x402 v1 name. */
+  const railFor = (id: string | PaymentNetwork): Rail | undefined => {
+    if (typeof id !== 'string') return rails.find(({ network }) => network === id || network.chainId === id.chainId);
+    let presetChainId: number | undefined;
+    try {
+      presetChainId = resolveNetwork(id as NetworkName).chainId;
+    } catch {
+      /* not a preset id */
+    }
+    return rails.find(({ network }) => id === network.name || isNetworkId(network, id) || network.chainId === presetChainId);
+  };
+
+  const client = new x402Client();
+  for (const { network, signer } of rails) {
+    const exact = new ExactEvmScheme(signer, { rpcUrl: network.rpcUrl });
+    const v1 = exactV1Scheme(exact, network);
+    client.register(network.network, exact).register(network.network, new UptoEvmScheme(signer, { rpcUrl: network.rpcUrl })).registerV1(network.network, v1);
+    for (const name of network.v1Names) client.registerV1(name, v1);
+  }
+  // Backstop; the primary checks live in `chooseOffer` so errors are typed.
+  client.setSpendControls({
+    maxAmountPerPayment: false,
+    allowedAssets: rails.flatMap(({ network, cap }) =>
+      [network.network, ...network.v1Names].map((id) => ({ network: id as `${string}:${string}`, asset: network.asset.address, maxAmountPerPayment: cap.toString() })),
+    ),
+  });
   const httpClient = new x402HTTPClient(client);
   const baseFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
-  const explorer = (hash: string) => (network.explorerUrl ? `${network.explorerUrl}/tx/${hash}` : undefined);
-
-  const requireWallet = (what: string): WalletClient => {
-    if (!walletClient) {
-      throw new RadiusPaymentError('approval_required', `${what} needs a transaction-capable signer (a private key, viem local account, or WalletClient); this signer can only sign typed data`);
-    }
-    return walletClient;
-  };
-
-  const sendTx = async (what: string, fn: (wc: WalletClient) => Promise<`0x${string}`>): Promise<TxResult> => {
-    const wc = requireWallet(what);
-    const hash = await fn(wc);
-    const receipt = await publicClient.waitForTransactionReceipt({ hash });
-    return { hash, status: receipt.status === 'success' ? 'success' : 'reverted', explorerUrl: explorer(hash) };
-  };
-
-  const permit2Allowance = () =>
-    publicClient.readContract({ address: network.asset.address, abi: ERC20_ABI, functionName: 'allowance', args: [account.address, PERMIT2_ADDRESS] });
-
-  const allowance = (spender: Address) =>
-    publicClient.readContract({ address: network.asset.address, abi: ERC20_ABI, functionName: 'allowance', args: [account.address, spender] });
 
   /** The one policy gate for allowance changes: `onApprovalRequired` may veto, else proceed. */
   const authorizeApproval = async (request: ApprovalRequest): Promise<void> => {
@@ -281,25 +349,84 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     }
   };
 
-  /** ERC-20 `approve` of the payment asset, after `authorizeApproval`. */
-  const sendApproval = async (request: ApprovalRequest, what: string): Promise<TxResult> => {
-    await authorizeApproval(request);
-    const r = await sendTx(what, (wc) =>
-      wc.writeContract({ address: network.asset.address, abi: ERC20_ABI, functionName: 'approve', args: [request.spender, request.amount], chain, account: wc.account! }),
-    );
-    if (r.status !== 'success') throw new RadiusPaymentError('approval_failed', `${what} transaction ${r.hash} reverted`, r);
-    return r;
-  };
+  // Wallet helpers per rail (plain closures over its clients; nothing runs until called).
+  const wallets = new Map(rails.map((rail) => [rail, networkWallet(rail)] as const));
 
-  const approvePermit2 = async (): Promise<TxResult> => {
-    const currentAllowance = await permit2Allowance();
-    return sendApproval({ reason: 'approvePermit2', asset: network.asset.address, spender: PERMIT2_ADDRESS, amount: maxUint256, currentAllowance }, 'Permit2 approval');
-  };
+  function networkWallet(rail: Rail) {
+    const { network, publicClient } = rail;
+    const { asset, chain } = network;
 
-  const approve = async (spender: Address, amount: TokenAmount): Promise<TxResult> => {
-    const [atomic, currentAllowance] = await Promise.all([toTokenAtomic(publicClient, network.asset, amount), allowance(spender)]);
-    return sendApproval({ reason: 'approve', asset: network.asset.address, spender, amount: atomic, currentAllowance }, 'approve');
-  };
+    const sendTx = async (what: string, fn: (wc: WalletClient) => Promise<`0x${string}`>): Promise<TxResult> => {
+      if (!rail.walletClient) {
+        throw new RadiusPaymentError('approval_required', `${what} needs a transaction-capable signer on ${network.name} (a private key, viem local account, or WalletClient on that chain); ${rail.noWalletReason}`);
+      }
+      const hash = await fn(rail.walletClient);
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      return { hash, status: receipt.status === 'success' ? 'success' : 'reverted', explorerUrl: explorerTxUrl(network, hash) };
+    };
+
+    const allowance = (spender: Address) =>
+      publicClient.readContract({ address: asset.address, abi: ERC20_ABI, functionName: 'allowance', args: [account.address, spender] });
+    const permit2Allowance = () => allowance(PERMIT2_ADDRESS);
+
+    /** ERC-20 `approve` of the payment asset, after `authorizeApproval`. */
+    const sendApproval = async (request: ApprovalRequest, what: string): Promise<TxResult> => {
+      await authorizeApproval(request);
+      const r = await sendTx(what, (wc) =>
+        wc.writeContract({ address: asset.address, abi: ERC20_ABI, functionName: 'approve', args: [request.spender, request.amount], chain, account: wc.account! }),
+      );
+      if (r.status !== 'success') throw new RadiusPaymentError('approval_failed', `${what} transaction ${r.hash} reverted`, r);
+      return r;
+    };
+
+    const fund = async (): Promise<FaucetResult> => {
+      if (!network.faucetUrl) throw new RadiusPaymentError('faucet', `No faucet configured for network ${network.name}`);
+      const signMessage = (account as { signMessage?: (a: { message: string }) => Promise<`0x${string}`> }).signMessage;
+      if (typeof signMessage !== 'function') throw new RadiusPaymentError('faucet', 'fund() needs a signer with signMessage (EIP-191), e.g. a private key or viem local account');
+      const base = network.faucetUrl.replace(/\/+$/, '');
+      const token = asset.symbol;
+      const challenge = (await (await fetch(`${base}/challenge/${account.address}?token=${token}`)).json()) as { message?: string };
+      if (!challenge.message) throw new RadiusPaymentError('faucet', 'Faucet returned no challenge message', challenge);
+      const signature = await signMessage.call(account, { message: challenge.message });
+      const res = await fetch(`${base}/drip`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ address: account.address, token, signature }),
+      });
+      const raw = (await res.json().catch(() => ({}))) as { success?: boolean; amount?: string; tx_hash?: `0x${string}`; error?: { code?: string; message?: string; retry_after_ms?: number } };
+      if (!res.ok || raw.success !== true) {
+        throw new RadiusPaymentError('faucet', `Faucet drip failed: ${raw.error?.code ?? res.status} ${raw.error?.message ?? ''}`.trim(), raw);
+      }
+      return { success: true, amount: raw.amount, txHash: raw.tx_hash, raw };
+    };
+
+    return {
+      network,
+      maxPerRequest: rail.cap,
+      sendApproval,
+      balance: async () => {
+        const atomic = await publicClient.readContract({ address: asset.address, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] });
+        return { atomic, formatted: formatAmount(atomic, asset.decimals, asset.symbol) };
+      },
+      balances: () => getBalances(publicClient, { address: account.address, network }),
+      permit2Allowance,
+      approvePermit2: async () => {
+        const currentAllowance = await permit2Allowance();
+        return sendApproval({ reason: 'approvePermit2', network, asset: asset.address, spender: PERMIT2_ADDRESS, amount: maxUint256, currentAllowance }, 'Permit2 approval');
+      },
+      send: (to: Address, amount: Price) => {
+        const atomic = BigInt(resolvePrice(amount, asset).amount);
+        return sendTx('send', (wc) => wc.writeContract({ address: asset.address, abi: ERC20_ABI, functionName: 'transfer', args: [to, atomic], chain, account: wc.account! }));
+      },
+      allowance,
+      approve: async (spender: Address, amount: TokenAmount) => {
+        const [atomic, currentAllowance] = await Promise.all([toTokenAtomic(publicClient, asset, amount), allowance(spender)]);
+        return sendApproval({ reason: 'approve', network, asset: asset.address, spender, amount: atomic, currentAllowance }, 'approve');
+      },
+      getSettlement: (txHash: `0x${string}`) => getSettlement(network, txHash, publicClient),
+      fund,
+    };
+  }
 
   const amountOf = (version: 1 | 2, a: AnyPaymentRequirements): bigint => {
     const field = version === 1 ? 'maxAmountRequired' : 'amount';
@@ -310,52 +437,58 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     return BigInt(raw);
   };
 
+  const describeNetworks = () => rails.map(({ network }) => `${network.network} (${network.name})`).join(', ');
+  const describeAssets = () => rails.map(({ network }) => `${network.asset.symbol} (${network.asset.address}) on ${network.network}`).join(', ');
+
   const chooseOffer = (pr: PaymentRequired, requestUrl: string): PaymentOffer => {
     const version = pr.x402Version;
     if (version !== 1 && version !== 2) throw new RadiusPaymentError('invalid_challenge', `Unsupported x402 version ${String(version)}`);
     const accepts = pr.accepts as AnyPaymentRequirements[] | undefined;
     if (!Array.isArray(accepts) || accepts.length === 0) throw new RadiusPaymentError('invalid_challenge', 'Challenge has no accepts[]');
-    const sameNetwork = accepts.filter((a) => a.network === network.network);
-    if (sameNetwork.length === 0) {
+    // Candidates in the client's network preference order, server order within each network.
+    const onNetwork = rails.flatMap((rail) => accepts.filter((a) => typeof a.network === 'string' && isNetworkId(rail.network, a.network)).map((req) => ({ rail, req })));
+    if (onNetwork.length === 0) {
       const offered = [...new Set(accepts.map((a) => a.network))].join(', ') || 'none';
-      throw new RadiusPaymentError('network_mismatch', `Server accepts ${offered}; this client pays on ${network.network} (${network.name})`, accepts);
+      throw new RadiusPaymentError('network_mismatch', `Server accepts ${offered}; this client pays on ${describeNetworks()}`, accepts);
     }
-    const sameAsset = sameNetwork.filter((a) => typeof a.asset === 'string' && a.asset.toLowerCase() === network.asset.address.toLowerCase());
+    const sameAsset = onNetwork.filter(({ rail, req }) => typeof req.asset === 'string' && req.asset.toLowerCase() === rail.network.asset.address.toLowerCase());
     if (sameAsset.length === 0) {
-      throw new RadiusPaymentError('asset_mismatch', `Server does not accept ${network.asset.symbol} (${network.asset.address}) on ${network.network}`, sameNetwork);
+      throw new RadiusPaymentError('asset_mismatch', `Server does not accept ${describeAssets()}`, onNetwork.map((c) => c.req));
     }
     // `exact` exists in v1 and v2; `upto` is a v2 scheme only.
-    const knownScheme = sameAsset.filter((a) => a.scheme === 'exact' || (a.scheme === 'upto' && version === 2));
+    const knownScheme = sameAsset.filter(({ req }) => req.scheme === 'exact' || (req.scheme === 'upto' && version === 2));
     if (knownScheme.length === 0) {
-      const schemes = [...new Set(sameAsset.map((a) => `${a.scheme}@v${version}`))].join(', ');
-      throw new RadiusPaymentError('no_compatible_offer', `Server offers ${schemes} for ${network.asset.symbol}; this client supports ${describeSupportedSchemes()}`, sameAsset);
+      const schemes = [...new Set(sameAsset.map(({ req }) => `${req.scheme}@v${version}`))].join(', ');
+      throw new RadiusPaymentError('no_compatible_offer', `Server offers ${schemes}; this client supports ${describeSupportedSchemes()}`, sameAsset.map((c) => c.req));
     }
-    // v1 `exact` is always EIP-3009 and `upto` always Permit2; v2 `exact` names its transfer method.
-    const supported = knownScheme.filter((a) => {
-      if (version === 1 || a.scheme === 'upto') return true;
-      const m = a.extra?.assetTransferMethod;
+    // v1 `exact` is always EIP-3009 and `upto` always Permit2; v2 `exact` names its transfer method
+    // (none means EIP-3009, the x402 default).
+    const supported = knownScheme.filter(({ req }) => {
+      if (version === 1 || req.scheme === 'upto') return true;
+      const m = req.extra?.assetTransferMethod;
       return m === undefined || m === 'permit2' || m === 'eip3009';
     });
     if (supported.length === 0) {
-      const methods = [...new Set(knownScheme.map((a) => String(a.extra?.assetTransferMethod)))].join(', ');
-      throw new RadiusPaymentError('unsupported_transfer_method', `Server requires assetTransferMethod ${methods}; this client supports permit2 and eip3009`, knownScheme);
+      const methods = [...new Set(knownScheme.map(({ req }) => String(req.extra?.assetTransferMethod)))].join(', ');
+      throw new RadiusPaymentError('unsupported_transfer_method', `Server requires assetTransferMethod ${methods}; this client supports permit2 and eip3009`, knownScheme.map((c) => c.req));
     }
-    // Server order is the server's preference (x402 clients honour it; so did radius-cli): take the
-    // first offer within the cap. Amounts are not compared across schemes — an `upto` amount is a
-    // ceiling, not a price.
-    const priced = supported.map((req) => ({ req, amount: amountOf(version, req) }));
-    const affordable = priced.find((p) => p.amount <= cap);
+    // Take the first offer within the cap. Amounts are not compared across schemes or networks —
+    // an `upto` amount is a ceiling, not a price.
+    const priced = supported.map((c) => ({ ...c, amount: amountOf(version, c.req) }));
+    const affordable = priced.find((p) => p.amount <= p.rail.cap);
     if (!affordable) {
-      const { req: first, amount: firstAmount } = priced[0];
-      const offered = formatAmount(firstAmount, network.asset.decimals, network.asset.symbol);
-      const limit = formatAmount(cap, network.asset.decimals, network.asset.symbol);
+      const { req: first, amount: firstAmount, rail } = priced[0];
+      const { decimals, symbol } = rail.network.asset;
+      const offered = formatAmount(firstAmount, decimals, symbol);
+      const limit = formatAmount(rail.cap, decimals, symbol);
       throw new RadiusPaymentError(
         'price_above_limit',
         first.scheme === 'upto' ? `Offer authorises up to ${offered}, exceeding maxPerRequest ${limit}` : `Offer ${offered} exceeds maxPerRequest ${limit}`,
         priced.map((p) => p.req),
       );
     }
-    const { req, amount } = affordable;
+    const { req, amount, rail } = affordable;
+    const { network } = rail;
     const scheme = req.scheme as PaymentScheme;
     if (typeof req.payTo !== 'string' || !isAddress(req.payTo)) {
       throw new RadiusPaymentError('invalid_challenge', `Offer payTo is not an address (got ${JSON.stringify(req.payTo)})`, req);
@@ -377,7 +510,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
       amountFormatted: formatAmount(amount, network.asset.decimals, network.asset.symbol),
       asset: req.asset as Address,
       payTo: req.payTo as Address,
-      network: req.network,
+      network,
       resource,
       requirements: req,
       transferMethod: scheme === 'upto' || (version === 2 && req.extra?.assetTransferMethod === 'permit2') ? 'permit2' : 'eip3009',
@@ -387,13 +520,13 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
 
   /**
    * The requirement handed to @x402/evm for signing. Fills in what the schemes need but a server may
-   * omit: the configured asset's EIP-712 domain (EIP-3009 / EIP-2612), a signing window, and the
+   * omit: the asset's EIP-712 domain (EIP-3009 / EIP-2612), a signing window, and the
    * `extra.facilitator` alias radius-cli accepts for `facilitatorAddress`. Only the signer sees this;
    * the untouched requirement is what gets echoed back to the server.
    */
   const forSigning = (offer: PaymentOffer): PaymentRequirements => {
     const req = offer.requirements;
-    const extra: Record<string, unknown> = { name: network.asset.name, version: network.asset.version, ...req.extra };
+    const extra: Record<string, unknown> = { name: offer.network.asset.name, version: offer.network.asset.version, ...req.extra };
     if (extra.facilitatorAddress === undefined && typeof extra.facilitator === 'string') extra.facilitatorAddress = extra.facilitator;
     const t = req.maxTimeoutSeconds;
     const maxTimeoutSeconds = typeof t === 'number' && t > 0 ? Math.min(Math.floor(t), MAX_TIMEOUT_SECONDS) : MAX_TIMEOUT_SECONDS;
@@ -403,13 +536,14 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
   /** Permit2 needs an ERC-20 allowance. Sponsored: the scheme signs a permit. Unsponsored: approve on-chain once. */
   const ensureAllowance = async (offer: PaymentOffer): Promise<void> => {
     if (offer.transferMethod !== 'permit2' || offer.gasSponsored) return;
-    const current = await permit2Allowance();
+    const wallet = wallets.get(railFor(offer.network)!)!;
+    const current = await wallet.permit2Allowance();
     if (current >= BigInt(offer.amount)) return;
-    const request: ApprovalRequest = { reason: 'payment', asset: network.asset.address, spender: PERMIT2_ADDRESS, amount: maxUint256, currentAllowance: current, offer };
+    const request: ApprovalRequest = { reason: 'payment', network: offer.network, asset: offer.network.asset.address, spender: PERMIT2_ADDRESS, amount: maxUint256, currentAllowance: current, offer };
     if ((options.permit2Approval ?? 'auto') === 'never') {
       throw new RadiusPaymentError('approval_required', `Permit2 allowance ${current} is below ${offer.amount} and the facilitator does not sponsor approvals; call approvePermit2() or set permit2Approval: 'auto'`, request);
     }
-    await sendApproval(request, 'Permit2 approval');
+    await wallet.sendApproval(request, 'Permit2 approval');
   };
 
   /**
@@ -443,7 +577,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
   const decodeReceipt = (header: string, offer: PaymentOffer): PaymentReceipt | undefined => {
     let receipt: PaymentReceipt;
     try {
-      receipt = decodePaymentReceipt(header, network);
+      receipt = decodePaymentReceipt(header, offer.network);
     } catch (e) {
       if (offer.scheme === 'upto') throw new RadiusPaymentError('invalid_receipt', `Invalid upto payment response: ${(e as Error).message}`, e);
       return undefined;
@@ -530,54 +664,22 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     return second;
   };
 
-  const balance = async () => {
-    const atomic = await publicClient.readContract({ address: network.asset.address, abi: ERC20_ABI, functionName: 'balanceOf', args: [account.address] });
-    return { atomic, formatted: formatAmount(atomic, network.asset.decimals, network.asset.symbol) };
-  };
-
-  const balances = () => getBalances(publicClient, { address: account.address, network });
-
-  const send = (to: Address, amount: Price): Promise<TxResult> => {
-    const atomic = BigInt(resolvePrice(amount, network.asset).amount);
-    return sendTx('send', (wc) =>
-      wc.writeContract({ address: network.asset.address, abi: ERC20_ABI, functionName: 'transfer', args: [to, atomic], chain, account: wc.account! }),
-    );
-  };
-
-  const fund = async (): Promise<FaucetResult> => {
-    if (!network.faucetUrl) throw new RadiusPaymentError('faucet', `No faucet configured for network ${network.name}`);
-    const signMessage = (account as { signMessage?: (a: { message: string }) => Promise<`0x${string}`> }).signMessage;
-    if (typeof signMessage !== 'function') throw new RadiusPaymentError('faucet', 'fund() needs a signer with signMessage (EIP-191), e.g. a private key or viem local account');
-    const base = network.faucetUrl.replace(/\/+$/, '');
-    const token = network.asset.symbol;
-    const challenge = (await (await fetch(`${base}/challenge/${account.address}?token=${token}`)).json()) as { message?: string };
-    if (!challenge.message) throw new RadiusPaymentError('faucet', 'Faucet returned no challenge message', challenge);
-    const signature = await signMessage.call(account, { message: challenge.message });
-    const res = await fetch(`${base}/drip`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ address: account.address, token, signature }),
-    });
-    const raw = (await res.json().catch(() => ({}))) as { success?: boolean; amount?: string; tx_hash?: `0x${string}`; error?: { code?: string; message?: string; retry_after_ms?: number } };
-    if (!res.ok || raw.success !== true) {
-      throw new RadiusPaymentError('faucet', `Faucet drip failed: ${raw.error?.code ?? res.status} ${raw.error?.message ?? ''}`.trim(), raw);
+  const on = (id: string | PaymentNetwork): NetworkWallet => {
+    const rail = railFor(id);
+    if (!rail) {
+      const name = typeof id === 'string' ? id : `${id.name} (${id.network})`;
+      throw new RadiusPaymentError('config', `${name} is not one of this client's networks: ${describeNetworks()}`);
     }
-    return { success: true, amount: raw.amount, txHash: raw.tx_hash, raw };
+    const { sendApproval: _internal, ...wallet } = wallets.get(rail)!;
+    return wallet;
   };
 
+  const primary = on(networks[0]);
   return Object.assign(paidFetch, {
+    ...primary,
     address: account.address,
-    network,
-    maxPerRequest: cap,
-    balance,
-    balances,
-    permit2Allowance,
-    approvePermit2,
-    send,
-    allowance,
-    approve,
-    getSettlement: (txHash: `0x${string}`) => getSettlement(network, txHash, publicClient),
-    fund,
+    networks,
+    on,
     client,
   });
 }
