@@ -1,6 +1,22 @@
 import { defineChain } from 'viem';
 import { describe, expect, it } from 'vitest';
-import { defineRadiusNetwork, radiusMainnet, radiusMainnetChain, radiusTestnet, radiusTestnetChain, resolveNetwork, SBC } from '../src/networks.js';
+import {
+  baseChain,
+  baseMainnet,
+  baseSepolia,
+  baseSepoliaChain,
+  definePaymentNetwork,
+  isNetworkId,
+  presetForChainId,
+  radiusMainnet,
+  radiusMainnetChain,
+  radiusTestnet,
+  radiusTestnetChain,
+  resolveNetwork,
+  SBC,
+  USDC_BASE,
+  USDC_BASE_SEPOLIA,
+} from '../src/networks.js';
 
 describe('viem chains', () => {
   it('describe mainnet and testnet', () => {
@@ -32,17 +48,54 @@ describe('viem chains', () => {
       expect(n.explorerUrl).toBe(n.chain.blockExplorers?.default.url);
       expect(n.testnet).toBe(n.chain.testnet ?? false);
     }
-    expect(radiusMainnet).toMatchObject({ name: 'mainnet', chainId: 723487, network: 'eip155:723487', testnet: false, facilitatorUrl: 'https://facilitator.radiustech.xyz' });
-    expect(radiusTestnet).toMatchObject({ name: 'testnet', chainId: 72344, network: 'eip155:72344', testnet: true, facilitatorUrl: 'https://facilitator.testnet.radiustech.xyz' });
+    expect(radiusMainnet).toMatchObject({ name: 'radius', chainId: 723487, network: 'eip155:723487', testnet: false, radius: true, facilitatorUrl: 'https://facilitator.radiustech.xyz' });
+    expect(radiusTestnet).toMatchObject({ name: 'radius-testnet', chainId: 72344, network: 'eip155:72344', testnet: true, radius: true, facilitatorUrl: 'https://facilitator.testnet.radiustech.xyz' });
+  });
+
+  it('describe Base and Base Sepolia, with USDC and no Radius features', () => {
+    expect(baseChain).toMatchObject({ id: 8453, nativeCurrency: { symbol: 'ETH', decimals: 18 }, rpcUrls: { default: { http: ['https://mainnet.base.org'] } } });
+    expect(baseSepoliaChain).toMatchObject({ id: 84532, testnet: true, rpcUrls: { default: { http: ['https://sepolia.base.org'] } } });
+    expect(baseMainnet).toMatchObject({ name: 'base', network: 'eip155:8453', asset: USDC_BASE, radius: false, testnet: false, v1Names: ['base'] });
+    expect(baseMainnet.facilitatorUrl).toBeUndefined();
+    expect(baseMainnet.faucetUrl).toBeUndefined();
+    expect(baseSepolia).toMatchObject({ name: 'base-sepolia', network: 'eip155:84532', asset: USDC_BASE_SEPOLIA, radius: false, testnet: true, v1Names: ['base-sepolia'], facilitatorUrl: 'https://x402.org/facilitator' });
+    // The EIP-712 domains differ between the two USDC deployments.
+    expect(USDC_BASE).toMatchObject({ address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', name: 'USD Coin', version: '2', decimals: 6 });
+    expect(USDC_BASE_SEPOLIA).toMatchObject({ address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', name: 'USDC', version: '2', decimals: 6 });
+  });
+});
+
+describe('preset lookup', () => {
+  it('finds presets by chain id and matches CAIP-2 ids and x402 v1 names', () => {
+    expect(presetForChainId(723487)).toBe(radiusMainnet);
+    expect(presetForChainId(84532)).toBe(baseSepolia);
+    expect(presetForChainId(1)).toBeUndefined();
+    expect(isNetworkId(baseMainnet, 'eip155:8453')).toBe(true);
+    expect(isNetworkId(baseMainnet, 'base')).toBe(true);
+    expect(isNetworkId(baseMainnet, 'base-sepolia')).toBe(false);
+    expect(isNetworkId(radiusMainnet, 'radius')).toBe(false);
   });
 });
 
 describe('resolveNetwork', () => {
-  it('defaults to mainnet', () => {
+  it('defaults to Radius mainnet', () => {
     expect(resolveNetwork()).toBe(radiusMainnet);
     expect(resolveNetwork('mainnet').network).toBe('eip155:723487');
     expect(resolveNetwork('testnet').network).toBe('eip155:72344');
     expect(resolveNetwork(radiusTestnet)).toBe(radiusTestnet);
+  });
+  it('resolves preset ids, with mainnet/testnet as Radius aliases', () => {
+    expect(resolveNetwork('radius')).toBe(radiusMainnet);
+    expect(resolveNetwork('radius-testnet')).toBe(radiusTestnet);
+    expect(resolveNetwork('base')).toBe(baseMainnet);
+    expect(resolveNetwork('base-sepolia')).toBe(baseSepolia);
+    expect(() => resolveNetwork('polygon' as never)).toThrow(/unknown network 'polygon'/);
+    expect(() => resolveNetwork('toString' as never)).toThrow(/unknown network/);
+  });
+  it('keeps Radius and v1 fields through overrides', () => {
+    const n = resolveNetwork('base', { rpcUrl: 'https://base.example/KEY' });
+    expect(n).toMatchObject({ name: 'base', rpcUrl: 'https://base.example/KEY', radius: false, v1Names: ['base'], asset: USDC_BASE });
+    expect(resolveNetwork('testnet', { rpcUrl: 'https://x' }).radius).toBe(true);
   });
   it('applies overrides without mutating presets', () => {
     const n = resolveNetwork('testnet', { rpcUrl: 'https://rpc.testnet.radiustech.xyz/KEY/', asset: { symbol: 'USDX' } });
@@ -71,41 +124,30 @@ describe('resolveNetwork', () => {
   });
 });
 
-describe('defineRadiusNetwork', () => {
-  it('builds custom instances from chainId + rpcUrl', () => {
-    const n = defineRadiusNetwork({ chainId: 4242, rpcUrl: 'http://rpc/', facilitatorUrl: 'http://fac/', explorerUrl: 'http://explorer', asset: { address: '0x1111111111111111111111111111111111111111', symbol: 'TST' } });
-    expect(n.network).toBe('eip155:4242');
-    expect(n.chainId).toBe(4242);
-    expect(n.name).toBe('radius-4242');
-    expect(n.facilitatorUrl).toBe('http://fac');
-    expect(n.rpcUrl).toBe('http://rpc');
-    expect(n.explorerUrl).toBe('http://explorer');
-    expect(n.testnet).toBe(true);
-    expect(n.asset).toMatchObject({ symbol: 'TST', decimals: 6, name: 'Stable Coin' });
-    expect(n.chain).toMatchObject({ id: 4242, name: 'radius-4242', testnet: true, rpcUrls: { default: { http: ['http://rpc'] } }, nativeCurrency: { symbol: 'RUSD' } });
-    expect(n.chain.blockExplorers?.default.url).toBe('http://explorer');
-    expect(() => defineRadiusNetwork({ chainId: 0, rpcUrl: 'x', facilitatorUrl: 'y' })).toThrow();
-    expect(() => defineRadiusNetwork({ chainId: 1, rpcUrl: '', facilitatorUrl: 'y' })).toThrow(/rpcUrl/);
-    expect(() => defineRadiusNetwork({ chainId: 1, rpcUrl: 'x', facilitatorUrl: '' })).toThrow(/facilitatorUrl/);
-  });
-  it('builds custom instances from a viem chain', () => {
+describe('definePaymentNetwork', () => {
+  const asset = { address: '0x1111111111111111111111111111111111111111', symbol: 'TST', decimals: 6, name: 'Test', version: '1' } as const;
+  it('builds any EVM network from a viem chain and its asset', () => {
     const chain = defineChain({
       id: 5151,
-      name: 'Radius Dev',
-      nativeCurrency: { name: 'Radius USD', symbol: 'RUSD', decimals: 18 },
+      name: 'Dev Chain',
+      nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
       rpcUrls: { default: { http: ['http://dev-rpc'] } },
       blockExplorers: { default: { name: 'Dev Explorer', url: 'http://dev-explorer' } },
       testnet: true,
     });
-    const n = defineRadiusNetwork({ chain, facilitatorUrl: 'http://fac' });
+    const n = definePaymentNetwork({ chain, asset, facilitatorUrl: 'http://fac/' });
     expect(n.chain).toBe(chain);
-    expect(n).toMatchObject({ name: 'Radius Dev', chainId: 5151, network: 'eip155:5151', rpcUrl: 'http://dev-rpc', explorerUrl: 'http://dev-explorer', testnet: true, asset: SBC });
-    const overridden = defineRadiusNetwork({ chain, name: 'dev', rpcUrl: 'http://other-rpc/', facilitatorUrl: 'http://fac' });
-    expect(overridden.name).toBe('dev');
-    expect(overridden.rpcUrl).toBe('http://other-rpc');
+    expect(n).toMatchObject({ name: 'Dev Chain', chainId: 5151, network: 'eip155:5151', rpcUrl: 'http://dev-rpc', explorerUrl: 'http://dev-explorer', testnet: true, asset, radius: false, v1Names: [], facilitatorUrl: 'http://fac' });
+    const overridden = definePaymentNetwork({ chain, asset, name: 'dev', rpcUrl: 'http://other-rpc/', radius: true, v1Names: ['dev'] });
+    expect(overridden).toMatchObject({ name: 'dev', rpcUrl: 'http://other-rpc', radius: true, v1Names: ['dev'] });
+    expect(overridden.facilitatorUrl).toBeUndefined();
     expect(overridden.chain.rpcUrls.default.http).toEqual(['http://other-rpc']);
     expect(overridden.chain.blockExplorers?.default.name).toBe('Dev Explorer');
     expect(chain.rpcUrls.default.http).toEqual(['http://dev-rpc']);
-    expect(resolveNetwork({ chain: radiusMainnetChain, facilitatorUrl: 'http://fac' }).network).toBe('eip155:723487');
+    expect(resolveNetwork({ chain: radiusMainnetChain, asset: SBC }).network).toBe('eip155:723487');
+  });
+  it('requires a chain and an asset', () => {
+    expect(() => definePaymentNetwork({ chain: undefined as never, asset })).toThrow(/chain/);
+    expect(() => definePaymentNetwork({ chain: radiusMainnetChain, asset: undefined as never })).toThrow(/asset/);
   });
 });

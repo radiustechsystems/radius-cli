@@ -1,7 +1,8 @@
 /**
  * Common ERC-20 interactions as viem actions: metadata, allowance, approve, transfer,
- * transferFrom, and Transfer-event queries. On the Radius presets the default token is the
- * network's payment asset (SBC); on any other chain pass `token`, or `erc20Actions({ network })`.
+ * transferFrom, and Transfer-event queries. On the preset networks the default token is the
+ * network's payment asset (SBC on Radius, USDC on Base); on any other chain pass `token`, or
+ * `erc20Actions({ network })`.
  *
  * Reads take any viem `Client`; writes take a viem WalletClient (a client with an `account`)
  * and, like `createRadiusFetch().send()`, wait for the receipt: Radius finality is sub-second,
@@ -27,7 +28,7 @@ import { erc20Abi, formatUnits, getAddress, parseUnits, type Account, type Addre
 import { getBlockNumber, getLogs, readContract, waitForTransactionReceipt, writeContract } from 'viem/actions';
 import type { BalanceClient, BalanceToken } from './balances.js';
 import { RadiusPaymentError } from './errors.js';
-import { radiusNetworkForChainId, resolveNetwork, type NetworkInput } from './networks.js';
+import { presetForChainId, resolveNetwork, type NetworkInput } from './networks.js';
 
 /** A viem client that can send transactions: `createWalletClient({ account, chain, transport })`. */
 export type TokenWalletClient = Client<Transport, Chain | undefined, Account | undefined>;
@@ -151,16 +152,16 @@ function addressOf(token: TokenInput): Address {
 
 /**
  * The token an action works on: the argument, else the payment asset of the client's chain when
- * that chain is a Radius preset. Any other chain has no default: a custom `RadiusNetwork`'s asset
+ * that chain is a preset (SBC on Radius, USDC on Base). Any other chain has no default: a custom network's asset
  * is not visible from `client.chain`, and silently using SBC's address would send `approve` /
  * `transfer` to the wrong contract. `what` names the action for the error message.
  */
 export function resolveToken(client: BalanceClient, token: TokenInput | undefined, what: string): TokenInput {
   if (token) return token;
-  const preset = radiusNetworkForChainId(client.chain?.id);
+  const preset = presetForChainId(client.chain?.id);
   if (preset) return preset.asset;
   const chain = client.chain ? `chain ${client.chain.id}` : 'a client with no chain';
-  throw new RadiusPaymentError('config', `${what}: no token given and ${chain} is not a Radius preset, so there is no default token. Pass { token }, or extend the client with erc20Actions({ network }) or erc20Actions({ token: network.asset }).`);
+  throw new RadiusPaymentError('config', `${what}: no token given and ${chain} is not a preset network, so there is no default token. Pass { token }, or extend the client with erc20Actions({ network }) or erc20Actions({ token: network.asset }).`);
 }
 
 /**
@@ -403,8 +404,8 @@ export interface Erc20ActionsConfig {
   token?: TokenInput;
   /**
    * Default token = this network's payment asset (like `radiusActions({ network })`); it must be
-   * the chain the client is on. Without `token` or `network`, only the Radius presets (mainnet,
-   * testnet) have a default; a custom chain throws a `config` error until one is given.
+   * the chain the client is on. Without `token` or `network`, only the preset networks have a
+   * default; any other chain throws a `config` error until one is given.
    */
   network?: NetworkInput;
 }

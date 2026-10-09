@@ -1,6 +1,6 @@
 import type { AssetAmount, Network, PaymentRequirements, Price as X402Price, SchemeNetworkServer, SchemePaymentRequiredContext } from '@x402/core/types';
 import { resolvePrice, type Price } from '../amounts.js';
-import type { RadiusNetwork } from '../networks.js';
+import type { PaymentNetwork } from '../networks.js';
 
 export type SettleMode = 'before' | 'after';
 /** 'auto': declare gas sponsoring iff the facilitator's /supported lists it. */
@@ -26,7 +26,7 @@ export class RadiusExactScheme implements SchemeNetworkServer {
   private facilitatorExtensions: string[] | undefined;
 
   constructor(
-    private readonly network: RadiusNetwork,
+    private readonly network: PaymentNetwork,
     settle: SettleMode = 'before',
     private readonly gasSponsoring: GasSponsoringMode = 'auto',
   ) {
