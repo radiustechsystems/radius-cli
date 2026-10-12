@@ -102,6 +102,13 @@ export interface RadiusFetchOptions extends NetworkOverrides {
    * any total unless you enforce one outside the SDK.
    */
   maxPerRequest: Price;
+  /**
+   * When a 402 has payable offers on more than one of `networks`, read the payer's balance on each
+   * and pay where it is funded, keeping preference order among funded networks (default true).
+   * Costs one `balanceOf` per candidate network, only when there are several. `false` keeps pure
+   * preference order. A single candidate network is never checked: a short balance fails at settlement.
+   */
+  preferFunded?: boolean;
   /** Approve or decline an offer before signing. Return false to decline. */
   onPaymentRequired?: (offer: PaymentOffer) => boolean | Promise<boolean>;
   /**
@@ -208,6 +215,13 @@ function isWalletClient(v: unknown): v is WalletClient {
 
 function isTxAccount(v: unknown): v is Account {
   return typeof v === 'object' && v !== null && typeof (v as Account).signTransaction === 'function';
+}
+
+/** An offer that passed every check but the balance one; built into a `PaymentOffer` only once chosen. */
+interface Candidate {
+  rail: Rail;
+  amount: bigint;
+  build: () => PaymentOffer;
 }
 
 /** Per-network state: clients, x402 signer, cap. Built once, up front; nothing here does I/O. */
@@ -332,7 +346,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     client.register(network.network, exact).register(network.network, new UptoEvmScheme(signer, { rpcUrl: network.rpcUrl })).registerV1(network.network, v1);
     for (const name of network.v1Names) client.registerV1(name, v1);
   }
-  // Backstop; the primary checks live in `chooseOffer` so errors are typed.
+  // Backstop; the primary checks live in `x402Candidates` so errors are typed.
   client.setSpendControls({
     maxAmountPerPayment: false,
     allowedAssets: rails.flatMap(({ network, cap }) =>
@@ -440,7 +454,12 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
   const describeNetworks = () => rails.map(({ network }) => `${network.network} (${network.name})`).join(', ');
   const describeAssets = () => rails.map(({ network }) => `${network.asset.symbol} (${network.asset.address}) on ${network.network}`).join(', ');
 
-  const chooseOffer = (pr: PaymentRequired, requestUrl: string): PaymentOffer => {
+  /**
+   * The offers of an x402 challenge this client could pay, best first: networks in the client's
+   * order, server order within each, only those within the cap. Each is built (and its payTo /
+   * facilitator checked) only if chosen. Throws when there is none, naming the first check that failed.
+   */
+  const x402Candidates = (pr: PaymentRequired, requestUrl: string): Candidate[] => {
     const version = pr.x402Version;
     if (version !== 1 && version !== 2) throw new RadiusPaymentError('invalid_challenge', `Unsupported x402 version ${String(version)}`);
     const accepts = pr.accepts as AnyPaymentRequirements[] | undefined;
@@ -472,11 +491,11 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
       const methods = [...new Set(knownScheme.map(({ req }) => String(req.extra?.assetTransferMethod)))].join(', ');
       throw new RadiusPaymentError('unsupported_transfer_method', `Server requires assetTransferMethod ${methods}; this client supports permit2 and eip3009`, knownScheme.map((c) => c.req));
     }
-    // Take the first offer within the cap. Amounts are not compared across schemes or networks —
-    // an `upto` amount is a ceiling, not a price.
+    // Offers within the cap. Amounts are not compared across schemes or networks — an `upto`
+    // amount is a ceiling, not a price.
     const priced = supported.map((c) => ({ ...c, amount: amountOf(version, c.req) }));
-    const affordable = priced.find((p) => p.amount <= p.rail.cap);
-    if (!affordable) {
+    const affordable = priced.filter((p) => p.amount <= p.rail.cap);
+    if (affordable.length === 0) {
       const { req: first, amount: firstAmount, rail } = priced[0];
       const { decimals, symbol } = rail.network.asset;
       const offered = formatAmount(firstAmount, decimals, symbol);
@@ -487,8 +506,11 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
         priced.map((p) => p.req),
       );
     }
-    const { req, amount, rail } = affordable;
-    const { network } = rail;
+    return affordable.map(({ req, amount, rail }) => ({ rail, amount, build: () => x402Offer(pr, requestUrl, req, amount, rail.network) }));
+  };
+
+  const x402Offer = (pr: PaymentRequired, requestUrl: string, req: AnyPaymentRequirements, amount: bigint, network: PaymentNetwork): PaymentOffer => {
+    const version = pr.x402Version as 1 | 2;
     const scheme = req.scheme as PaymentScheme;
     if (typeof req.payTo !== 'string' || !isAddress(req.payTo)) {
       throw new RadiusPaymentError('invalid_challenge', `Offer payTo is not an address (got ${JSON.stringify(req.payTo)})`, req);
@@ -594,6 +616,33 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     return receipt;
   };
 
+  /**
+   * The candidate to pay. With `preferFunded` (default) and candidates on more than one network,
+   * the payer's balance on each is read (in parallel, once per network) and the first candidate it
+   * covers wins; a network whose balance could not be read comes after funded ones. One network:
+   * no reads, the first candidate (a short balance then fails at settlement, as before).
+   */
+  const pickCandidate = async (candidates: Candidate[]): Promise<PaymentOffer> => {
+    const candidateRails = [...new Set(candidates.map((c) => c.rail))];
+    if (options.preferFunded === false || candidateRails.length < 2) return candidates[0].build();
+    const read = await Promise.allSettled(candidateRails.map((rail) => wallets.get(rail)!.balance()));
+    const balanceOf = new Map(candidateRails.map((rail, i) => [rail, read[i].status === 'fulfilled' ? read[i].value.atomic : undefined]));
+    const funded = candidates.find((c) => balanceOf.get(c.rail) !== undefined && balanceOf.get(c.rail)! >= c.amount);
+    const unknown = candidates.find((c) => balanceOf.get(c.rail) === undefined);
+    const chosen = funded ?? unknown;
+    if (chosen) return chosen.build();
+    const shortfalls = candidateRails.map((rail) => {
+      const need = candidates.find((c) => c.rail === rail)!.amount;
+      const { decimals, symbol } = rail.network.asset;
+      return { network: rail.network, need, have: balanceOf.get(rail)!, text: `${formatAmount(need, decimals, symbol)} on ${rail.network.name} (have ${formatAmount(balanceOf.get(rail)!, decimals, symbol)})` };
+    });
+    throw new RadiusPaymentError(
+      'insufficient_balance',
+      `Insufficient balance: need ${shortfalls.map((s) => s.text).join(' or ')}`,
+      shortfalls.map(({ network, need, have }) => ({ network, need, have })),
+    );
+  };
+
   const paidFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = new Request(input, init);
     if (request.headers.has('payment-signature') || request.headers.has('x-payment')) {
@@ -605,7 +654,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
     if (first.status !== 402) return first;
 
     const paymentRequired = await readChallenge(first);
-    const offer = chooseOffer(paymentRequired, request.url);
+    const offer = await pickCandidate(x402Candidates(paymentRequired, request.url));
     if (options.onPaymentRequired && !(await options.onPaymentRequired(offer))) {
       throw new RadiusPaymentError('declined', `Payment of ${offer.amountFormatted} to ${offer.payTo} declined`, offer);
     }

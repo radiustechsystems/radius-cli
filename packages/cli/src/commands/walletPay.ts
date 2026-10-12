@@ -363,6 +363,10 @@ async function reportPaymentError(e: RadiusPaymentError, ctx: ErrorContext): Pro
       }
       return 1;
     }
+    case 'insufficient_balance':
+      // Several networks offered, none funded: the SDK read each balance before signing.
+      err.write(`x402: ${e.message.replace(/^Insufficient/, 'insufficient')}.\n`);
+      return 1;
     case 'redirect_refused':
       err.write('x402: server redirected the paid request cross-origin; refusing to replay the payment header.\n');
       return 1;

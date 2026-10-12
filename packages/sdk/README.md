@@ -173,7 +173,7 @@ const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transa
 
 - Pays only on the configured network(s), each in its asset; anything else throws a
   `RadiusPaymentError` with a `code` (`network_mismatch`, `asset_mismatch`, `no_compatible_offer`,
-  `price_above_limit`, `declined`, `payment_rejected`, …) before anything is signed. Of the
+  `price_above_limit`, `insufficient_balance`, `declined`, `payment_rejected`, …) before anything is signed. Of the
   compatible offers the first one within `maxPerRequest` is taken: networks in your order, offers
   on a network in the server's order (its preference), the same as `radius-cli`.
   `payment_rejected` and `invalid_challenge` carry the server's `Response` in `details.response`
@@ -181,9 +181,11 @@ const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transa
 - Several networks: `networks: ['mainnet', 'base']` instead of `network` pays on whichever of them
   the server accepts, preferring the first. `offer.network` says which one an offer is on (its
   `asset` has the symbol and decimals), a USD `maxPerRequest` is converted for each network's
-  asset, and `payFetch.on('base')` gives the wallet helpers below for that network. The choice is
-  by your order, not by balance: a wallet funded only on its second network should list that one
-  first. An injected wallet (MetaMask) signs only for the chain it is connected to, so it takes
+  asset, and `payFetch.on('base')` gives the wallet helpers below for that network. When the
+  server accepts more than one of them, the payer's balance on each is read first and the first
+  network in your order that covers the price wins, so a wallet funded only on Base still pays a
+  server that also takes Radius; none funded throws `insufficient_balance`, naming each.
+  `preferFunded: false` skips the reads and keeps pure preference order. An injected wallet (MetaMask) signs only for the chain it is connected to, so it takes
   that one network.
 - The signing window (`validBefore` / Permit2 `deadline`) is the server's `maxTimeoutSeconds`
   capped at 600 s: an authorisation the facilitator never settles stays redeemable until then.

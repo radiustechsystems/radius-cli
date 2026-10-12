@@ -3,6 +3,7 @@ export type RadiusPaymentErrorCode =
   | 'network_mismatch'
   | 'asset_mismatch'
   | 'price_above_limit'
+  | 'insufficient_balance'
   | 'declined'
   | 'invalid_challenge'
   | 'payment_rejected'

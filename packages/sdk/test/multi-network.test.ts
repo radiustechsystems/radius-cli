@@ -2,7 +2,7 @@
  * Paying and charging on several networks: Radius plus Base Sepolia. Nothing touches a chain or a
  * real facilitator: sellers are mock fetches, facilitator HTTP is stubbed on the global fetch.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { recoverTypedDataAddress, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { decodePaymentRequiredHeader, encodePaymentSignatureHeader } from '@x402/core/http';
@@ -87,7 +87,25 @@ const rejects = (p: Promise<unknown>, code: string, message?: RegExp) =>
 
 afterEach(() => vi.restoreAllMocks());
 
+/** Payer balances per RPC host, served to `balanceOf` calls; a missing host fails the read. */
+let balances: Record<string, bigint | undefined>;
+const balanceReads: string[] = [];
+
 describe('createRadiusFetch on several networks', () => {
+  beforeEach(() => {
+    balances = { [new URL(radiusTestnet.rpcUrl).host]: 10n ** 18n, [new URL(baseSepolia.rpcUrl).host]: 10n ** 6n };
+    balanceReads.length = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const host = new URL(input instanceof Request ? input.url : String(input)).host;
+      const { id, method } = JSON.parse(String(init?.body));
+      if (method !== 'eth_call') throw new Error(`unexpected RPC ${method}`);
+      balanceReads.push(host);
+      const balance = balances[host];
+      if (balance === undefined) return Response.json({ jsonrpc: '2.0', id, error: { code: 3, message: 'execution reverted' } });
+      return Response.json({ jsonrpc: '2.0', id, result: `0x${balance.toString(16).padStart(64, '0')}` });
+    });
+  });
+
   it('pays a Base offer in USDC, signed for the Base Sepolia USDC domain', async () => {
     const { offer, decoded } = await pay(v2(baseOffer()), {});
     expect(offer.network).toBe(baseSepolia);
@@ -107,6 +125,42 @@ describe('createRadiusFetch on several networks', () => {
   it("prefers the client's network order, whatever order the server lists them in", async () => {
     expect((await pay(v2(baseOffer(), radiusOffer()), {})).offer.network).toBe(radiusTestnet);
     expect((await pay(v2(radiusOffer(), baseOffer()), { networks: ['base-sepolia', 'testnet'] })).offer.network).toBe(baseSepolia);
+  });
+
+  it('pays where the wallet is funded when the preferred network is not', async () => {
+    balances[new URL(radiusTestnet.rpcUrl).host] = 0n;
+    const { offer, decoded } = await pay(v2(radiusOffer(), baseOffer()), {});
+    expect(offer.network).toBe(baseSepolia);
+    expect(decoded.accepted).toEqual(baseOffer());
+    expect(balanceReads.sort()).toEqual([new URL(baseSepolia.rpcUrl).host, new URL(radiusTestnet.rpcUrl).host].sort());
+  });
+
+  it('keeps preference order among funded networks, and reads no balance with one candidate network', async () => {
+    expect((await pay(v2(radiusOffer(), baseOffer()), {})).offer.network).toBe(radiusTestnet);
+    balanceReads.length = 0;
+    expect((await pay(v2(baseOffer()), {})).offer.network).toBe(baseSepolia);
+    expect(balanceReads).toEqual([]);
+  });
+
+  it('treats a balance it could not read as possibly funded, after funded networks', async () => {
+    balances[new URL(radiusTestnet.rpcUrl).host] = undefined;
+    expect((await pay(v2(radiusOffer(), baseOffer()), {})).offer.network).toBe(baseSepolia);
+    balances[new URL(baseSepolia.rpcUrl).host] = 0n;
+    expect((await pay(v2(radiusOffer(), baseOffer()), {})).offer.network).toBe(radiusTestnet);
+  });
+
+  it('refuses before signing when no candidate network is funded, naming each', async () => {
+    balances = { [new URL(radiusTestnet.rpcUrl).host]: 0n, [new URL(baseSepolia.rpcUrl).host]: 999n };
+    const server = seller(v2(radiusOffer(), baseOffer()));
+    const payFetch = createRadiusFetch({ networks: ['testnet', 'base-sepolia'], signer: PK, maxPerRequest: '$0.01', fetch: server.fetch });
+    await rejects(payFetch(URL_), 'insufficient_balance', /need 0\.001 SBC on radius-testnet \(have 0 SBC\) or 0\.001 USDC on base-sepolia \(have 0\.000999 USDC\)/);
+    expect(server.requests).toHaveLength(1);
+  });
+
+  it('keeps pure preference order with preferFunded: false', async () => {
+    balances[new URL(radiusTestnet.rpcUrl).host] = 0n;
+    expect((await pay(v2(radiusOffer(), baseOffer()), { preferFunded: false })).offer.network).toBe(radiusTestnet);
+    expect(balanceReads).toEqual([]);
   });
 
   it('falls through to the next network when the preferred one is over the cap', async () => {
