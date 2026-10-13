@@ -15,19 +15,6 @@
 
 /reference/eth_chainid      /reference/network  301
 
-# --- /how-to paths ---------------------------------------------------------
-
-/how-to/deploy-a-smart-contract  /build/                         301
-/how-to/subscribe-to-events      /reference/json-rpc/methods     301
-/how-to/get-testnet-tokens       /build/claim-and-transact       301
-/how-to                          /build/                         301
-/how-to/*                        /build/                         301
-
-# --- /quickstart paths -----------------------------------------------------
-
-/quickstart/python          /build/                              301
-/quickstart/*               /build/                              301
-
 # --- /concepts paths -------------------------------------------------------
 
 /concepts/ethereum-transaction-types  /reference/ethereum-compatibility  301
@@ -37,16 +24,6 @@
 # --- Old page URL redirect ------------------------------------------------
 
 /developer-resources/ethereum-divergence  /reference/ethereum-compatibility  301
-
-# --- Legacy top-level pages ------------------------------------------------
-
-/radius-testnet-access      /reference/network  301
-/radius-sdks                /reference/radius-sdk      301
-/radius-sdks/*              /reference/radius-sdk      301
-
-# --- Dead GitBook assets ---------------------------------------------------
-
-/~gitbook/*                 /                                           301
 
 # --- Skills: legacy top-level path → per-skill path ----------------------
 
@@ -120,30 +97,3 @@
 /developer-resources/radius-sdk                         /reference/radius-sdk                         301
 /developer-resources/radius-sdk/                        /reference/radius-sdk/                        301
 /developer-resources/radius-sdk.md                      /reference/radius-sdk.md                      301
-
-# --- Retired llms/ essays (2026-10) ----------------------------------------
-
-/llms/about                                             /                                             301
-/llms/about/                                            /                                             301
-/llms/about.md                                          /index.md                                     301
-/llms/agentic-payment-stack                             /why-radius                                   301
-/llms/agentic-payment-stack/                            /why-radius/                                  301
-/llms/agentic-payment-stack.md                          /why-radius.md                                301
-/llms/monetize-for-agentic-internet                     /build/accept-payments                        301
-/llms/monetize-for-agentic-internet/                    /build/accept-payments/                       301
-/llms/monetize-for-agentic-internet.md                  /build/accept-payments.md                     301
-/llms/no-native-token                                   /reference/fees                               301
-/llms/no-native-token/                                  /reference/fees/                              301
-/llms/no-native-token.md                                /reference/fees.md                            301
-/llms/settlement-layer-comparison                       /why-radius                                   301
-/llms/settlement-layer-comparison/                      /why-radius/                                  301
-/llms/settlement-layer-comparison.md                    /why-radius.md                                301
-/llms/x402-integration-guide                            /build/x402                                   301
-/llms/x402-integration-guide/                           /build/x402/                                  301
-/llms/x402-integration-guide.md                         /build/x402.md                                301
-/llms/why-radius                                        /why-radius                                   301
-/llms/why-radius/                                       /why-radius/                                  301
-/llms/why-radius.md                                     /why-radius.md                                301
-/llms/radius-vs-blockchain                              /architecture                                 301
-/llms/radius-vs-blockchain/                             /architecture/                                301
-/llms/radius-vs-blockchain.md                           /architecture.md                              301
