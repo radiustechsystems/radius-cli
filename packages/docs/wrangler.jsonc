@@ -6,6 +6,10 @@
   "name": "radius-docs",
   "main": "worker/index.ts",
   "compatibility_date": "2026-09-29",
+  // docs.radiustech.xyz shares a zone with testnet.radiustech.xyz and facilitator.testnet.radiustech.xyz. Without
+  // this flag, fetch() to a same-zone host goes straight to its origin and bypasses what serves it there, so
+  // the faucet proxy got an empty 404. With it, subrequests take the public route like any client's.
+  "compatibility_flags": ["global_fetch_strictly_public"],
   "assets": {
     "directory": "./dist/public",
     "binding": "ASSETS",
@@ -21,6 +25,5 @@
   "vars": {
     "TRY_PAY_TO": "0x0fD9Ba4a476C7f544cC9b04e54D6B7bb53F2f568",
   },
-  // The custom domain is added at cutover, after the old Pages project releases it:
-  // "routes": [{ "pattern": "docs.radiustech.xyz", "custom_domain": true }],
+  "routes": [{ "pattern": "docs.radiustech.xyz", "custom_domain": true }],
 }
