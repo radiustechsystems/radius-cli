@@ -192,7 +192,7 @@ export async function GET(request: Request): Promise<Response> {
 }
 ```
 
-Keep the paid content inside the callback. In Hono, place validation middleware before `radiusPayments`. The [`astro-seller` example](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk/examples/astro-seller) demonstrates this pattern in an API route.
+Keep the paid content inside the callback. In Hono, place validation middleware before `radiusPayments`. The [`astro-seller` example](https://github.com/radiustechsystems/tools/tree/main/packages/sdk/examples/astro-seller) demonstrates this pattern in an API route.
 
 ### Stream a paid response
 
@@ -254,4 +254,4 @@ The Radius facilitator needs no API key on mainnet or testnet. To use another fa
 - [radius-sdk reference](/reference/radius-sdk) — Every option for `radiusPayments`
 - [Make payments](/build/make-payments) — Pay x402 endpoints from an app or agent
 - [x402 payments](/build/x402) — How x402 payments work on Radius
-- [`worker-seller` example](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk/examples/worker-seller) — A runnable Worker with free and paid routes
+- [`worker-seller` example](https://github.com/radiustechsystems/tools/tree/main/packages/sdk/examples/worker-seller) — A runnable Worker with free and paid routes

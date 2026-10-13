@@ -1,11 +1,11 @@
 {
   "name": "radius-dev",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Radius Network tools for x402 payments, blockchain development, and testnet faucet",
   "author": {
     "name": "Radius Technology Systems"
   },
-  "homepage": "https://github.com/radiustechsystems/radius-cli/tree/main/plugins/radius",
-  "repository": "https://github.com/radiustechsystems/radius-cli",
+  "homepage": "https://github.com/radiustechsystems/tools/tree/main/plugins/radius",
+  "repository": "https://github.com/radiustechsystems/tools",
   "license": "MIT"
 }

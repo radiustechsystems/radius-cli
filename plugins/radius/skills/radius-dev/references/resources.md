@@ -19,7 +19,7 @@
 
 ## Radius Tools
 
-- [Radius Dev Skill for Claude Code](https://github.com/radiustechsystems/radius-cli/tree/main/plugins/radius) — Claude Code plugin
+- [Radius Dev Skill for Claude Code](https://github.com/radiustechsystems/tools/tree/main/plugins/radius) — Claude Code plugin
 
 ## EVM Development (Core Libraries)
 

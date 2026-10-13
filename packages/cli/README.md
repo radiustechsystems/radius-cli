@@ -179,7 +179,7 @@ SBC defaults to `0x33ad9e4BD16B69B5BFdED37D8B5D9fF9aba014Fb`, its address on bot
 
 ## Development
 
-This package lives in the `packages/cli` workspace of the radius-cli repository, next to `packages/sdk`.
+This package lives in the `packages/cli` workspace of the `tools` repository, next to `packages/sdk`.
 
 ```bash
 pnpm install                     # at the repository root

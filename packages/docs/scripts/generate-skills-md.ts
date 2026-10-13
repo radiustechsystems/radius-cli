@@ -51,7 +51,7 @@ const PUBLIC_DIR = join(REPO_ROOT, 'public');
 const SKILLS_OUTPUT_BASE = join(PUBLIC_DIR, 'skills');
 
 /** Canonical GitHub URL for the repo holding the skills */
-const SKILLS_REPO_URL = 'https://github.com/radiustechsystems/radius-cli';
+const SKILLS_REPO_URL = 'https://github.com/radiustechsystems/tools';
 
 // ---------------------------------------------------------------------------
 // Marketplace manifest (read from .claude-plugin/marketplace.json)

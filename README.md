@@ -30,7 +30,7 @@ does not duplicate the plugin version.
 In Claude Code, install from this repository:
 
 ```text
-/plugin marketplace add radiustechsystems/radius-cli
+/plugin marketplace add radiustechsystems/tools
 /plugin install radius-dev@radius-cli
 ```
 

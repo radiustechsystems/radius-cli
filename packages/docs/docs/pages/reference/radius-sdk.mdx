@@ -9,10 +9,10 @@ import { TESTNET_CHAIN_ID, MAINNET_CHAIN_ID, STABLECOIN, NATIVE_TOKEN } from '..
 
 `radius-sdk` accepts and makes [x402 v2](/build/x402) payments on Radius. It defaults to {STABLECOIN}, the Radius facilitator, and mainnet. It can also pay and charge in USDC on Base or any other EVM network ([Networks](#networks)), and speak [MPP](#mpp) alongside x402. For task guides, see [Accept payments](/build/accept-payments) and [Make payments](/build/make-payments).
 
-Source, changelog, and examples: [`radiustechsystems/radius-cli/packages/sdk`](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk). `radius-cli wallet pay` uses the same client.
+Source, changelog, and examples: [`radiustechsystems/tools/packages/sdk`](https://github.com/radiustechsystems/tools/tree/main/packages/sdk). `radius-cli wallet pay` uses the same client.
 
 :::note
-`radius-sdk` is unrelated to the deprecated `@radiustechsystems/sdk`. It is pre-1.0: minor versions can change the API, so check the [changelog](https://github.com/radiustechsystems/radius-cli/blob/main/packages/sdk/CHANGELOG.md) when you upgrade.
+`radius-sdk` is unrelated to the deprecated `@radiustechsystems/sdk`. It is pre-1.0: minor versions can change the API, so check the [changelog](https://github.com/radiustechsystems/tools/blob/main/packages/sdk/CHANGELOG.md) when you upgrade.
 :::
 
 ## Entry points
@@ -423,14 +423,14 @@ The seller offers whichever of `eip3009` and `permit2` the facilitator lists fir
 
 ## Examples
 
-| Example                                                                                                            | What it shows                                                                  |
-| ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
-| [`worker-plain`](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk/examples/worker-plain)     | Worker using `radius-sdk/server` without a framework                           |
-| [`express-seller`](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk/examples/express-seller) | Express with the upstream x402 adapter                                         |
-| [`astro-seller`](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk/examples/astro-seller)     | Astro API route that validates before charging                                 |
-| [`worker-seller`](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk/examples/worker-seller)   | Hono Worker with a free route and two paid routes                              |
-| [`agent-buyer`](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk/examples/agent-buyer)       | Node scripts that pay a URL, including from a wallet holding only {STABLECOIN} |
-| [`demo-dapp`](https://github.com/radiustechsystems/radius-cli/tree/main/packages/sdk/examples/demo-dapp)           | Browser page that exercises both sides with a burner wallet or MetaMask        |
+| Example                                                                                                       | What it shows                                                                  |
+| ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| [`worker-plain`](https://github.com/radiustechsystems/tools/tree/main/packages/sdk/examples/worker-plain)     | Worker using `radius-sdk/server` without a framework                           |
+| [`express-seller`](https://github.com/radiustechsystems/tools/tree/main/packages/sdk/examples/express-seller) | Express with the upstream x402 adapter                                         |
+| [`astro-seller`](https://github.com/radiustechsystems/tools/tree/main/packages/sdk/examples/astro-seller)     | Astro API route that validates before charging                                 |
+| [`worker-seller`](https://github.com/radiustechsystems/tools/tree/main/packages/sdk/examples/worker-seller)   | Hono Worker with a free route and two paid routes                              |
+| [`agent-buyer`](https://github.com/radiustechsystems/tools/tree/main/packages/sdk/examples/agent-buyer)       | Node scripts that pay a URL, including from a wallet holding only {STABLECOIN} |
+| [`demo-dapp`](https://github.com/radiustechsystems/tools/tree/main/packages/sdk/examples/demo-dapp)           | Browser page that exercises both sides with a burner wallet or MetaMask        |
 
 ## Related pages
 

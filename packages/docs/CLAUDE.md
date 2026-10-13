@@ -2,7 +2,7 @@
 
 ## Quick Start for Claude
 
-This package is the source of https://docs.radiustech.xyz inside the radius-cli monorepo. Run commands from `packages/docs`; build the SDK first (`pnpm --filter radius-sdk build`), because the docs import `radius-sdk` from the workspace.
+This package is the source of https://docs.radiustech.xyz inside the `tools` monorepo. Run commands from `packages/docs`; build the SDK first (`pnpm --filter radius-sdk build`), because the docs import `radius-sdk` from the workspace.
 
 **Writing rules:**
 
