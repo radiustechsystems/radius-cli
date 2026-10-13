@@ -1,5 +1,20 @@
 # radius-cli
 
+## 0.4.0
+
+### Minor Changes
+
+- 25eb09d: `wallet pay` also pays MPP (`WWW-Authenticate: Payment`, `evm` charges). `--protocol auto|x402|mpp` (default `auto`: x402 when a server offers both) chooses, and the JSON `payment` object gains `protocol`. Messages are now prefixed `pay:` instead of `x402:`.
+- 8f4900a: `wallet x402` is renamed `wallet pay` and can pay in USDC on Base: `--networks radius,base` (or `RADIUS_PAY_NETWORKS` / `payNetworks` in the config file) lists the networks to pay on, in preference order (the first one the wallet can cover wins), and `--network testnet` pairs Radius testnet with Base Sepolia. Base RPCs are set with `RADIUS_BASE_RPC_URL` / `RADIUS_BASE_SEPOLIA_RPC_URL` or `rpcUrls.base` / `rpcUrls["base-sepolia"]`. `--x402-threshold` and `--x402-approve-permit2` are renamed `--threshold` and `--approve-permit2`, prompts and messages name the network and its token, and the JSON `payment` object gains `network`.
+- 8c8c671: Require Node 22 or later. Node 20 reached end of life on 30 April 2026.
+
+### Patch Changes
+
+- Updated dependencies [8c8c671]
+- Updated dependencies [25eb09d]
+- Updated dependencies [8f4900a]
+  - radius-sdk@0.5.0
+
 ## 0.3.1
 
 ### Patch Changes
