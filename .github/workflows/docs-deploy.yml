@@ -57,12 +57,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Any changeset file means a pending radius-sdk/radius-cli release (the docs package is private, so it has
+      # none). Read the files: `changeset status` needs a local main branch, which a detached checkout lacks.
       - name: No unreleased package changes
         run: |
-          pnpm changeset status --output="$RUNNER_TEMP/changesets.json"
-          pending=$(jq -r '[.releases[] | select(.type != "none") | "\(.name) (\(.type))"] | join(", ")' "$RUNNER_TEMP/changesets.json")
+          pending=$(find .changeset -maxdepth 1 -name '*.md' ! -name README.md | sort)
           if [ -n "$pending" ]; then
-            echo "::error::Pending changesets for $pending. The docs at this ref may describe unpublished code: merge the Version Packages PR instead, or deploy a branch cut from docs-live."
+            echo "::error::Pending changesets: $(echo $pending). The docs at this ref may describe unpublished code: merge the Version Packages PR instead, or deploy a branch cut from docs-live."
             exit 1
           fi
 
