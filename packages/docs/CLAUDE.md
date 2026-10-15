@@ -167,6 +167,8 @@ Network values (chain IDs, RPC URLs, asset names and decimals, contract addresse
 
 The site is the `radius-docs` Cloudflare Worker (`wrangler.jsonc`). Workers static assets serve `dist/public`, including `public/_redirects` and `public/_headers` (which marks every `workers.dev` host, previews included, `noindex`); `worker/index.ts` handles `/api/try/*` only (`assets.run_worker_first`): the backend of the interactive "Try Radius" components (`docs/components/try/`, used on `/try`), a testnet faucet proxy (the faucet API sends no CORS headers) and priced testnet routes built with `radius-sdk/hono`. Payments go to `TRY_PAY_TO` in `wrangler.jsonc`. Run it locally with `pnpm build && pnpm wrangler dev`; `vocs dev` serves the pages only, so the components' API calls fail there.
 
+The `docs.radiustech.xyz` custom domain is managed in the Cloudflare dashboard, not in `wrangler.jsonc`: listing it there makes `wrangler deploy` call the custom-domains API, which needs zone and DNS permissions the CI token deliberately lacks.
+
 - `.github/workflows/docs.yml`: format, lint, typecheck, validators, build, `docs:agent-check` and `docs:sitemap-check` on pull requests; same-repo pull requests get a preview Worker version (`pr-<number>` alias, URL commented on the PR).
 - `.github/workflows/docs-deploy.yml`: production. Called by `release.yml` after every npm publish, or run by hand for a docs-only release (refused while `radius-sdk`/`radius-cli` changesets are pending). Moves the `docs-live` tag to the deployed commit; it refuses to deploy a ref that does not contain `docs-live`'s commits. Live fee constants are fetched (`pnpm fetch-cost`) only there.
 
