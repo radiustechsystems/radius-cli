@@ -32,6 +32,13 @@ Requires Node ≥ 22.
 
 Override the URL with `--rpc-url` or `RADIUS_RPC_URL` if you want to point at a different endpoint.
 
+`radius-cli network` prints the selected network's config as `radius-sdk` defines it, with any `--rpc-url` / `--sbc` override applied: chain id and CAIP-2 id, RPC, explorer, facilitator and faucet URLs, native currency, and the SBC address, decimals and EIP-712 domain. It reads no chain state, so scripts and agents can take these values from the CLI instead of hardcoding them.
+
+```bash
+radius-cli --network testnet network
+radius-cli --network testnet --json network | jq -r .sbc.address
+```
+
 ## Wallet
 
 On first use, any account-needing command (`wallet address`, `balance`, `sign`, `send`, …) auto-creates a keystore at `~/.radius/keystore.json` with no password set (file mode `0o600`). To opt into a password, run `radius-cli wallet new --force` (or set `RADIUS_PASSWORD` before the first command). The keystore is Web3 Secret Storage v3 — compatible with geth/foundry. The address is cached in `~/.radius/config.json` so `radius-cli wallet address` is a cheap read.
@@ -169,6 +176,7 @@ Per-command JSON shapes:
 | `wallet verify` | `{address, valid}` (exit 1 when invalid) |
 | `wallet balance` | `{address, totalUsd, sbc, rusd, sbcWei, rusdWei, aggregateWei, rusdSource, sbcError}` |
 | `wallet send` | `{hash, receipt?}` (no `receipt` with `--no-wait`) |
+| `network` | `{network, preset, chainName, chainId, caip2, testnet, rpcUrl, explorerUrl, facilitatorUrl, faucetUrl, nativeCurrency, sbc: {address, symbol, decimals, name, version}, rusdAddress}` |
 | `wallet pay` | `{status, headers, body, bodyEncoding, payment}` (`payment.network` is the CAIP-2 network paid on) |
 | `sell check` | `{url, method, ok, status, x402Version, resource, offers, mpp, facilitators, payment?, checks: [{id, status, message}], summary}` (exit 1 when `ok` is false) |
 | `call` | decoded return value (single value or array) |

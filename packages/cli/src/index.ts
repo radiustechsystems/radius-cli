@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { createRequire } from 'node:module';
 import { registerCall } from './commands/call.js';
 import { registerCode } from './commands/code.js';
+import { registerNetwork } from './commands/network.js';
 import { registerNonce } from './commands/nonce.js';
 import { registerReceipt } from './commands/receipt.js';
 import { registerSell } from './commands/sell.js';
@@ -33,6 +34,7 @@ registerReceipt(program);
 registerStorage(program);
 registerCode(program);
 registerNonce(program);
+registerNetwork(program);
 registerSell(program);
 
 async function main(): Promise<void> {

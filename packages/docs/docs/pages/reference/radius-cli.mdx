@@ -55,6 +55,14 @@ Override the RPC endpoint with `--rpc-url` or `RADIUS_RPC_URL`:
 RADIUS_NETWORK=testnet RADIUS_RPC_URL={TESTNET_RPC_URL} radius-cli wallet balance
 ```
 
+Print the resolved network config (chain ID, RPC, explorer, facilitator and faucet URLs, and the {STABLECOIN} address, decimals and EIP-712 domain) instead of hardcoding it:
+
+```bash
+RADIUS_NETWORK=testnet radius-cli network --json
+```
+
+`network` reads no chain state. It reports the values `radius-sdk` defines for the selected network, with any `--rpc-url` or `--sbc` override applied.
+
 ## Project-scoped agent wallet
 
 Use `RADIUS_HOME` to isolate wallet state per project, repo, or agent run:
