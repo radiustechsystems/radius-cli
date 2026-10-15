@@ -100,7 +100,7 @@ Publishing uses [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishe
 
 One-time setup (repeat the npm step for every new package):
 
-- On npmjs.com, for `radius-cli` and `radius-sdk`: **Settings → Trusted Publisher → GitHub Actions**, organization `radiustechsystems`, repository `radius-cli`, workflow filename `release.yml`, environment blank (or `npm` if you enable the `environment:` line in the publish job). Once a trusted publish succeeds, set **Publishing access** to *Require two-factor authentication and disallow tokens* so tokens can no longer publish.
+- On npmjs.com, for `radius-cli` and `radius-sdk`: **Settings → Trusted Publisher → GitHub Actions**, organization `radiustechsystems`, repository `tools`, workflow filename `release.yml`, environment blank (or `npm` if you enable the `environment:` line in the publish job). Once a trusted publish succeeds, set **Publishing access** to *Require two-factor authentication and disallow tokens* so tokens can no longer publish.
 - On GitHub, **Settings → Actions → General → Workflow permissions**: tick *Allow GitHub Actions to create and approve pull requests* (needed to open the Version Packages PR) and choose *Read repository contents and packages permissions* (every workflow declares the permissions it needs). If the option is greyed out, enable it for the organization first.
 - For the docs: Actions secrets `CLOUDFLARE_API_TOKEN` (Workers Scripts edit, for the account that owns `docs.radiustech.xyz`) and `CLOUDFLARE_ACCOUNT_ID`. The `docs-production` environment is created on first deploy; add required reviewers there to gate docs deploys.
 - Optional: mark the `changeset`, `Node 22` and `Node 24` checks as required in the `main` branch ruleset.
