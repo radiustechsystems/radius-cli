@@ -111,6 +111,15 @@ radius-cli wallet balance 0x0000000000000000000000000000000000000000 --json
 
 The JSON reports `sbc` and `rusd` separately (with `sbcWei` and `rusdWei`), their sum as `totalUsd`, and `aggregateWei`, the value `eth_getBalance` returns. On Radius `eth_getBalance` already includes {STABLECOIN}; see [The Turnstile and balances](/reference/ethereum-compatibility#the-turnstile-and-balances).
 
+Request testnet {STABLECOIN} from the faucet (testnet only; the CLI refuses mainnet):
+
+```bash
+RADIUS_HOME=.radius RADIUS_NETWORK=testnet \
+  radius-cli wallet fund --json
+```
+
+`wallet fund` signs the faucet challenge with the local wallet and requests one drip, about 0.5 {STABLECOIN}. With `--json` it prints `{address, network, token, amount, txHash, explorerUrl}`. A rate-limited request fails with the faucet's error code and when to retry.
+
 Sign and verify messages:
 
 ```bash

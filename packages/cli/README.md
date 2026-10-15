@@ -41,6 +41,7 @@ radius-cli wallet new
 radius-cli wallet import 0xPRIVATE_KEY
 radius-cli wallet address
 radius-cli wallet balance [0xAddr]
+radius-cli --network testnet wallet fund           # testnet SBC faucet drip to the local wallet
 radius-cli wallet export                           # decrypts and prints the private key
 radius-cli wallet sign "hello"                     # EIP-191 personal_sign — prints 0x signature
 radius-cli wallet sign --raw 0xdeadbeef            # sign raw hex bytes
@@ -54,6 +55,8 @@ radius-cli wallet send 0xToken "transfer(address,uint256)" 0xTo 100   # arbitrar
 ```
 
 `wallet send` takes the token as its last argument: `RUSD` for a native transfer, `SBC`, or any ERC-20 contract address. Amounts are in display units (`1.5` means 1.5 tokens) and are parsed with the token's decimals — known for SBC, read on-chain for other tokens. ERC-20 sends and `wallet balance` run on the actions of [`radius-sdk/client`](../sdk) (`erc20Actions`, `radiusActions`), so a script and the CLI encode the same calls.
+
+`wallet fund` requests one SBC drip (about 0.5 SBC) from the Radius testnet faucet with the SDK's `fund()`: it fetches the faucet challenge, signs it with the local key (EIP-191) and posts the drip, so the key never leaves the CLI. It runs on testnet only and refuses mainnet; `--faucet-url` points it at another faucet API. A rate-limited drip fails with the faucet's error code and retry hint.
 
 `--private-key 0xHEX` overrides the keystore on any command.
 
@@ -168,6 +171,7 @@ Per-command JSON shapes:
 | `wallet sign` | `{address, signature}` |
 | `wallet verify` | `{address, valid}` (exit 1 when invalid) |
 | `wallet balance` | `{address, totalUsd, sbc, rusd, sbcWei, rusdWei, aggregateWei, rusdSource, sbcError}` |
+| `wallet fund` | `{address, network, token, amount, txHash, explorerUrl}` |
 | `wallet send` | `{hash, receipt?}` (no `receipt` with `--no-wait`) |
 | `wallet pay` | `{status, headers, body, bodyEncoding, payment}` (`payment.network` is the CAIP-2 network paid on) |
 | `sell check` | `{url, method, ok, status, x402Version, resource, offers, mpp, facilitators, payment?, checks: [{id, status, message}], summary}` (exit 1 when `ok` is false) |
