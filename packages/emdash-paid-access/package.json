@@ -1,0 +1,67 @@
+{
+  "name": "radius-emdash-paid-access",
+  "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/radiustechsystems/tools.git",
+    "directory": "packages/emdash-paid-access"
+  },
+  "description": "Paid access for EmDash and Astro sites: charge AI agents per request over x402 on Radius",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist",
+    "!dist/.tsbuildinfo",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./middleware": {
+      "types": "./dist/middleware.d.ts",
+      "default": "./dist/middleware.js"
+    },
+    "./locals": {
+      "types": "./locals.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "pnpm run build"
+  },
+  "keywords": [
+    "radius",
+    "x402",
+    "emdash",
+    "astro",
+    "astro-integration",
+    "withastro",
+    "paywall",
+    "payments"
+  ],
+  "dependencies": {
+    "radius-sdk": "workspace:*"
+  },
+  "peerDependencies": {
+    "astro": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "astro": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@x402/core": "2.27.0",
+    "astro": "^7.3.6",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

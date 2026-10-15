@@ -6,6 +6,7 @@ Tools and developer docs for the [Radius Network](https://radiustech.xyz), manag
 | --- | --- |
 | [`packages/cli`](./packages/cli) | [`radius-cli`](https://www.npmjs.com/package/radius-cli) — CLI wallet for Radius, modeled on Foundry's `cast`; `wallet pay` pays x402 on Radius (and optionally Base) through `radius-sdk` |
 | [`packages/sdk`](./packages/sdk) | [`radius-sdk`](https://www.npmjs.com/package/radius-sdk) — accept and make x402 v2 payments on Radius (and optionally Base or any EVM chain) from any web-standard runtime, Hono, or the upstream x402 framework adapters (Express, Next.js), plus balance and settlement helpers |
+| [`packages/emdash-paid-access`](./packages/emdash-paid-access) | [`radius-emdash-paid-access`](https://www.npmjs.com/package/radius-emdash-paid-access) — Astro integration for EmDash and Astro sites that charges agents per request over x402 on Radius, by path or per page |
 | [`packages/docs`](./packages/docs) | Source of [docs.radiustech.xyz](https://docs.radiustech.xyz) (Vocs on a Cloudflare Worker); private, never published to npm |
 
 ```bash

@@ -128,6 +128,25 @@ importers:
         specifier: ^4.147.0
         version: 4.150.0(@cloudflare/workers-types@5.20261013.1)(@types/node@25.9.9)
 
+  packages/emdash-paid-access:
+    dependencies:
+      radius-sdk:
+        specifier: workspace:*
+        version: link:../sdk
+    devDependencies:
+      '@x402/core':
+        specifier: 2.27.0
+        version: 2.27.0
+      astro:
+        specifier: ^7.3.6
+        version: 7.3.6(@types/node@25.9.9)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.9)(lightningcss@1.33.0)(terser@5.51.2)
+
   packages/sdk:
     dependencies:
       '@noble/hashes':
