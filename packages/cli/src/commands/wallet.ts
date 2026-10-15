@@ -9,6 +9,8 @@ import { getOwnAddress, requireAccount } from '../lib/account.js';
 import { makePublicClient, makeWalletClient } from '../lib/client.js';
 import { parseAmountArg, parseTokenArg, readBalances } from '../lib/erc20.js';
 import { coerceArg, parseCastSignature } from '../lib/signature.js';
+import { DEFAULT_JWT_EXPIRES_IN, signJwt } from '../lib/jwt.js';
+import { parseTypedData, readJsonArg } from '../lib/typedData.js';
 import { formatUsd, formatUsdShort, jsonStringify } from '../lib/format.js';
 import { registerWalletPay } from './walletPay.js';
 import type { GlobalOptions } from '../types.js';
@@ -195,6 +197,67 @@ export function registerWallet(program: Command): void {
       }
       console.log(valid ? `OK  ${address}` : `FAIL ${address}`);
       if (!valid) process.exitCode = 1;
+    });
+
+  wallet
+    .command('sign-typed-data')
+    .description('Sign EIP-712 typed data with the local account (eth_signTypedData_v4)')
+    .argument('<data>', "JSON {domain, types, primaryType, message}: a literal, '@path' for a file, or '-' for stdin")
+    .action(async (dataArg: string, _subOpts, cmd) => {
+      const opts = cmd.optsWithGlobals() as GlobalOptions;
+      const cfg = resolveConfig(opts);
+      const typedData = parseTypedData(readJsonArg(dataArg, 'typed data'));
+      const account = await requireAccount(cfg, opts.privateKey);
+      const signature = await account.signTypedData(typedData);
+      if (opts.json) {
+        console.log(jsonStringify({ address: account.address, signature }));
+        return;
+      }
+      console.log(signature);
+    });
+
+  wallet
+    .command('sign-jwt')
+    .description(
+      [
+        'Sign a compact JWT (alg ES256K) with the local account, e.g. a self-signed bearer token for agent-to-agent auth.',
+        `Fills in iat (now), exp (iat + ${DEFAULT_JWT_EXPIRES_IN}s) and iss (did:pkh:eip155:<chainId>:<address>) when the payload has none; kid defaults to <iss>#controller.`,
+        '',
+        '  radius-cli wallet sign-jwt \'{"sub":"agent","aud":"https://agent.example"}\'',
+        '  radius-cli wallet sign-jwt --iss did:web:agent.example --expires-in 3600',
+      ].join('\n'),
+    )
+    .argument('[payload]', "JSON claims: a literal, '@path' for a file, or '-' for stdin (default: {})")
+    .option('--iss <issuer>', 'issuer claim (overrides the payload\'s)')
+    .option('--kid <id>', 'header key id (default: <iss>#controller)')
+    .option('--expires-in <seconds>', 'seconds until exp (overrides the payload\'s exp)')
+    .action(async (payloadArg: string | undefined, subOpts: { iss?: string; kid?: string; expiresIn?: string }, cmd) => {
+      const opts = cmd.optsWithGlobals() as GlobalOptions;
+      const cfg = resolveConfig(opts);
+      const payload = payloadArg === undefined ? {} : readJsonArg(payloadArg, 'JWT payload');
+      if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+        throw new Error('JWT payload must be a JSON object');
+      }
+      let expiresIn: number | undefined;
+      if (subOpts.expiresIn !== undefined) {
+        expiresIn = Number(subOpts.expiresIn);
+        if (!Number.isSafeInteger(expiresIn) || expiresIn <= 0) {
+          throw new Error(`--expires-in must be a positive integer number of seconds, got: ${subOpts.expiresIn}`);
+        }
+      }
+      const account = await requireAccount(cfg, opts.privateKey);
+      const jwt = await signJwt(account, {
+        payload: payload as Record<string, unknown>,
+        chainId: cfg.chain.id,
+        iss: subOpts.iss,
+        kid: subOpts.kid,
+        expiresIn,
+      });
+      if (opts.json) {
+        console.log(jsonStringify({ address: account.address, ...jwt }));
+        return;
+      }
+      console.log(jwt.token);
     });
 
   wallet

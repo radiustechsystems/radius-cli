@@ -47,6 +47,8 @@ radius-cli wallet sign --raw 0xdeadbeef            # sign raw hex bytes
 echo -n "msg" | radius-cli wallet sign -           # read message from stdin
 radius-cli wallet verify "hello" 0xSig             # verify against own address
 radius-cli wallet verify "hello" 0xSig --address 0xOther
+radius-cli wallet sign-typed-data @typed.json       # EIP-712 (eth_signTypedData_v4 JSON) — prints 0x signature
+radius-cli wallet sign-jwt '{"aud":"https://agent.example"}'   # ES256K JWT signed by the wallet key
 radius-cli wallet send 0xTo 0.10 RUSD              # native value transfer
 radius-cli wallet send 0xTo 0.10 SBC               # ERC-20 transfer of SBC
 radius-cli wallet send 0xTo 0.10 0xToken           # ERC-20 transfer of any token (decimals read on-chain)
@@ -54,6 +56,10 @@ radius-cli wallet send 0xToken "transfer(address,uint256)" 0xTo 100   # arbitrar
 ```
 
 `wallet send` takes the token as its last argument: `RUSD` for a native transfer, `SBC`, or any ERC-20 contract address. Amounts are in display units (`1.5` means 1.5 tokens) and are parsed with the token's decimals — known for SBC, read on-chain for other tokens. ERC-20 sends and `wallet balance` run on the actions of [`radius-sdk/client`](../sdk) (`erc20Actions`, `radiusActions`), so a script and the CLI encode the same calls.
+
+`wallet sign-typed-data` takes `{domain, types, primaryType, message}` (the `eth_signTypedData_v4` shape; `types.EIP712Domain` optional) as a literal, `@path` or `-` for stdin. Integer fields may be JSON numbers, decimal strings or `0x` hex strings; pass values above 2^53 as strings.
+
+`wallet sign-jwt [payload]` signs a compact JWT with `alg: ES256K` (secp256k1, `r || s` signature as RFC 8812 specifies, not DER), so an agent can mint a self-signed bearer token without exporting its key. The payload is a JSON object (literal, `@path` or `-`; default `{}`). Missing claims are filled in: `iat` is now, `exp` is `iat` + 300 s, and `iss` is `did:pkh:eip155:<chainId>:<address>`; the header `kid` defaults to `<iss>#controller`. `--iss`, `--kid` and `--expires-in <seconds>` override them. With `--json` the output also carries the decoded header and payload and the public key as a JWK, for a DID document or a verifier's allowlist.
 
 `--private-key 0xHEX` overrides the keystore on any command.
 
@@ -166,6 +172,8 @@ Per-command JSON shapes:
 | `wallet address` | `{address}` |
 | `wallet export` | `{address, privateKey}` |
 | `wallet sign` | `{address, signature}` |
+| `wallet sign-typed-data` | `{address, signature}` |
+| `wallet sign-jwt` | `{address, token, header, payload, jwk}` |
 | `wallet verify` | `{address, valid}` (exit 1 when invalid) |
 | `wallet balance` | `{address, totalUsd, sbc, rusd, sbcWei, rusdWei, aggregateWei, rusdSource, sbcError}` |
 | `wallet send` | `{hash, receipt?}` (no `receipt` with `--no-wait`) |

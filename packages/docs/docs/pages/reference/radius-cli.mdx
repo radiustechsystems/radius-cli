@@ -119,6 +119,22 @@ echo -n "hello" | radius-cli wallet sign -
 radius-cli wallet verify "hello" 0xSIGNATURE --address 0xSignerAddress
 ```
 
+Sign EIP-712 typed data (the `eth_signTypedData_v4` JSON shape, as a literal, `@path` or `-` for stdin):
+
+```bash
+radius-cli wallet sign-typed-data @typed-data.json
+```
+
+Integer fields may be JSON numbers, decimal strings, or `0x` hex strings.
+
+Sign a JWT (`alg: ES256K`) with the wallet key, for example a self-signed bearer token for agent-to-agent auth, without exporting the private key:
+
+```bash
+radius-cli wallet sign-jwt '{"aud":"https://agent.example"}' --iss did:web:agent.example
+```
+
+Missing claims are filled in: `iat` is now, `exp` is 300 seconds later (`--expires-in` changes it), and `iss` is `did:pkh:eip155:<chainId>:<address>`. The header `kid` defaults to `<iss>#controller`. With `--json`, the output also includes the decoded header and payload and the public key as a JWK.
+
 Send native {NATIVE_TOKEN}:
 
 ```bash
