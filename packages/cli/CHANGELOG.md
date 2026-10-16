@@ -1,5 +1,16 @@
 # radius-cli
 
+## 0.6.0
+
+### Minor Changes
+
+- 118203d: `createRadiusFetch` and `wallet pay` handle redirects around a payment. A request whose 402 follows a redirect (fetch follows it, up to its limit of 20) is paid at the final URL, repeating the original method and body, as `@x402/fetch` and `@x402/axios` do. A redirect after payment is followed without the payment header, and the receipt is taken from its `PAYMENT-RESPONSE`. `redirect_refused` is no longer raised.
+
+### Patch Changes
+
+- Updated dependencies [118203d]
+  - radius-sdk@0.7.0
+
 ## 0.5.0
 
 ### Minor Changes
