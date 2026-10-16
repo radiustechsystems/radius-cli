@@ -10,7 +10,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { maxUint256, recoverTypedDataAddress, toHex, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { createRadiusFetch, getPaymentReceipt, RadiusPaymentError, type InvalidChallengeDetails, type PaymentOffer, type PaymentReceipt, type PaymentRejectedDetails, type RadiusFetchOptions } from '../src/client/index.js';
+import { createRadiusFetch, getPaymentReceipt, RadiusPaymentError, type ApprovalRequest, type InvalidChallengeDetails, type PaymentOffer, type PaymentReceipt, type PaymentRejectedDetails, type RadiusFetchOptions } from '../src/client/index.js';
 import { PERMIT2_ADDRESS, X402_EXACT_PERMIT2_PROXY, resolveNetwork } from '../src/networks.js';
 
 const PK = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d' as Hex;
@@ -674,5 +674,50 @@ describe('passthrough', () => {
     const res = await buyer(server)(RESOURCE_URL, { headers: { 'X-PAYMENT': 'presigned' } });
     expect(res.status).toBe(200);
     expect(server.requests).toHaveLength(1);
+  });
+});
+
+// -- sponsored approvals pass the approval gate (ENG-2389) -----------------------------------
+
+describe('gas-sponsored Permit2 approvals are allowance changes too', () => {
+  const ERC20_SPONSOR = { erc20ApprovalGasSponsoring: { version: '1' } };
+
+  it("permit2Approval: 'never' refuses a sponsored unlimited approve instead of signing it", async () => {
+    stubRpc({ allowance: 0n });
+    const server = seller(v2(UPTO, ERC20_SPONSOR));
+    await rejects(buyer(server, { permit2Approval: 'never' })(RESOURCE_URL), 'approval_required', /sponsors an approval/);
+    expect(server.requests).toHaveLength(1);
+  });
+
+  it('onApprovalRequired sees the sponsored approval (unlimited) and can decline it', async () => {
+    stubRpc({ allowance: 0n });
+    const seen: ApprovalRequest[] = [];
+    const server = seller(v2(UPTO, ERC20_SPONSOR));
+    await rejects(buyer(server, { onApprovalRequired: (r) => { seen.push(r); return false; } })(RESOURCE_URL), 'declined');
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ reason: 'payment', sponsored: 'erc20Approval', amount: maxUint256, currentAllowance: 0n });
+    expect(server.requests).toHaveLength(1);
+  });
+
+  it('an EIP-2612 sponsorship is part of the payment: not gated, even with permit2Approval: never', async () => {
+    stubRpc({ allowance: 0n });
+    const onApprovalRequired = vi.fn(() => false);
+    const { decoded } = await pay(v2(UPTO, { eip2612GasSponsoring: { version: '1' } }), { permit2Approval: 'never', onApprovalRequired });
+    expect(onApprovalRequired).not.toHaveBeenCalled();
+    expect(decoded.extensions.eip2612GasSponsoring.info).toMatchObject({ amount: '500000' });
+  });
+
+  it('with the permit available, the raw approve is never handed to the scheme', async () => {
+    stubRpc({ allowance: 0n });
+    const { decoded } = await pay(v2(UPTO, { eip2612GasSponsoring: { version: '1' }, ...ERC20_SPONSOR }));
+    expect(decoded.extensions.eip2612GasSponsoring.info).toBeDefined();
+    expect(decoded.extensions?.erc20ApprovalGasSponsoring?.info).toBeUndefined();
+  });
+
+  it('with enough allowance no raw approve is handed to the scheme', async () => {
+    stubRpc({ allowance: 10n ** 12n });
+    const { decoded } = await pay(v2(UPTO, ERC20_SPONSOR));
+    expect(decoded.payload.permit2Authorization).toBeDefined();
+    expect(decoded.extensions?.erc20ApprovalGasSponsoring?.info).toBeUndefined();
   });
 });
