@@ -221,6 +221,8 @@ const receipt = getPaymentReceipt(res, payFetch.network);   // { success, transa
   `Authorization` or `Cookie` on another origin; `onPaid` gets the receipt from the redirect's `PAYMENT-RESPONSE`, and the final response
   carries that header. In browsers `redirect: 'manual'` yields an opaque response (status 0), which cannot
   be followed.
+- A sponsored raw approve (`erc20ApprovalGasSponsoring`) is gated like the on-chain one
+  (`permit2Approval`, `onApprovalRequired`); EIP-2612 permits are part of the payment and are not.
 - Permit2 approval handled either way: when the server's facilitator sponsors it
   (`eip2612GasSponsoring`), a wallet holding only SBC pays without any on-chain transaction; when
   it does not, the SDK sends one unlimited approval from the signer (`permit2Approval: 'auto'`,

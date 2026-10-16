@@ -227,12 +227,7 @@ async function runPay(
       const need = req.offer ? `${formatUnits(BigInt(req.offer.amount), decimals)} ${symbol}` : undefined;
       const have = formatUnits(req.currentAllowance, decimals);
       // `sponsored`: no transaction is sent by this wallet; the server's facilitator submits what we sign.
-      const sponsoredWhat =
-        req.sponsored === 'eip2612'
-          ? `an EIP-2612 permit for ${formatUnits(req.amount, decimals)} ${symbol}`
-          : req.sponsored === 'erc20Approval'
-            ? `a raw approve transaction giving Permit2 an unlimited ${symbol} allowance`
-            : undefined;
+      const sponsoredWhat = req.sponsored === 'erc20Approval' ? `a raw approve transaction giving Permit2 an unlimited ${symbol} allowance` : undefined;
       if (!process.stdin.isTTY) {
         refusal = { kind: 'approval-no-tty' };
         process.stderr.write(

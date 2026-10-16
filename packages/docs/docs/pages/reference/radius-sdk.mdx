@@ -156,7 +156,7 @@ const payFetch = createRadiusFetch({ network: 'testnet', signer: process.env.RAD
 | `protocols`          | Array of `'x402'` and `'mpp'`                | `['x402', 'mpp']`  | Protocols to pay with, in preference order                                                                  |
 | `preferFunded`       | `boolean`                                    | `true`             | With several candidate networks, pay on one whose balance covers the price                                  |
 | `onPaymentRequired`  | `(offer) => boolean \| Promise<boolean>`     | —                  | Approve or decline an [offer](#offers) before signing                                                       |
-| `permit2Approval`    | `'auto'` or `'never'`                        | `'auto'`           | Without gas sponsoring, `'auto'` sends one unlimited Permit2 approval; `'never'` throws `approval_required` |
+| `permit2Approval`    | `'auto'` or `'never'`                        | `'auto'`           | Without gas sponsoring, `'auto'` sends one unlimited Permit2 approval; `'never'` throws `approval_required`, also for a sponsored raw approve (`erc20ApprovalGasSponsoring`) |
 | `onApprovalRequired` | `(request) => boolean \| Promise<boolean>`   | —                  | Approve or decline any allowance change this client makes; see [approval requests](#approval-requests)      |
 | `onPaid`             | `(receipt, offer) => void`                   | —                  | Called after each paid response                                                                             |
 | `fetch`              | `typeof fetch`                               | `globalThis.fetch` | Underlying fetch                                                                                            |

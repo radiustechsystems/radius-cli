@@ -689,7 +689,7 @@ describe('gas-sponsored Permit2 approvals are allowance changes too', () => {
     expect(server.requests).toHaveLength(1);
   });
 
-  it('onApprovalRequired sees the sponsored approval (unlimited for erc20Approval) and can decline it', async () => {
+  it('onApprovalRequired sees the sponsored approval (unlimited) and can decline it', async () => {
     stubRpc({ allowance: 0n });
     const seen: ApprovalRequest[] = [];
     const server = seller(v2(UPTO, ERC20_SPONSOR));
@@ -699,28 +699,25 @@ describe('gas-sponsored Permit2 approvals are allowance changes too', () => {
     expect(server.requests).toHaveLength(1);
   });
 
-  it('an approved EIP-2612 sponsorship is reported with the offer amount and still signed', async () => {
+  it('an EIP-2612 sponsorship is part of the payment: not gated, even with permit2Approval: never', async () => {
     stubRpc({ allowance: 0n });
-    const seen: ApprovalRequest[] = [];
-    const { decoded } = await pay(v2(UPTO, { eip2612GasSponsoring: { version: '1' } }), { onApprovalRequired: (r) => { seen.push(r); return true; } });
-    expect(seen[0]).toMatchObject({ sponsored: 'eip2612', amount: 500000n });
+    const onApprovalRequired = vi.fn(() => false);
+    const { decoded } = await pay(v2(UPTO, { eip2612GasSponsoring: { version: '1' } }), { permit2Approval: 'never', onApprovalRequired });
+    expect(onApprovalRequired).not.toHaveBeenCalled();
     expect(decoded.extensions.eip2612GasSponsoring.info).toMatchObject({ amount: '500000' });
   });
 
-  it('with enough allowance no sponsoring extension is handed to the scheme', async () => {
-    stubRpc({ allowance: 10n ** 12n });
+  it('with the permit available, the raw approve is never handed to the scheme', async () => {
+    stubRpc({ allowance: 0n });
     const { decoded } = await pay(v2(UPTO, { eip2612GasSponsoring: { version: '1' }, ...ERC20_SPONSOR }));
-    expect(decoded.payload.permit2Authorization).toBeDefined();
-    expect(decoded.extensions?.eip2612GasSponsoring?.info).toBeUndefined();
+    expect(decoded.extensions.eip2612GasSponsoring.info).toBeDefined();
     expect(decoded.extensions?.erc20ApprovalGasSponsoring?.info).toBeUndefined();
   });
 
-  it('permit2ApprovalAmount bounds the automatic approval', async () => {
-    stubRpc({ allowance: 0n });
-    const seen: ApprovalRequest[] = [];
-    const server = seller(v2(UPTO));
-    await rejects(buyer(server, { permit2ApprovalAmount: 5_000_000n, onApprovalRequired: (r) => { seen.push(r); return false; } })(RESOURCE_URL), 'declined');
-    expect(seen[0]).toMatchObject({ reason: 'payment', amount: 5_000_000n });
-    expect(seen[0].sponsored).toBeUndefined();
+  it('with enough allowance no raw approve is handed to the scheme', async () => {
+    stubRpc({ allowance: 10n ** 12n });
+    const { decoded } = await pay(v2(UPTO, ERC20_SPONSOR));
+    expect(decoded.payload.permit2Authorization).toBeDefined();
+    expect(decoded.extensions?.erc20ApprovalGasSponsoring?.info).toBeUndefined();
   });
 });

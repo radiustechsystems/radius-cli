@@ -88,11 +88,11 @@ export interface ApprovalRequest {
   /** The payment that needs the approval; only for `reason: 'payment'`. */
   offer?: PaymentOffer;
   /**
-   * Set when no transaction is sent by this client: the allowance is granted by a signature the
-   * server's facilitator submits (`eip2612`: an EIP-2612 permit for `amount`; `erc20Approval`: a
-   * signed raw `approve` transaction, always unlimited in @x402/evm).
+   * Set when no transaction is sent by this client: the allowance is granted by a signed raw
+   * `approve` transaction that the server's facilitator submits (always unlimited in @x402/evm).
+   * EIP-2612 permits are signed per payment for the payment amount, so they are not gated.
    */
-  sponsored?: 'eip2612' | 'erc20Approval';
+  sponsored?: 'erc20Approval';
 }
 
 /** `details` of a `payment_rejected` error: the server's second 402, unread. */
@@ -151,12 +151,6 @@ export interface RadiusFetchOptions extends NetworkOverrides {
    * 'never' throws `approval_required` instead.
    */
   permit2Approval?: 'auto' | 'never';
-  /**
-   * Allowance granted by the automatic Permit2 approval transaction (and `approvePermit2()`): atomic
-   * units, or 'unlimited' (default, the x402 one-time approval model). A bounded amount is also a
-   * lifetime spend ceiling, since every Permit2 transfer lowers it.
-   */
-  permit2ApprovalAmount?: bigint | 'unlimited';
   /**
    * Approve or decline an allowance change before it is signed: the automatic Permit2 approval of
    * a payment, `approvePermit2()` and `approve()` all pass through here (`request.reason` says
@@ -399,9 +393,6 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
   const httpClient = new x402HTTPClient(client);
   const baseFetch = options.fetch ?? globalThis.fetch.bind(globalThis);
 
-  const permit2ApprovalAmount = options.permit2ApprovalAmount === undefined || options.permit2ApprovalAmount === 'unlimited' ? maxUint256 : options.permit2ApprovalAmount;
-  if (permit2ApprovalAmount < 0n) throw new RadiusPaymentError('config', 'createRadiusFetch: permit2ApprovalAmount must be non-negative');
-
   /** The one policy gate for allowance changes: `onApprovalRequired` may veto, else proceed. */
   const authorizeApproval = async (request: ApprovalRequest): Promise<void> => {
     if (options.onApprovalRequired && !(await options.onApprovalRequired(request))) {
@@ -472,7 +463,7 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
       permit2Allowance,
       approvePermit2: async () => {
         const currentAllowance = await permit2Allowance();
-        return sendApproval({ reason: 'approvePermit2', network, asset: asset.address, spender: PERMIT2_ADDRESS, amount: permit2ApprovalAmount, currentAllowance }, 'Permit2 approval');
+        return sendApproval({ reason: 'approvePermit2', network, asset: asset.address, spender: PERMIT2_ADDRESS, amount: maxUint256, currentAllowance }, 'Permit2 approval');
       },
       send: (to: Address, amount: Price) => {
         const atomic = BigInt(resolvePrice(amount, asset).amount);
@@ -604,37 +595,43 @@ export function createRadiusFetch(options: RadiusFetchOptions): RadiusFetch {
 
   /**
    * Permit2 needs an ERC-20 allowance. Unsponsored: approve on-chain once. Sponsored: the scheme signs
-   * a permit (or a raw approve transaction) that the facilitator submits; that is an allowance change
-   * too, so it passes the same gate (`permit2Approval`, `onApprovalRequired`). Returns the extension
-   * keys to withhold from the scheme: every sponsoring key when no approval is needed or allowed, so
-   * @x402/evm never signs one on its own (it re-reads the allowance and signs when that read fails).
+   * either an EIP-2612 permit (per payment, for the payment amount: part of the payment, not gated) or
+   * a raw approve transaction that the facilitator submits; the latter is an allowance change, so it
+   * passes the same gate (`permit2Approval`, `onApprovalRequired`). Returns the extension keys to
+   * withhold from the scheme, so @x402/evm never signs a raw approve on its own (it re-reads the
+   * allowance and signs when that read fails).
    */
   const ensureAllowance = async (offer: PaymentOffer, extensions: Record<string, unknown> | undefined): Promise<Set<string>> => {
-    const sponsoring = new Set(SPONSORING_KEYS.filter((k) => extensions !== undefined && k in extensions));
-    if (offer.transferMethod !== 'permit2') return sponsoring;
+    const withheld = new Set<string>();
+    const has = (k: string) => extensions !== undefined && k in extensions;
+    if (offer.transferMethod !== 'permit2') return withheld;
     const wallet = wallets.get(railFor(offer.network)!)!;
+    // The permit is preferred over the raw approve, so the latter is only reachable without it.
+    const rawApprove = has('erc20ApprovalGasSponsoring') && !has('eip2612GasSponsoring');
+    if (has('erc20ApprovalGasSponsoring') && !rawApprove) withheld.add('erc20ApprovalGasSponsoring');
+    if (offer.gasSponsored && !rawApprove) return withheld;
     // A failed read counts as no allowance: decide explicitly rather than let the scheme sign blindly.
     const current = offer.gasSponsored ? await wallet.permit2Allowance().catch(() => 0n) : await wallet.permit2Allowance();
-    if (current >= BigInt(offer.amount)) return sponsoring;
+    if (current >= BigInt(offer.amount)) {
+      if (rawApprove) withheld.add('erc20ApprovalGasSponsoring');
+      return withheld;
+    }
     const never = (options.permit2Approval ?? 'auto') === 'never';
     if (offer.gasSponsored) {
-      // @x402/evm prefers the EIP-2612 permit (for the offer amount) over a signed unlimited approve.
-      const kind = sponsoring.has('eip2612GasSponsoring') ? 'eip2612' : 'erc20Approval';
       const request: ApprovalRequest = {
         reason: 'payment', network: offer.network, asset: offer.network.asset.address, spender: PERMIT2_ADDRESS,
-        amount: kind === 'eip2612' ? BigInt(offer.amount) : maxUint256, currentAllowance: current, offer, sponsored: kind,
+        amount: maxUint256, currentAllowance: current, offer, sponsored: 'erc20Approval',
       };
       if (never) throw new RadiusPaymentError('approval_required', `Permit2 allowance ${current} is below ${offer.amount}; the facilitator sponsors an approval but permit2Approval is 'never'`, request);
       await authorizeApproval(request);
-      sponsoring.delete(kind === 'eip2612' ? 'eip2612GasSponsoring' : 'erc20ApprovalGasSponsoring');
-      return sponsoring;
+      return withheld;
     }
-    const request: ApprovalRequest = { reason: 'payment', network: offer.network, asset: offer.network.asset.address, spender: PERMIT2_ADDRESS, amount: permit2ApprovalAmount, currentAllowance: current, offer };
+    const request: ApprovalRequest = { reason: 'payment', network: offer.network, asset: offer.network.asset.address, spender: PERMIT2_ADDRESS, amount: maxUint256, currentAllowance: current, offer };
     if (never) {
       throw new RadiusPaymentError('approval_required', `Permit2 allowance ${current} is below ${offer.amount} and the facilitator does not sponsor approvals; call approvePermit2() or set permit2Approval: 'auto'`, request);
     }
     await wallet.sendApproval(request, 'Permit2 approval');
-    return sponsoring;
+    return withheld;
   };
 
   /**
